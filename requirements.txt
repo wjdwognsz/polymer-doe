@@ -1,7 +1,7 @@
 # =================================
 # Universal DOE Platform Dependencies
 # =================================
-# Python 3.13 호환 버전으로 수정됨
+# Python 3.13 완전 호환 버전
 
 # Core Framework
 streamlit==1.32.2
@@ -23,7 +23,7 @@ anthropic==0.21.0                   # Optional: if adding Claude
 pandas>=2.2.0                       # 최신 버전 자동 선택
 numpy>=1.26.0                       # 최신 버전 자동 선택
 scipy>=1.12.0                       # 최신 버전 자동 선택
-scikit-learn>=1.4.0                 # 최신 버전 자동 선택 (1.4.1은 Python 3.13 미지원)
+scikit-learn>=1.4.0                 # 최신 버전 자동 선택
 pyDOE3==1.0.1                       # Design of Experiments
 statsmodels>=0.14.0                 # Statistical analysis
 
@@ -78,7 +78,7 @@ sympy==1.12                         # Symbolic mathematics
 # pint==0.23                        # Unit handling - 선택적
 
 # Additional Utilities
-Pillow==10.2.0                      # Image processing
+Pillow>=10.3.0                      # Image processing - Python 3.13 호환 버전
 watchdog==4.0.0                     # File system monitoring
 tenacity==8.2.3                     # Retry logic
 cachetools==5.3.3                   # Caching utilities
@@ -96,8 +96,8 @@ pyyaml==6.0.1                       # YAML files
 # =================================
 # Notes:
 # =================================
-# - Python 3.13 호환성을 위해 버전 제약을 유연하게 변경
-# - >= 사용으로 호환되는 최신 버전 자동 선택
-# - 대용량/선택적 패키지는 주석 처리
-# - 필수 패키지만 활성화하여 설치 시간 단축
+# - Python 3.13 호환성을 위해 Pillow 버전을 >=10.3.0으로 변경
+# - Pillow 10.3.0 이상은 Python 3.13을 지원합니다
+# - 다른 패키지들도 >= 사용으로 호환 버전 자동 선택
+# - 선택적 패키지는 주석 처리하여 설치 시간 단축
 # =================================
