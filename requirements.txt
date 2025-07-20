@@ -1,68 +1,155 @@
-# Core Dependencies
-streamlit>=1.32.0
-pandas>=2.0.0
-numpy>=1.24.0
-plotly>=5.18.0
+# =================================
+# Universal DOE Platform Dependencies
+# =================================
 
-# AI API SDKs
-google-generativeai>=0.3.0  # Gemini API
-openai>=1.0.0  # For Groq and DeepSeek (OpenAI compatible)
-anthropic>=0.18.0  # For future Claude integration
-requests>=2.31.0  # For general API calls
+# Core Framework
+streamlit==1.32.2
+streamlit-extras==0.4.0
+streamlit-option-menu==0.3.12
+streamlit-pills==0.3.0
+streamlit-tags==1.2.8
+streamlit-elements==0.1.0
 
-# Data Processing
-scipy>=1.11.0
-statsmodels>=0.14.0
-scikit-learn>=1.3.0
-openpyxl>=3.1.0  # Excel file handling
-xlsxwriter>=3.1.0  # Excel file writing
+# AI/ML Engines
+google-generativeai==0.4.1          # Google Gemini
+openai==1.14.0                      # For Groq, DeepSeek, SambaNova (OpenAI compatible)
+huggingface-hub==0.21.4             # HuggingFace models
+transformers==4.38.2                # HuggingFace transformers
+torch==2.2.1                        # PyTorch for some HF models
+anthropic==0.21.0                   # Optional: if adding Claude
+
+# Data Processing & Science
+pandas==2.2.1
+numpy==1.26.4
+scipy==1.12.0
+scikit-learn==1.4.1
+pyDOE3==1.0.1                       # Design of Experiments
+statsmodels==0.14.1                 # Statistical analysis
 
 # Visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0
-altair>=5.0.0
+plotly==5.19.0
+matplotlib==3.8.3
+seaborn==0.13.2
+altair==5.2.0
+bokeh==3.3.4                        # Interactive visualizations
 
-# Database & APIs
-pymongo>=4.5.0  # For future MongoDB integration
-redis>=5.0.0  # For caching
-httpx>=0.25.0  # Modern HTTP client
+# Google Services Integration
+google-auth==2.28.1
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.119.0
+gspread==6.0.2                      # Simplified Google Sheets
+
+# Database & Caching
+pymongo==4.6.2                      # MongoDB
+redis==5.0.3                        # Redis caching
+sqlalchemy==2.0.28                  # SQL databases
+motor==3.3.2                        # Async MongoDB
+
+# File Handling
+openpyxl==3.1.2                     # Excel files
+xlsxwriter==3.2.0                   # Excel writing
+python-docx==1.1.0                  # Word documents
+reportlab==4.1.0                    # PDF generation
+PyPDF2==3.0.1                       # PDF manipulation
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0    # JWT tokens
+passlib[bcrypt]==1.7.4              # Password hashing
+cryptography==42.0.5                # Encryption
+python-multipart==0.0.9             # Form data
+
+# API & Networking
+requests==2.31.0
+httpx==0.27.0                       # Async HTTP
+aiohttp==3.9.3                      # Async HTTP client
+websockets==12.0                    # WebSocket support
+python-socketio==5.11.1             # Socket.IO for real-time
+
+# Environment & Configuration
+python-dotenv==1.0.1                # Environment variables
+pydantic==2.6.3                     # Data validation
+pydantic-settings==2.2.1            # Settings management
 
 # Utilities
-python-dotenv>=1.0.0  # Environment variables
-pydantic>=2.0.0  # Data validation
-toml>=0.10.2  # Config file handling
-pytz>=2023.3  # Timezone handling
-python-dateutil>=2.8.2
+asyncio-mqtt==0.16.2                # MQTT for IoT integration
+schedule==1.2.0                     # Task scheduling
+pytz==2024.1                        # Timezone handling
+python-dateutil==2.9.0              # Date utilities
+tqdm==4.66.2                        # Progress bars
 
-# File Processing
-PyPDF2>=3.0.0  # PDF handling
-python-docx>=1.0.0  # Word documents
-Pillow>=10.0.0  # Image processing
+# Scientific Computing
+sympy==1.12                         # Symbolic mathematics
+uncertainties==3.1.7                # Error propagation
+pint==0.23                          # Unit handling
 
-# Optional: Advanced Features (uncomment as needed)
-# ============================================
-# # HuggingFace Integration
-# transformers>=4.36.0
-# huggingface-hub>=0.20.0
-# 
-# # Additional AI Services
-# cohere>=4.0.0
-# langchain>=0.1.0
-# 
-# # Advanced Statistics
-# pymc>=5.0.0  # Bayesian statistics
-# arviz>=0.16.0  # Statistical visualization
-# 
-# # Chemistry Specific
-# rdkit>=2023.3.3  # Molecular operations
-# pubchempy>=1.0.4  # PubChem API
-# 
-# # Performance & Monitoring
-# streamlit-profiler>=0.2.0
-# memory-profiler>=0.61.0
-# 
-# # Testing (for development)
-# pytest>=7.4.0
-# pytest-cov>=4.1.0
-# black>=23.0.0  # Code formatting
-# flake8>=6.1.0  # Linting
+# Testing & Quality (Optional - for development)
+pytest==8.0.2
+pytest-asyncio==0.23.5
+pytest-cov==4.1.0
+black==24.2.0                       # Code formatting
+flake8==7.0.0                       # Linting
+mypy==1.8.0                         # Type checking
+
+# Documentation (Optional)
+mkdocs==1.5.3
+mkdocs-material==9.5.13
+sphinx==7.2.6
+
+# Machine Learning Extensions
+xgboost==2.0.3                      # Gradient boosting
+lightgbm==4.3.0                     # Light gradient boosting
+catboost==1.2.2                     # Categorical boosting
+
+# Chemical & Materials Science
+rdkit==2023.9.5                     # Cheminformatics
+chembl-webresource-client==0.10.8   # ChEMBL database
+pubchempy==1.0.4                    # PubChem integration
+pymatgen==2024.2.20                 # Materials analysis
+
+# Additional Utilities
+Pillow==10.2.0                      # Image processing
+python-magic==0.4.27                # File type detection
+watchdog==4.0.0                     # File system monitoring
+tenacity==8.2.3                     # Retry logic
+cachetools==5.3.3                   # Caching utilities
+
+# Logging & Monitoring
+loguru==0.7.2                       # Enhanced logging
+sentry-sdk==1.40.6                  # Error tracking (optional)
+
+# Data Export Formats
+jinja2==3.1.3                       # Template engine
+markdown==3.5.2                     # Markdown processing
+html2text==2020.1.16                # HTML to text
+toml==0.10.2                        # TOML config files
+pyyaml==6.0.1                       # YAML files
+
+# Performance & Optimization
+numba==0.59.0                       # JIT compilation
+cython==3.0.8                       # C extensions
+multiprocess==0.70.16               # Multiprocessing
+
+# =================================
+# Installation Instructions:
+# =================================
+# 1. Create virtual environment:
+#    python -m venv venv
+#
+# 2. Activate virtual environment:
+#    - Windows: venv\Scripts\activate
+#    - Mac/Linux: source venv/bin/activate
+#
+# 3. Install dependencies:
+#    pip install -r requirements.txt
+#
+# 4. For development only:
+#    pip install -r requirements-dev.txt
+#
+# =================================
+# Notes:
+# =================================
+# - Some packages may require additional system dependencies
+# - RDKit might need conda installation: conda install -c conda-forge rdkit
+# - Torch installation may vary by system (CPU vs GPU)
+# - Version numbers are for stability; update as needed
+# =================================
