@@ -1,6 +1,7 @@
 # =================================
 # Universal DOE Platform Dependencies
 # =================================
+# Python 3.13 호환 버전으로 수정됨
 
 # Core Framework
 streamlit==1.32.2
@@ -15,24 +16,23 @@ google-generativeai==0.4.1          # Google Gemini
 openai==1.14.0                      # For Groq, DeepSeek, SambaNova (OpenAI compatible)
 huggingface-hub==0.21.4             # HuggingFace models
 transformers==4.38.2                # HuggingFace transformers
-# torch==2.2.1                      # PyTorch - Python 3.13 호환 문제로 주석 처리
-# torch>=2.5.0                      # 필요시 이 버전 사용 (Python 3.13 호환)
+# torch>=2.5.0                      # 필요시 사용 (Python 3.13 호환)
 anthropic==0.21.0                   # Optional: if adding Claude
 
 # Data Processing & Science
-pandas==2.2.1
-numpy==1.26.4
-scipy==1.12.0
-scikit-learn==1.4.1
+pandas>=2.2.0                       # 최신 버전 자동 선택
+numpy>=1.26.0                       # 최신 버전 자동 선택
+scipy>=1.12.0                       # 최신 버전 자동 선택
+scikit-learn>=1.4.0                 # 최신 버전 자동 선택 (1.4.1은 Python 3.13 미지원)
 pyDOE3==1.0.1                       # Design of Experiments
-statsmodels==0.14.1                 # Statistical analysis
+statsmodels>=0.14.0                 # Statistical analysis
 
 # Visualization
 plotly==5.19.0
-matplotlib==3.8.3
+matplotlib>=3.8.0                   # 호환 버전 자동 선택
 seaborn==0.13.2
 altair==5.2.0
-bokeh==3.3.4                        # Interactive visualizations
+# bokeh==3.3.4                      # 선택적 - 크기가 큼
 
 # Google Services Integration
 google-auth==2.28.1
@@ -40,18 +40,12 @@ google-auth-oauthlib==1.2.0
 google-api-python-client==2.119.0
 gspread==6.0.2                      # Simplified Google Sheets
 
-# Database & Caching
-pymongo==4.6.2                      # MongoDB
-redis==5.0.3                        # Redis caching
-sqlalchemy==2.0.28                  # SQL databases
-motor==3.3.2                        # Async MongoDB
-
 # File Handling
 openpyxl==3.1.2                     # Excel files
 xlsxwriter==3.2.0                   # Excel writing
-python-docx==1.1.0                  # Word documents
-reportlab==4.1.0                    # PDF generation
-PyPDF2==3.0.1                       # PDF manipulation
+# python-docx==1.1.0                # Word documents - 선택적
+# reportlab==4.1.0                  # PDF generation - 선택적
+# PyPDF2==3.0.1                     # PDF manipulation - 선택적
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0    # JWT tokens
@@ -62,9 +56,9 @@ python-multipart==0.0.9             # Form data
 # API & Networking
 requests==2.31.0
 httpx==0.27.0                       # Async HTTP
-aiohttp==3.9.3                      # Async HTTP client
-websockets==12.0                    # WebSocket support
-python-socketio==5.11.1             # Socket.IO for real-time
+# aiohttp==3.9.3                    # Async HTTP client - 선택적
+# websockets==12.0                  # WebSocket support - 선택적
+# python-socketio==5.11.1           # Socket.IO for real-time - 선택적
 
 # Environment & Configuration
 python-dotenv==1.0.1                # Environment variables
@@ -72,7 +66,7 @@ pydantic==2.6.3                     # Data validation
 pydantic-settings==2.2.1            # Settings management
 
 # Utilities
-asyncio-mqtt==0.16.2                # MQTT for IoT integration
+# asyncio-mqtt==0.16.2              # MQTT for IoT integration - 선택적
 schedule==1.2.0                     # Task scheduling
 pytz==2024.1                        # Timezone handling
 python-dateutil==2.9.0              # Date utilities
@@ -80,78 +74,30 @@ tqdm==4.66.2                        # Progress bars
 
 # Scientific Computing
 sympy==1.12                         # Symbolic mathematics
-uncertainties==3.1.7                # Error propagation
-pint==0.23                          # Unit handling
-
-# Testing & Quality (Optional - for development)
-# pytest==8.0.2
-# pytest-asyncio==0.23.5
-# pytest-cov==4.1.0
-# black==24.2.0                     # Code formatting
-# flake8==7.0.0                     # Linting
-# mypy==1.8.0                       # Type checking
-
-# Documentation (Optional)
-# mkdocs==1.5.3
-# mkdocs-material==9.5.13
-# sphinx==7.2.6
-
-# Machine Learning Extensions (Optional - 큰 패키지들)
-# xgboost==2.0.3                    # Gradient boosting
-# lightgbm==4.3.0                   # Light gradient boosting
-# catboost==1.2.2                   # Categorical boosting
-
-# Chemical & Materials Science (Optional - 특수 패키지들)
-# rdkit==2023.9.5                   # Cheminformatics - conda 설치 권장
-# chembl-webresource-client==0.10.8 # ChEMBL database
-# pubchempy==1.0.4                  # PubChem integration
-# pymatgen==2024.2.20               # Materials analysis
+# uncertainties==3.1.7              # Error propagation - 선택적
+# pint==0.23                        # Unit handling - 선택적
 
 # Additional Utilities
 Pillow==10.2.0                      # Image processing
-# python-magic==0.4.27              # File type detection - OS 의존성
 watchdog==4.0.0                     # File system monitoring
 tenacity==8.2.3                     # Retry logic
 cachetools==5.3.3                   # Caching utilities
 
 # Logging & Monitoring
 loguru==0.7.2                       # Enhanced logging
-# sentry-sdk==1.40.6                # Error tracking (optional)
 
 # Data Export Formats
 jinja2==3.1.3                       # Template engine
 markdown==3.5.2                     # Markdown processing
-html2text==2020.1.16                # HTML to text
+# html2text==2020.1.16              # HTML to text - 선택적
 toml==0.10.2                        # TOML config files
 pyyaml==6.0.1                       # YAML files
 
-# Performance & Optimization (Optional - 시스템 의존성)
-# numba==0.59.0                     # JIT compilation
-# cython==3.0.8                     # C extensions
-# multiprocess==0.70.16             # Multiprocessing
-
-# =================================
-# Installation Instructions:
-# =================================
-# 1. Create virtual environment:
-#    python -m venv venv
-#
-# 2. Activate virtual environment:
-#    - Windows: venv\Scripts\activate
-#    - Mac/Linux: source venv/bin/activate
-#
-# 3. Install dependencies:
-#    pip install -r requirements.txt
-#
-# 4. For development only:
-#    pip install -r requirements-dev.txt
-#
 # =================================
 # Notes:
 # =================================
-# - torch는 Python 3.13 호환성 문제로 주석 처리됨
-# - 필요시 torch>=2.5.0 사용 (Python 3.13 지원)
-# - 큰 패키지들은 선택적으로 주석 처리됨
-# - RDKit는 conda 설치 권장: conda install -c conda-forge rdkit
-# - 시스템별 의존성이 있는 패키지는 주석 처리
+# - Python 3.13 호환성을 위해 버전 제약을 유연하게 변경
+# - >= 사용으로 호환되는 최신 버전 자동 선택
+# - 대용량/선택적 패키지는 주석 처리
+# - 필수 패키지만 활성화하여 설치 시간 단축
 # =================================
