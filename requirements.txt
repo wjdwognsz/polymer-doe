@@ -15,7 +15,8 @@ google-generativeai==0.4.1          # Google Gemini
 openai==1.14.0                      # For Groq, DeepSeek, SambaNova (OpenAI compatible)
 huggingface-hub==0.21.4             # HuggingFace models
 transformers==4.38.2                # HuggingFace transformers
-torch==2.2.1                        # PyTorch for some HF models
+# torch==2.2.1                      # PyTorch - Python 3.13 호환 문제로 주석 처리
+# torch>=2.5.0                      # 필요시 이 버전 사용 (Python 3.13 호환)
 anthropic==0.21.0                   # Optional: if adding Claude
 
 # Data Processing & Science
@@ -83,39 +84,39 @@ uncertainties==3.1.7                # Error propagation
 pint==0.23                          # Unit handling
 
 # Testing & Quality (Optional - for development)
-pytest==8.0.2
-pytest-asyncio==0.23.5
-pytest-cov==4.1.0
-black==24.2.0                       # Code formatting
-flake8==7.0.0                       # Linting
-mypy==1.8.0                         # Type checking
+# pytest==8.0.2
+# pytest-asyncio==0.23.5
+# pytest-cov==4.1.0
+# black==24.2.0                     # Code formatting
+# flake8==7.0.0                     # Linting
+# mypy==1.8.0                       # Type checking
 
 # Documentation (Optional)
-mkdocs==1.5.3
-mkdocs-material==9.5.13
-sphinx==7.2.6
+# mkdocs==1.5.3
+# mkdocs-material==9.5.13
+# sphinx==7.2.6
 
-# Machine Learning Extensions
-xgboost==2.0.3                      # Gradient boosting
-lightgbm==4.3.0                     # Light gradient boosting
-catboost==1.2.2                     # Categorical boosting
+# Machine Learning Extensions (Optional - 큰 패키지들)
+# xgboost==2.0.3                    # Gradient boosting
+# lightgbm==4.3.0                   # Light gradient boosting
+# catboost==1.2.2                   # Categorical boosting
 
-# Chemical & Materials Science
-rdkit==2023.9.5                     # Cheminformatics
-chembl-webresource-client==0.10.8   # ChEMBL database
-pubchempy==1.0.4                    # PubChem integration
-pymatgen==2024.2.20                 # Materials analysis
+# Chemical & Materials Science (Optional - 특수 패키지들)
+# rdkit==2023.9.5                   # Cheminformatics - conda 설치 권장
+# chembl-webresource-client==0.10.8 # ChEMBL database
+# pubchempy==1.0.4                  # PubChem integration
+# pymatgen==2024.2.20               # Materials analysis
 
 # Additional Utilities
 Pillow==10.2.0                      # Image processing
-python-magic==0.4.27                # File type detection
+# python-magic==0.4.27              # File type detection - OS 의존성
 watchdog==4.0.0                     # File system monitoring
 tenacity==8.2.3                     # Retry logic
 cachetools==5.3.3                   # Caching utilities
 
 # Logging & Monitoring
 loguru==0.7.2                       # Enhanced logging
-sentry-sdk==1.40.6                  # Error tracking (optional)
+# sentry-sdk==1.40.6                # Error tracking (optional)
 
 # Data Export Formats
 jinja2==3.1.3                       # Template engine
@@ -124,10 +125,10 @@ html2text==2020.1.16                # HTML to text
 toml==0.10.2                        # TOML config files
 pyyaml==6.0.1                       # YAML files
 
-# Performance & Optimization
-numba==0.59.0                       # JIT compilation
-cython==3.0.8                       # C extensions
-multiprocess==0.70.16               # Multiprocessing
+# Performance & Optimization (Optional - 시스템 의존성)
+# numba==0.59.0                     # JIT compilation
+# cython==3.0.8                     # C extensions
+# multiprocess==0.70.16             # Multiprocessing
 
 # =================================
 # Installation Instructions:
@@ -148,8 +149,9 @@ multiprocess==0.70.16               # Multiprocessing
 # =================================
 # Notes:
 # =================================
-# - Some packages may require additional system dependencies
-# - RDKit might need conda installation: conda install -c conda-forge rdkit
-# - Torch installation may vary by system (CPU vs GPU)
-# - Version numbers are for stability; update as needed
+# - torch는 Python 3.13 호환성 문제로 주석 처리됨
+# - 필요시 torch>=2.5.0 사용 (Python 3.13 지원)
+# - 큰 패키지들은 선택적으로 주석 처리됨
+# - RDKit는 conda 설치 권장: conda install -c conda-forge rdkit
+# - 시스템별 의존성이 있는 패키지는 주석 처리
 # =================================
