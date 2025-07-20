@@ -1,988 +1,714 @@
-# config/app_config.py
+"""
+app_config.py - Universal DOE Platform 전역 설정
 
-# 표준 라이브러리
+이 파일은 앱의 모든 전역 설정을 관리합니다.
+- AI 엔진 설정
+- 연구 분야 및 실험 유형 정의
+- 데이터베이스 설정
+- 사용자 시스템
+- 보안 및 성능 설정
+"""
+
 import os
-import json
-import logging
-from pathlib import Path
-from datetime import timedelta
 from typing import Dict, List, Optional, Any, Tuple
-import secrets
+from datetime import timedelta
+from dataclasses import dataclass, field
+from enum import Enum
 
-# 환경 변수 관리
-from dotenv import load_dotenv
-
-# Streamlit
-import streamlit as st
-
-# 환경 변수 로드
-load_dotenv()
-
-# ===========================
-# 1. 기본 경로 및 환경 설정
-# ===========================
-
-# 프로젝트 루트 경로
-PROJECT_ROOT = Path(__file__).parent.parent
-CONFIG_DIR = PROJECT_ROOT / "config"
-DATA_DIR = PROJECT_ROOT / "data"
-LOGS_DIR = PROJECT_ROOT / "logs"
-TEMP_DIR = PROJECT_ROOT / "temp"
-
-# 디렉토리 생성
-for dir_path in [DATA_DIR, LOGS_DIR, TEMP_DIR]:
-    dir_path.mkdir(exist_ok=True)
-
-# 환경 변수
-ENV = os.getenv("APP_ENV", "development")  # development, staging, production
-DEBUG = ENV == "development"
-VERSION = "2.0.0"
-APP_NAME = "Polymer DOE Platform"
-APP_DESCRIPTION = "AI 기반 고분자 실험 설계 교육 플랫폼"
-
-# 로깅 설정
-LOG_LEVEL = logging.DEBUG if DEBUG else logging.INFO
-LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-LOG_FILE = LOGS_DIR / f"app_{ENV}.log"
-
-# 기본 URL
-if ENV == "production":
-    BASE_URL = "https://polymer-doe.streamlit.app"
-elif ENV == "staging":
-    BASE_URL = "https://polymer-doe-staging.streamlit.app"
-else:
-    BASE_URL = "http://localhost:8501"
-
-# 세션 설정
-SESSION_COOKIE_NAME = "polymer_doe_session"
-SESSION_EXPIRY_HOURS = 24
-REMEMBER_ME_DAYS = 30
-
-# ===========================
-# 2. Google Sheets 데이터베이스 설정
-# ===========================
-
-GOOGLE_SHEETS_CONFIG = {
-    # 메인 스프레드시트 ID
-    'spreadsheet_id': os.getenv('GOOGLE_SHEETS_ID', st.secrets.get("google_sheets_url", "")),
-    
-    # Service Account 인증 정보
-    'service_account_info': st.secrets.get("google_service_account", None),
-    'service_account_file': CONFIG_DIR / 'service_account.json',
-    
-    # 시트 이름 매핑
-    'sheet_names': {
-        'users': 'Users',
-        'projects': 'Projects',
-        'experiments': 'Experiments',
-        'results': 'Results',
-        'comments': 'Comments',
-        'files': 'Files',
-        'notifications': 'Notifications',
-        'activity_log': 'Activity_Log',
-        'learning_progress': 'Learning_Progress',  # 학습 진도 추적
-        'growth_metrics': 'Growth_Metrics',      # 성장 지표
-        'educational_logs': 'Educational_Logs',   # 교육 콘텐츠 로그
-        'system_config': 'System_Config'
-    },
-    
-    # API 설정
-    'rate_limit': 60,
-    'batch_size': 1000,
-    'cache_ttl': 300,
-    'max_retries': 5,
-    'retry_delay': 1.0,
-    'retry_backoff': 2.0,
-    
-    # 권한 범위
-    'scopes': [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive.file'
-    ]
+# ===== 앱 메타데이터 =====
+APP_INFO = {
+    'name': 'Universal DOE Platform',
+    'version': '2.0.0',
+    'description': '모든 화학·재료과학 연구자를 위한 AI 기반 만능 실험 설계 플랫폼',
+    'author': 'Universal DOE Team',
+    'contact': 'contact@universaldoe.com',
+    'github': 'https://github.com/universaldoe/platform',
+    'license': 'MIT'
 }
 
-# ===========================
-# 3. 교육적 성장 중심 레벨 시스템
-# ===========================
-
-LEVEL_CONFIG = {
-    'philosophy': '모든 기능은 모든 레벨에서 사용 가능. 레벨은 교육적 지원의 정도만 결정.',
-    
-    'levels': {
-        'beginner': {
-            'min_points': 0,
-            'display_name': '초급 연구원',
-            'badge': '🌱',
-            'color': '#10B981',
-            
-            # 교육 설정
-            'educational_mode': {
-                'explanations': 'full',          # 전체 설명
-                'skip_allowed': False,           # 설명 스킵 불가
-                'auto_guide': True,              # 자동 가이드
-                'confirmation_required': True,    # 모든 작업 확인
-                'show_why': True,                # "왜?" 버튼 항상 표시
-                'tooltips': 'always',            # 툴팁 항상 표시
-                'examples': 'multiple',          # 다양한 예시 제공
-                'pace': 'slow'                   # 느린 진행 속도
-            },
-            
-            # UI 설정
-            'ui_complexity': 'simple',
-            'wizard_mode': True,
-            'step_by_step': True,
-            'max_options_shown': 3,
-            
-            # 피드백 설정
-            'feedback': {
-                'success_messages': 'detailed',
-                'error_guidance': 'step_by_step',
-                'hints_enabled': True,
-                'auto_suggestions': True
-            }
+# ===== AI 엔진 설정 =====
+AI_ENGINES = {
+    'google_gemini': {
+        'name': 'Google Gemini 2.0 Flash',
+        'model': 'gemini-2.0-flash-exp',
+        'api_key_name': 'GOOGLE_GEMINI_API_KEY',
+        'required': True,  # 필수 엔진
+        'free_tier': True,
+        'purpose': '주 AI 엔진, 자연어 이해, 실험 설계 생성',
+        'features': ['text_generation', 'analysis', 'code_generation'],
+        'rate_limit': {
+            'requests_per_minute': 60,
+            'tokens_per_minute': 1000000
         },
-        
-        'intermediate': {
-            'min_points': 100,
-            'display_name': '중급 연구원',
-            'badge': '🌿',
-            'color': '#3B82F6',
-            
-            # 교육 설정
-            'educational_mode': {
-                'explanations': 'balanced',      # 핵심 설명만
-                'skip_allowed': True,            # 설명 스킵 가능
-                'auto_guide': False,             # 수동 가이드
-                'confirmation_required': False,   # 중요 작업만 확인
-                'show_why': 'on_demand',         # 요청시 "왜?" 표시
-                'tooltips': 'hover',             # 마우스 오버시
-                'examples': 'relevant',          # 관련 예시만
-                'pace': 'normal'                 # 일반 속도
-            },
-            
-            # UI 설정
-            'ui_complexity': 'standard',
-            'wizard_mode': False,
-            'step_by_step': False,
-            'max_options_shown': 5,
-            
-            # 피드백 설정
-            'feedback': {
-                'success_messages': 'concise',
-                'error_guidance': 'hints',
-                'hints_enabled': True,
-                'auto_suggestions': False
-            }
-        },
-        
-        'advanced': {
-            'min_points': 500,
-            'display_name': '고급 연구원',
-            'badge': '🌳',
-            'color': '#8B5CF6',
-            
-            # 교육 설정
-            'educational_mode': {
-                'explanations': 'minimal',       # 최소 설명
-                'skip_allowed': True,
-                'auto_guide': False,
-                'confirmation_required': False,
-                'show_why': 'hidden',            # "왜?" 숨김
-                'tooltips': 'on_demand',         # 요청시만
-                'examples': 'none',              # 예시 없음
-                'pace': 'fast'                   # 빠른 속도
-            },
-            
-            # UI 설정
-            'ui_complexity': 'advanced',
-            'wizard_mode': False,
-            'step_by_step': False,
-            'max_options_shown': 10,
-            
-            # 피드백 설정
-            'feedback': {
-                'success_messages': 'minimal',
-                'error_guidance': 'code_only',
-                'hints_enabled': False,
-                'auto_suggestions': False
-            }
-        },
-        
-        'expert': {
-            'min_points': 1500,
-            'display_name': '전문 연구원',
-            'badge': '🏆',
-            'color': '#F59E0B',
-            
-            # 교육 설정
-            'educational_mode': {
-                'explanations': 'off',           # 설명 없음
-                'skip_allowed': True,
-                'auto_guide': False,
-                'confirmation_required': False,
-                'show_why': 'off',               # "왜?" 없음
-                'tooltips': 'off',               # 툴팁 없음
-                'examples': 'none',
-                'pace': 'instant'                # 즉시 실행
-            },
-            
-            # UI 설정
-            'ui_complexity': 'expert',
-            'wizard_mode': False,
-            'step_by_step': False,
-            'max_options_shown': -1,  # 모두 표시
-            'keyboard_shortcuts': True,
-            
-            # 피드백 설정
-            'feedback': {
-                'success_messages': 'off',
-                'error_guidance': 'none',
-                'hints_enabled': False,
-                'auto_suggestions': False
-            }
-        }
+        'docs_url': 'https://makersuite.google.com/app/apikey',
+        'sdk': 'google-generativeai'
     },
-    
-    # 포인트 시스템 (순수 성취감용)
-    'point_rewards': {
-        # 일일 활동
-        'daily_login': 5,
-        'consistent_week': 25,
-        'consistent_month': 100,
-        
-        # 학습 활동
-        'read_explanation': 2,
-        'complete_tutorial': 10,
-        'skip_guide_first_time': 20,  # 가이드 없이 첫 성공
-        
-        # 프로젝트 활동
-        'project_created': 15,
-        'project_completed': 30,
-        'complex_design_used': 25,
-        
-        # 성장 지표
-        'reduced_error_rate': 20,
-        'increased_speed': 15,
-        'helped_others': 30,
-        
-        # 마일스톤
-        'first_solo_project': 50,
-        'master_technique': 40,
-        'innovation': 100
-    }
-}
-
-# ===========================
-# 4. 교육 콘텐츠 설정
-# ===========================
-
-EDUCATIONAL_CONTENT = {
-    # 설명 레벨별 콘텐츠
-    'explanations': {
-        'project_setup': {
-            'polymer_selection': {
-                'beginner': {
-                    'content': """
-                    🎯 **고분자 선택 가이드**
-                    
-                    고분자를 선택할 때는 다음을 고려해야 합니다:
-                    1. **용도**: 제품이 어디에 사용되나요?
-                    2. **물성**: 필요한 강도, 유연성은?
-                    3. **가공성**: 어떻게 성형할 예정인가요?
-                    4. **비용**: 예산 범위는?
-                    
-                    💡 **초보자 팁**: PET는 투명하고 강한 플라스틱으로 
-                    음료수 병에 많이 사용됩니다. 처음이라면 PET나 PP같은 
-                    범용 플라스틱부터 시작해보세요!
-                    """,
-                    'interactive': True,
-                    'quiz': True,
-                    'examples': ['PET 병', 'PP 용기', 'PE 필름']
-                },
-                'intermediate': {
-                    'content': """
-                    **고분자 선택**: 용도별 주요 고려사항
-                    - 기계적 물성 (인장강도, 신율, 탄성률)
-                    - 열적 특성 (Tg, Tm, 열변형온도)
-                    - 화학적 저항성
-                    """,
-                    'interactive': False,
-                    'quiz': False,
-                    'examples': []
-                },
-                'advanced': {
-                    'content': "고분자 구조-물성 관계를 고려한 선택",
-                    'interactive': False,
-                    'quiz': False,
-                    'examples': []
-                },
-                'expert': None  # 설명 없음
-            }
+    'xai_grok': {
+        'name': 'xAI Grok 3 Mini',
+        'model': 'grok-3-mini',
+        'api_key_name': 'XAI_GROK_API_KEY',
+        'required': False,
+        'free_tier': False,
+        'purpose': '실시간 정보, 최신 연구 동향',
+        'features': ['real_time_data', 'research_trends'],
+        'rate_limit': {
+            'requests_per_minute': 30,
+            'tokens_per_minute': 100000
         },
-        
-        'experiment_design': {
-            'design_selection': {
-                'beginner': {
-                    'content': """
-                    📊 **실험 설계 방법 선택하기**
-                    
-                    **1. 스크리닝 (Screening)**
-                    많은 요인 중 중요한 것을 찾을 때
-                    → Plackett-Burman 설계
-                    
-                    **2. 최적화 (Optimization)**
-                    중요 요인의 최적 조건을 찾을 때
-                    → Box-Behnken, 중심합성설계
-                    
-                    **3. 견고성 (Robustness)**
-                    외부 변동에 강한 조건을 찾을 때
-                    → Taguchi 설계
-                    
-                    🤔 **어떤 걸 선택해야 할까요?**
-                    처음이라면 요인이 3개 이하일 때는 완전요인설계,
-                    4개 이상이면 부분요인설계를 추천합니다!
-                    """,
-                    'decision_tree': True,
-                    'calculator': True
-                },
-                'intermediate': {
-                    'content': """
-                    **설계 선택 기준**
-                    - 요인 수와 실험 횟수의 균형
-                    - 교호작용 추정 필요성
-                    - 곡면성(curvature) 검출 여부
-                    """,
-                    'decision_tree': False,
-                    'calculator': True
-                },
-                'advanced': {
-                    'content': "설계 효율성: D-optimality, I-optimality",
-                    'decision_tree': False,
-                    'calculator': False
-                },
-                'expert': None
-            }
-        }
-    },
-    
-    # 인터랙티브 가이드
-    'interactive_guides': {
-        'beginner': {
-            'show_arrows': True,
-            'highlight_next_step': True,
-            'auto_scroll': True,
-            'voice_guidance': False,  # 향후 기능
-            'animation_speed': 'slow'
-        },
-        'intermediate': {
-            'show_arrows': False,
-            'highlight_next_step': False,
-            'auto_scroll': False,
-            'voice_guidance': False,
-            'animation_speed': 'normal'
-        },
-        'advanced': {
-            'all_features_off': True
-        },
-        'expert': {
-            'all_features_off': True
-        }
-    },
-    
-    # 오류 메시지 상세도
-    'error_messages': {
-        'beginner': {
-            'missing_data': """
-            ❌ 데이터가 입력되지 않았습니다.
-            
-            **해결 방법:**
-            1. 위의 입력 필드를 확인하세요
-            2. 빨간색으로 표시된 필수 항목(*)을 모두 입력하세요
-            3. 숫자는 숫자만, 텍스트는 텍스트만 입력하세요
-            
-            💡 도움이 필요하면 우측 상단의 ❓ 버튼을 클릭하세요!
-            """,
-            'show_video_tutorial': True
-        },
-        'intermediate': {
-            'missing_data': "필수 입력 항목을 확인하세요.",
-            'show_video_tutorial': False
-        },
-        'advanced': {
-            'missing_data': "Missing required fields",
-            'show_video_tutorial': False
-        },
-        'expert': {
-            'missing_data': "ERR_MISSING_DATA",
-            'show_video_tutorial': False
-        }
-    }
-}
-
-# ===========================
-# 5. 성장 추적 시스템
-# ===========================
-
-GROWTH_TRACKING = {
-    'enabled': True,
-    
-    # 성장 지표
-    'metrics': {
-        'understanding': {
-            'factors': [
-                'explanation_read_time',      # 설명 읽은 시간
-                'help_clicks_reduction',       # 도움말 클릭 감소율
-                'error_rate_reduction',        # 오류 발생 감소율
-                'correct_first_attempt'        # 첫 시도 성공률
-            ],
-            'weight': 0.3
-        },
-        'independence': {
-            'factors': [
-                'guide_skip_rate',            # 가이드 스킵 비율
-                'wizard_abandon_rate',         # 마법사 모드 포기율
-                'direct_navigation',           # 직접 네비게이션
-                'advanced_features_usage'      # 고급 기능 사용률
-            ],
-            'weight': 0.3
-        },
-        'expertise': {
-            'factors': [
-                'complex_designs_used',        # 복잡한 설계 사용
-                'optimization_success',        # 최적화 성공률
-                'time_efficiency',            # 작업 시간 효율
-                'innovation_score'            # 혁신성 점수
-            ],
-            'weight': 0.4
-        }
-    },
-    
-    # 성장 마일스톤
-    'milestones': {
-        'first_steps': {
-            'completed_tutorial': '튜토리얼 완료',
-            'first_project': '첫 프로젝트 생성',
-            'first_experiment': '첫 실험 설계'
-        },
-        'growing_confidence': {
-            'skip_guide_success': '가이드 없이 성공',
-            'use_advanced_design': '고급 설계 사용',
-            'complete_optimization': '최적화 완료'
-        },
-        'becoming_expert': {
-            'mentor_others': '다른 사용자 도움',
-            'create_template': '템플릿 생성',
-            'publish_results': '결과 발표'
-        }
-    },
-    
-    # 적응형 난이도
-    'adaptive_difficulty': {
-        'enabled': True,
-        'factors': {
-            'success_rate': 0.4,
-            'speed_improvement': 0.3,
-            'feature_exploration': 0.3
-        },
-        'adjustment_threshold': 0.8,  # 80% 성공시 난이도 상승 제안
-        'cooldown_days': 7            # 레벨 변경 제안 주기
-    }
-}
-
-# ===========================
-# 6. API 키 설정 (모든 레벨 동일하게 사용)
-# ===========================
-
-API_KEYS = {
-    # AI APIs
-    'gemini': {
-        'key': os.getenv('GEMINI_API_KEY', st.secrets.get("google_gemini", "")),
-        'endpoint': 'https://generativelanguage.googleapis.com/v1beta',
-        'model': 'gemini-pro',
-        'rate_limit': 60,
-        'timeout': 30,
-        'max_tokens': 8192
-    },
-    'grok': {
-        'key': os.getenv('GROK_API_KEY', st.secrets.get("xai_grok", "")),
-        'endpoint': 'https://api.x.ai/v1',
-        'model': 'grok-beta',
-        'rate_limit': 50,
-        'timeout': 30,
-        'max_tokens': 4096
-    },
-    'deepseek': {
-        'key': os.getenv('DEEPSEEK_API_KEY', st.secrets.get("deepseek", "")),
-        'endpoint': 'https://api.deepseek.com/v1',
-        'model': 'deepseek-coder',
-        'rate_limit': 100,
-        'timeout': 30,
-        'max_tokens': 16384
+        'docs_url': 'https://x.ai/api',
+        'sdk': 'requests'  # OpenAI 호환 API
     },
     'groq': {
-        'key': os.getenv('GROQ_API_KEY', st.secrets.get("groq", "")),
-        'endpoint': 'https://api.groq.com/openai/v1',
+        'name': 'Groq (초고속 추론)',
         'model': 'mixtral-8x7b-32768',
-        'rate_limit': 30,
-        'timeout': 30,
-        'max_tokens': 32768
+        'api_key_name': 'GROQ_API_KEY',
+        'required': False,
+        'free_tier': True,
+        'purpose': '초고속 추론, 배치 처리',
+        'features': ['fast_inference', 'batch_processing'],
+        'rate_limit': {
+            'requests_per_minute': 30,
+            'tokens_per_minute': 18000
+        },
+        'base_url': 'https://api.groq.com/openai/v1',
+        'docs_url': 'https://console.groq.com',
+        'sdk': 'openai'  # OpenAI 호환
+    },
+    'deepseek': {
+        'name': 'DeepSeek (코드/수식)',
+        'model': 'deepseek-chat',
+        'api_key_name': 'DEEPSEEK_API_KEY',
+        'required': False,
+        'free_tier': False,
+        'purpose': '코드 생성, 수식 계산, 기술 문서',
+        'features': ['code_generation', 'math_computation', 'technical_docs'],
+        'rate_limit': {
+            'requests_per_minute': 60,
+            'tokens_per_minute': 500000
+        },
+        'base_url': 'https://api.deepseek.com/v1',
+        'docs_url': 'https://platform.deepseek.com',
+        'sdk': 'openai'  # OpenAI 호환
     },
     'sambanova': {
-        'key': os.getenv('SAMBANOVA_API_KEY', st.secrets.get("sambanova", "")),
-        'endpoint': 'https://api.sambanova.ai/v1',
-        'model': 'Meta-Llama-3.1-405B-Instruct',
-        'rate_limit': 20,
-        'timeout': 60,
-        'max_tokens': 4096
+        'name': 'SambaNova (대규모 모델)',
+        'model': 'llama3-405b',
+        'api_key_name': 'SAMBANOVA_API_KEY',
+        'required': False,
+        'free_tier': True,
+        'purpose': '대규모 추론, 복잡한 분석',
+        'features': ['large_scale_analysis', 'complex_reasoning'],
+        'rate_limit': {
+            'requests_per_minute': 10,
+            'tokens_per_minute': 50000
+        },
+        'docs_url': 'https://cloud.sambanova.ai',
+        'sdk': 'openai'  # OpenAI 호환
     },
     'huggingface': {
-        'key': os.getenv('HUGGINGFACE_API_KEY', st.secrets.get("huggingface", "")),
-        'endpoint': 'https://api-inference.huggingface.co/models',
-        'model': 'meta-llama/Llama-2-70b-chat-hf',
-        'rate_limit': 100,
-        'timeout': 120,
-        'max_tokens': 4096
-    },
-    
-    # Database APIs (모든 레벨 동일 접근)
-    'materials_project': {
-        'key': os.getenv('MP_API_KEY', st.secrets.get("materials_project", "")),
-        'endpoint': 'https://api.materialsproject.org',
-        'rate_limit': 100,
-        'timeout': 30
-    },
-    'materials_commons': {
-        'key': os.getenv('MATERIALS_COMMONS_API_KEY', st.secrets.get("materials_commons", "")),
-        'endpoint': 'https://materialscommons.org/api',
-        'rate_limit': 60,
-        'timeout': 30
-    },
-    'pubchem': {
-        'key': None,
-        'endpoint': 'https://pubchem.ncbi.nlm.nih.gov/rest/pug',
-        'rate_limit': 5,
-        'timeout': 30
-    },
-    'zenodo': {
-        'key': os.getenv('ZENODO_API_KEY', st.secrets.get("zenodo", "")),
-        'endpoint': 'https://zenodo.org/api',
-        'rate_limit': 60,
-        'timeout': 30
-    },
-    'figshare': {
-        'key': os.getenv('FIGSHARE_API_KEY', st.secrets.get("figshare", "")),
-        'endpoint': 'https://api.figshare.com/v2',
-        'rate_limit': 60,
-        'timeout': 30
-    },
-    'protocols_io': {
-        'key': os.getenv('PROTOCOLS_IO_KEY', st.secrets.get("protocols_io", "")),
-        'endpoint': 'https://www.protocols.io/api/v3',
-        'rate_limit': 60,
-        'timeout': 30
-    },
-    'github': {
-        'key': os.getenv('GITHUB_TOKEN', st.secrets.get("github", "")),
-        'endpoint': 'https://api.github.com',
-        'rate_limit': 60,
-        'timeout': 30
+        'name': 'HuggingFace (특수 모델)',
+        'api_key_name': 'HUGGINGFACE_API_KEY',
+        'required': False,
+        'free_tier': True,
+        'purpose': 'ChemBERTa, MatSciBERT 등 도메인 특화 모델',
+        'features': ['domain_specific', 'embeddings', 'classification'],
+        'models': {
+            'chemistry': 'seyonec/ChemBERTa-zinc-base-v1',
+            'materials': 'm3rg-iitd/matscibert',
+            'general': 'microsoft/deberta-v3-base'
+        },
+        'docs_url': 'https://huggingface.co/settings/tokens',
+        'sdk': 'huggingface_hub'
     }
 }
 
-# API 사용 추적 (제한 없음, 통계만)
-API_USAGE_TRACKING = {
-    'enabled': True,
-    'track_per_user': True,
-    'track_per_api': True,
-    'show_statistics': True,
-    'limits': None,  # 모든 레벨 무제한
-    'warnings': None  # 경고 없음
-}
-
-# ===========================
-# 7. UI 적응형 설정
-# ===========================
-
-UI_CONFIG = {
-    # 기본 설정
-    'page': {
-        'title': APP_NAME,
+# ===== 연구 분야 및 실험 유형 =====
+RESEARCH_FIELDS = {
+    'polymer': {
+        'name': '고분자 과학',
         'icon': '🧬',
-        'layout': 'wide',
-        'initial_sidebar_state': 'expanded'
-    },
-    
-    # 레벨별 UI 적응
-    'level_adaptations': {
-        'beginner': {
-            'layout_complexity': 'simple',
-            'menu_depth': 1,  # 단순 메뉴
-            'show_advanced_options': False,
-            'animations': 'full',
-            'transitions': 'slow',
-            'confirmation_dialogs': True,
-            'undo_redo': True,
-            'autosave': True,
-            'shortcuts': False
-        },
-        'intermediate': {
-            'layout_complexity': 'standard',
-            'menu_depth': 2,
-            'show_advanced_options': True,
-            'animations': 'reduced',
-            'transitions': 'normal',
-            'confirmation_dialogs': False,
-            'undo_redo': True,
-            'autosave': True,
-            'shortcuts': True
-        },
-        'advanced': {
-            'layout_complexity': 'advanced',
-            'menu_depth': 3,
-            'show_advanced_options': True,
-            'animations': 'minimal',
-            'transitions': 'fast',
-            'confirmation_dialogs': False,
-            'undo_redo': True,
-            'autosave': False,
-            'shortcuts': True
-        },
-        'expert': {
-            'layout_complexity': 'expert',
-            'menu_depth': -1,  # 모든 메뉴
-            'show_advanced_options': True,
-            'animations': 'off',
-            'transitions': 'instant',
-            'confirmation_dialogs': False,
-            'undo_redo': False,
-            'autosave': False,
-            'shortcuts': True,
-            'command_palette': True  # Cmd+K 스타일
+        'description': '고분자 합성, 가공, 특성분석',
+        'experiments': {
+            'synthesis': {
+                'name': '고분자 합성',
+                'types': ['라디칼 중합', '이온 중합', '축합 중합', '개환 중합', 
+                         '배위 중합', '리빙 중합', 'RAFT', 'ATRP', 'ROP'],
+                'common_factors': ['단량체 농도', '개시제 농도', '온도', '시간', 
+                                 '용매', 'pH', '교반속도'],
+                'common_responses': ['수율', '분자량', 'PDI', '전환율', 'Tg']
+            },
+            'processing': {
+                'name': '가공 공정',
+                'types': ['사출성형', '압출', '블로우성형', '3D 프린팅', 
+                         '전기방사', '용액캐스팅'],
+                'common_factors': ['온도', '압력', '속도', '시간', '첨가제'],
+                'common_responses': ['기계적 물성', '표면 특성', '치수 안정성']
+            },
+            'characterization': {
+                'name': '특성 분석',
+                'types': ['GPC', 'NMR', 'FTIR', 'DSC', 'TGA', 'DMA', 'UTM'],
+                'common_factors': ['샘플 준비', '측정 조건', '용매'],
+                'common_responses': ['분자량', '화학구조', '열적특성', '기계적특성']
+            }
         }
     },
-    
-    # 컴포넌트 설정
-    'components': {
-        'max_file_size_mb': 200,
-        'accepted_file_types': ['csv', 'xlsx', 'xls', 'txt', 'pdf', 'json'],
-        'data_editor_height': 400,
-        'chart_height': 500,
-        'table_page_size': 20
+    'inorganic': {
+        'name': '무기재료',
+        'icon': '💎',
+        'description': '세라믹, 반도체, 금속 재료',
+        'experiments': {
+            'synthesis': {
+                'name': '무기재료 합성',
+                'types': ['고상반응', '용액법', '수열합성', '솔젤법', 'CVD', 'PVD'],
+                'common_factors': ['전구체', '온도', '압력', '시간', '분위기'],
+                'common_responses': ['결정성', '순도', '입자크기', '비표면적']
+            },
+            'ceramics': {
+                'name': '세라믹 공정',
+                'types': ['분말제조', '성형', '소결', '열처리'],
+                'common_factors': ['소결온도', '승온속도', '유지시간', '압력'],
+                'common_responses': ['밀도', '강도', '경도', '인성']
+            }
+        }
+    },
+    'nano': {
+        'name': '나노재료',
+        'icon': '⚛️',
+        'description': '나노입자, 나노구조체',
+        'experiments': {
+            'nanoparticles': {
+                'name': '나노입자 합성',
+                'types': ['금속 나노입자', '산화물 나노입자', '양자점', '코어-쉘'],
+                'common_factors': ['전구체 농도', '환원제', '캡핑제', '온도', 'pH'],
+                'common_responses': ['입자크기', '크기분포', '제타전위', '형태']
+            }
+        }
+    },
+    'organic': {
+        'name': '유기합성',
+        'icon': '🧪',
+        'description': '유기 반응, 촉매',
+        'experiments': {
+            'reactions': {
+                'name': '유기 반응',
+                'types': ['치환반응', '첨가반응', '제거반응', '재배열반응'],
+                'common_factors': ['반응물', '촉매', '용매', '온도', '시간'],
+                'common_responses': ['수율', '선택성', '순도', '부산물']
+            }
+        }
+    },
+    'composite': {
+        'name': '복합재료',
+        'icon': '🔧',
+        'description': '섬유강화, 입자강화 복합재료',
+        'experiments': {
+            'fabrication': {
+                'name': '복합재료 제조',
+                'types': ['RTM', 'VARTM', '핸드레이업', '필라멘트와인딩'],
+                'common_factors': ['섬유함량', '수지종류', '경화조건', '압력'],
+                'common_responses': ['강도', '탄성률', '층간전단강도', '공극률']
+            }
+        }
+    },
+    'bio': {
+        'name': '바이오재료',
+        'icon': '🧬',
+        'description': '생체적합성, 약물전달',
+        'experiments': {
+            'biocompatibility': {
+                'name': '생체적합성',
+                'types': ['세포독성', '혈액적합성', '조직적합성'],
+                'common_factors': ['재료조성', '표면처리', '배양조건'],
+                'common_responses': ['세포생존율', '단백질흡착', '염증반응']
+            }
+        }
+    },
+    'energy': {
+        'name': '에너지재료',
+        'icon': '🔋',
+        'description': '배터리, 연료전지, 태양전지',
+        'experiments': {
+            'battery': {
+                'name': '배터리 재료',
+                'types': ['리튬이온', '전고체', '나트륨이온'],
+                'common_factors': ['전극조성', '전해질', '충방전조건'],
+                'common_responses': ['용량', '쿨롱효율', '사이클수명', '율특성']
+            }
+        }
+    },
+    'environmental': {
+        'name': '환경재료',
+        'icon': '🌱',
+        'description': '수처리, 대기정화',
+        'experiments': {
+            'water_treatment': {
+                'name': '수처리',
+                'types': ['흡착제', '멤브레인', '광촉매'],
+                'common_factors': ['pH', '농도', '접촉시간', '온도'],
+                'common_responses': ['제거효율', '흡착용량', '재생효율']
+            }
+        }
+    },
+    'custom': {
+        'name': '사용자 정의',
+        'icon': '✨',
+        'description': '새로운 연구 분야 추가',
+        'experiments': {}
     }
 }
 
-# ===========================
-# 8. 교육적 프롬프트 시스템
-# ===========================
+# ===== DOE 방법론 =====
+DOE_METHODS = {
+    'screening': {
+        'name': '스크리닝 설계',
+        'methods': {
+            'pb': 'Plackett-Burman',
+            'fractional': '부분요인설계',
+            'definitive': 'Definitive Screening'
+        },
+        'purpose': '중요 인자 선별',
+        'factors_range': (4, 15),
+        'runs_estimate': lambda k: f"{2**(k-4)}~{2**(k-2)} runs"
+    },
+    'optimization': {
+        'name': '최적화 설계',
+        'methods': {
+            'ccd': '중심합성설계 (CCD)',
+            'bb': 'Box-Behnken',
+            'optimal': 'D-Optimal'
+        },
+        'purpose': '최적 조건 탐색',
+        'factors_range': (2, 5),
+        'runs_estimate': lambda k: f"{2**k + 2*k + 1}~{3**k} runs"
+    },
+    'factorial': {
+        'name': '요인 설계',
+        'methods': {
+            'full': '완전요인설계',
+            'fractional': '부분요인설계',
+            'mixed': '혼합수준설계'
+        },
+        'purpose': '인자 효과 분석',
+        'factors_range': (2, 8),
+        'runs_estimate': lambda k, levels=2: f"{levels**k} runs"
+    },
+    'mixture': {
+        'name': '혼합물 설계',
+        'methods': {
+            'simplex': '심플렉스 격자',
+            'centroid': '중심 혼합',
+            'extreme': '극점 설계'
+        },
+        'purpose': '조성 최적화',
+        'factors_range': (3, 10),
+        'constraint': 'sum = 100%'
+    },
+    'taguchi': {
+        'name': 'Taguchi 설계',
+        'methods': {
+            'l4': 'L4 (2³)',
+            'l8': 'L8 (2⁷)',
+            'l9': 'L9 (3⁴)',
+            'l16': 'L16 (2¹⁵)',
+            'l27': 'L27 (3¹³)'
+        },
+        'purpose': '품질 강건 설계',
+        'features': ['신호 대 잡음비', '직교 배열']
+    },
+    'custom': {
+        'name': '사용자 정의',
+        'methods': {
+            'manual': '수동 설계',
+            'imported': '외부 가져오기',
+            'ai_generated': 'AI 생성'
+        },
+        'purpose': '특수 요구사항'
+    }
+}
 
-EDUCATIONAL_PROMPTS = {
-    'ai_explanations': {
-        'beginner': {
-            'prefix': "초보자를 위해 쉽고 자세하게 설명해주세요. 전문용어는 풀어서 설명하고, 예시를 많이 들어주세요.",
-            'suffix': "마지막에 '💡 핵심 정리'를 3줄로 요약해주세요.",
-            'style': "friendly",
-            'examples': True,
-            'analogies': True
-        },
-        'intermediate': {
-            'prefix': "핵심 개념을 중심으로 설명해주세요.",
-            'suffix': "",
-            'style': "professional",
-            'examples': False,
-            'analogies': False
-        },
-        'advanced': {
-            'prefix': "기술적 세부사항을 포함해 간단히 설명해주세요.",
-            'suffix': "",
-            'style': "technical",
-            'examples': False,
-            'analogies': False
-        },
-        'expert': {
-            'prefix': "",
-            'suffix': "",
-            'style': "minimal",
-            'examples': False,
-            'analogies': False
+# ===== 사용자 레벨 시스템 =====
+class UserLevel(Enum):
+    BEGINNER = "초보자"
+    INTERMEDIATE = "중급자"
+    ADVANCED = "고급자"
+    EXPERT = "전문가"
+
+USER_LEVELS = {
+    UserLevel.BEGINNER: {
+        'name': '초보자',
+        'icon': '🌱',
+        'description': 'DOE를 처음 접하는 사용자',
+        'features': {
+            'guided_mode': True,
+            'ai_assistance': 'maximum',
+            'default_designs': ['full_factorial', 'one_factor'],
+            'max_factors': 3,
+            'tutorials': True,
+            'templates': True
+        }
+    },
+    UserLevel.INTERMEDIATE: {
+        'name': '중급자',
+        'icon': '🌿',
+        'description': '기본적인 DOE 경험이 있는 사용자',
+        'features': {
+            'guided_mode': False,
+            'ai_assistance': 'moderate',
+            'default_designs': ['fractional', 'ccd', 'bb'],
+            'max_factors': 6,
+            'advanced_analysis': True
+        }
+    },
+    UserLevel.ADVANCED: {
+        'name': '고급자',
+        'icon': '🌳',
+        'description': '풍부한 DOE 경험을 가진 사용자',
+        'features': {
+            'guided_mode': False,
+            'ai_assistance': 'minimal',
+            'all_designs': True,
+            'max_factors': 10,
+            'custom_designs': True,
+            'advanced_optimization': True
+        }
+    },
+    UserLevel.EXPERT: {
+        'name': '전문가',
+        'icon': '🏆',
+        'description': 'DOE 전문가',
+        'features': {
+            'all_features': True,
+            'dev_mode': True,
+            'api_access': True,
+            'custom_algorithms': True,
+            'plugin_development': True
         }
     }
 }
 
-# ===========================
-# 9. 보안 설정 (모든 레벨 동일)
-# ===========================
+# ===== 데이터베이스 설정 (Google Sheets) =====
+DATABASE_CONFIG = {
+    'google_sheets': {
+        'users_sheet': 'Universal_DOE_Users',
+        'projects_sheet': 'Universal_DOE_Projects',
+        'experiments_sheet': 'Universal_DOE_Experiments',
+        'results_sheet': 'Universal_DOE_Results',
+        'templates_sheet': 'Universal_DOE_Templates',
+        'shared_modules_sheet': 'Universal_DOE_Modules',
+        'scopes': [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive.metadata.readonly'
+        ],
+        'auto_backup': True,
+        'backup_interval': timedelta(hours=6),
+        'retention_days': 30
+    },
+    'cache': {
+        'enable': True,
+        'ttl': {
+            'user_data': 3600,  # 1시간
+            'project_list': 300,  # 5분
+            'experiment_data': 1800,  # 30분
+            'static_data': 86400  # 24시간
+        }
+    }
+}
 
+# ===== 파일 업로드 설정 =====
+FILE_UPLOAD_CONFIG = {
+    'allowed_extensions': {
+        'data': ['.csv', '.xlsx', '.xls', '.txt', '.json'],
+        'images': ['.png', '.jpg', '.jpeg', '.gif', '.svg'],
+        'documents': ['.pdf', '.docx', '.doc'],
+        'code': ['.py', '.r', '.m', '.ipynb']
+    },
+    'max_file_size_mb': 100,
+    'max_files_per_upload': 10,
+    'temp_storage_hours': 24,
+    'virus_scan': True
+}
+
+# ===== 보안 설정 =====
 SECURITY_CONFIG = {
-    # JWT 설정
-    'jwt_secret_key': os.getenv(
-        'JWT_SECRET_KEY', 
-        st.secrets.get("security", {}).get("jwt_secret_key", secrets.token_urlsafe(32))
-    ),
-    'jwt_algorithm': 'HS256',
-    'jwt_expiry_hours': 24,
-    
-    # 암호화 키
-    'encryption_key': os.getenv(
-        'ENCRYPTION_KEY',
-        st.secrets.get("security", {}).get("encryption_key", secrets.token_urlsafe(32))
-    ).encode()[:32],
-    
-    # 비밀번호 정책
+    'session': {
+        'timeout_minutes': 120,
+        'max_concurrent_sessions': 3,
+        'remember_me_days': 30
+    },
     'password': {
         'min_length': 8,
         'require_uppercase': True,
         'require_lowercase': True,
         'require_numbers': True,
         'require_special': True,
-        'bcrypt_rounds': 12
+        'hash_algorithm': 'bcrypt',
+        'reset_token_hours': 24
     },
-    
-    # 로그인 보안
-    'login': {
-        'max_attempts': 5,
-        'lockout_duration_minutes': 15,
-        'session_timeout_minutes': 30,
-        'remember_me_days': 30
+    'api_keys': {
+        'encryption': True,
+        'rotation_days': 90,
+        'audit_log': True
+    },
+    'rate_limiting': {
+        'requests_per_minute': 60,
+        'burst_size': 100
     }
 }
 
-# ===========================
-# 10. 이메일 설정
-# ===========================
-
-EMAIL_CONFIG = {
-    'smtp_server': os.getenv(
-        'SMTP_SERVER', 
-        st.secrets.get("email", {}).get("smtp_server", "smtp.gmail.com")
-    ),
-    'smtp_port': int(os.getenv(
-        'SMTP_PORT',
-        st.secrets.get("email", {}).get("smtp_port", 587)
-    )),
-    'username': os.getenv(
-        'SMTP_USERNAME',
-        st.secrets.get("email", {}).get("username", "")
-    ),
-    'password': os.getenv(
-        'SMTP_PASSWORD',
-        st.secrets.get("email", {}).get("password", "")
-    ),
-    'from_email': os.getenv('FROM_EMAIL', 'noreply@polymer-doe.com'),
-    'from_name': 'Polymer DOE Platform',
-    'use_tls': True,
-    'timeout': 30
-}
-
-# ===========================
-# 11. 캐시 설정
-# ===========================
-
-CACHE_CONFIG = {
-    'backend': 'memory',
-    'prefix': f'polymer_doe_{ENV}_',
-    
-    'ttl': {
-        'default': 300,
-        'user_data': 300,
-        'project_data': 60,
-        'api_response': 3600,
-        'educational_content': 86400,  # 교육 콘텐츠는 24시간
-        'growth_metrics': 600
-    },
-    
-    'max_size': {
-        'memory': 1000,
-        'per_user': 100
-    }
-}
-
-# ===========================
-# 12. 실험 설계 설정
-# ===========================
-
-EXPERIMENT_CONFIG = {
-    # 설계 유형 (모든 레벨 사용 가능)
-    'design_types': {
-        'full_factorial': {
-            'name': '완전요인설계',
-            'complexity': 'basic',
-            'beginner_recommended': True
+# ===== 알림 설정 =====
+NOTIFICATION_CONFIG = {
+    'channels': {
+        'email': {
+            'enabled': True,
+            'smtp_server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
+            'smtp_port': 587,
+            'use_tls': True
         },
-        'fractional_factorial': {
-            'name': '부분요인설계',
-            'complexity': 'intermediate',
-            'beginner_recommended': True
+        'in_app': {
+            'enabled': True,
+            'retention_days': 30
         },
-        'plackett_burman': {
-            'name': 'Plackett-Burman 설계',
-            'complexity': 'intermediate',
-            'beginner_recommended': False
-        },
-        'box_behnken': {
-            'name': 'Box-Behnken 설계',
-            'complexity': 'advanced',
-            'beginner_recommended': False
-        },
-        'central_composite': {
-            'name': '중심합성설계',
-            'complexity': 'advanced',
-            'beginner_recommended': False
-        },
-        'mixture': {
-            'name': '혼합물 설계',
-            'complexity': 'advanced',
-            'beginner_recommended': False
-        },
-        'taguchi': {
-            'name': 'Taguchi 설계',
-            'complexity': 'advanced',
-            'beginner_recommended': False
+        'push': {
+            'enabled': False,  # 향후 구현
+            'service': 'firebase'
         }
     },
-    
-    # 제한사항 (모든 레벨 동일)
-    'limits': {
-        'max_factors': 20,
-        'max_levels': 10,
-        'max_runs': 1000,
-        'max_responses': 50
+    'triggers': {
+        'experiment_complete': True,
+        'collaboration_invite': True,
+        'analysis_ready': True,
+        'error_alert': True,
+        'weekly_summary': True
     }
 }
 
-# ===========================
-# 13. 협업 기능 (모든 레벨 사용 가능)
-# ===========================
-
-COLLABORATION_CONFIG = {
-    'enabled': True,
-    'features': {
-        'project_sharing': True,
-        'real_time_collaboration': True,
-        'commenting': True,
-        'version_control': True,
-        'team_management': True
+# ===== 성능 설정 =====
+PERFORMANCE_CONFIG = {
+    'parallel_processing': {
+        'enabled': True,
+        'max_workers': 4,
+        'chunk_size': 1000
     },
-    
-    # 레벨별 가이드만 다름
-    'level_guides': {
-        'beginner': {
-            'show_collaboration_tutorial': True,
-            'auto_save_enabled': True,
-            'conflict_resolution_help': True
-        },
-        'expert': {
-            'show_collaboration_tutorial': False,
-            'auto_save_enabled': False,
-            'conflict_resolution_help': False
+    'optimization': {
+        'lazy_loading': True,
+        'pagination_size': 50,
+        'query_timeout_seconds': 30
+    },
+    'monitoring': {
+        'enabled': True,
+        'metrics': ['response_time', 'error_rate', 'user_activity'],
+        'alert_thresholds': {
+            'response_time_ms': 1000,
+            'error_rate_percent': 5
         }
     }
 }
 
-# ===========================
-# 14. 기능 플래그
-# ===========================
-
+# ===== 기능 플래그 =====
 FEATURE_FLAGS = {
-    # 모든 기능은 모든 레벨에서 사용 가능
-    'all_features_enabled': True,
-    'level_restrictions': False,  # 레벨 제한 없음
-    
-    # 교육적 기능
-    'adaptive_education': True,
-    'growth_tracking': True,
-    'personalized_learning': True,
-    'achievement_system': True,
-    
-    # 핵심 기능
-    'ai_consensus': True,
-    'advanced_optimization': True,
-    'collaboration': True,
-    'templates': True,
-    'api_access': True,
-    'export_features': True,
-    
-    # 시스템
-    'maintenance_mode': False,
-    'registration_enabled': True
+    'ai_multi_engine': True,
+    'custom_modules': True,
+    'real_time_collaboration': True,
+    'advanced_visualization': True,
+    'machine_learning': True,
+    'api_access': False,  # 베타
+    'mobile_app': False,  # 개발 중
+    'offline_mode': False,  # 계획 중
+    'blockchain_verification': False,  # 미래 기능
+    'ar_visualization': False  # 미래 기능
 }
 
-# ===========================
-# 15. 유틸리티 함수
-# ===========================
+# ===== 분석 설정 =====
+ANALYSIS_CONFIG = {
+    'statistical': {
+        'confidence_level': 0.95,
+        'significance_level': 0.05,
+        'power': 0.80,
+        'multiple_comparison_correction': 'bonferroni'
+    },
+    'visualization': {
+        'default_theme': 'plotly',
+        'color_palette': 'viridis',
+        'interactive': True,
+        'export_formats': ['png', 'svg', 'html', 'pdf']
+    },
+    'machine_learning': {
+        'models': {
+            'regression': ['linear', 'polynomial', 'random_forest', 'xgboost'],
+            'classification': ['logistic', 'svm', 'neural_network'],
+            'optimization': ['gaussian_process', 'bayesian']
+        },
+        'cross_validation_folds': 5,
+        'test_size': 0.2
+    }
+}
 
-def get_user_level_config(user_level: str = 'beginner') -> Dict:
-    """사용자 레벨에 맞는 설정 반환"""
-    return LEVEL_CONFIG['levels'].get(user_level, LEVEL_CONFIG['levels']['beginner'])
+# ===== 협업 설정 =====
+COLLABORATION_CONFIG = {
+    'project_sharing': {
+        'levels': ['view', 'comment', 'edit', 'admin'],
+        'default_permission': 'view',
+        'require_approval': True
+    },
+    'team_features': {
+        'max_team_size': 50,
+        'roles': ['member', 'manager', 'admin'],
+        'activity_tracking': True
+    },
+    'community': {
+        'public_templates': True,
+        'module_marketplace': True,
+        'forum': True,
+        'ratings': True,
+        'badges': True
+    }
+}
 
-def get_educational_content(feature: str, topic: str, user_level: str) -> Optional[Dict]:
-    """교육 콘텐츠 반환"""
-    try:
-        content = EDUCATIONAL_CONTENT['explanations'][feature][topic][user_level]
-        return content
-    except KeyError:
-        return None
+# ===== 지역화 설정 =====
+LOCALIZATION_CONFIG = {
+    'default_language': 'ko',
+    'supported_languages': ['ko', 'en', 'zh', 'ja'],
+    'date_format': 'YYYY-MM-DD',
+    'time_format': '24h',
+    'timezone': 'Asia/Seoul',
+    'currency': 'KRW',
+    'units': {
+        'temperature': 'celsius',
+        'pressure': 'bar',
+        'length': 'mm',
+        'mass': 'g',
+        'volume': 'mL'
+    }
+}
 
-def should_show_explanation(user_level: str, feature: str) -> bool:
-    """설명 표시 여부 결정"""
-    level_config = get_user_level_config(user_level)
-    edu_mode = level_config['educational_mode']
-    
-    if edu_mode['explanations'] == 'off':
-        return False
-    elif edu_mode['explanations'] == 'full':
-        return True
-    else:
-        # 사용자 설정에 따라
-        return st.session_state.get(f'show_explanation_{feature}', True)
+# ===== 외부 서비스 통합 =====
+INTEGRATIONS = {
+    'google_scholar': {
+        'enabled': True,
+        'api_endpoint': 'https://scholar.google.com',
+        'rate_limit': 10  # requests per minute
+    },
+    'pubmed': {
+        'enabled': True,
+        'api_endpoint': 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/',
+        'api_key_name': 'PUBMED_API_KEY'
+    },
+    'chemspider': {
+        'enabled': False,
+        'api_key_name': 'CHEMSPIDER_API_KEY'
+    },
+    'materials_project': {
+        'enabled': False,
+        'api_key_name': 'MP_API_KEY'
+    }
+}
 
-def get_error_message(error_type: str, user_level: str) -> str:
-    """레벨별 에러 메시지 반환"""
-    return EDUCATIONAL_CONTENT['error_messages'][user_level].get(
-        error_type,
-        "An error occurred"
-    )
+# ===== 오류 메시지 =====
+ERROR_MESSAGES = {
+    'auth': {
+        'invalid_credentials': '잘못된 이메일 또는 비밀번호입니다.',
+        'account_locked': '계정이 잠겼습니다. 관리자에게 문의하세요.',
+        'session_expired': '세션이 만료되었습니다. 다시 로그인해주세요.'
+    },
+    'api': {
+        'missing_key': 'API 키가 설정되지 않았습니다.',
+        'rate_limit': 'API 요청 한도를 초과했습니다.',
+        'connection_error': 'API 서버에 연결할 수 없습니다.'
+    },
+    'data': {
+        'invalid_format': '잘못된 데이터 형식입니다.',
+        'missing_required': '필수 항목이 누락되었습니다.',
+        'size_exceeded': '파일 크기가 제한을 초과했습니다.'
+    },
+    'general': {
+        'unexpected': '예기치 않은 오류가 발생했습니다.',
+        'permission_denied': '권한이 없습니다.',
+        'not_found': '요청한 리소스를 찾을 수 없습니다.'
+    }
+}
 
-def track_growth_metric(user_id: str, metric_type: str, value: float):
-    """성장 지표 추적"""
-    if GROWTH_TRACKING['enabled']:
-        # 실제 구현은 sheets_manager를 통해
-        logger.info(f"Growth metric tracked: {user_id} - {metric_type}: {value}")
+# ===== 도움말 및 문서 =====
+HELP_URLS = {
+    'getting_started': '/docs/getting-started',
+    'doe_basics': '/docs/doe-basics',
+    'api_documentation': '/docs/api',
+    'video_tutorials': '/tutorials',
+    'faq': '/faq',
+    'community_forum': '/forum',
+    'contact_support': '/support'
+}
 
-def get_ai_prompt_style(user_level: str) -> Dict:
-    """AI 프롬프트 스타일 반환"""
-    return EDUCATIONAL_PROMPTS['ai_explanations'].get(
-        user_level,
-        EDUCATIONAL_PROMPTS['ai_explanations']['intermediate']
-    )
+# ===== 개발/운영 환경 설정 =====
+ENVIRONMENT = os.getenv('APP_ENV', 'development')
 
-# ===========================
-# 16. 설정 검증
-# ===========================
+if ENVIRONMENT == 'production':
+    DEBUG = False
+    LOG_LEVEL = 'INFO'
+    CACHE_ENABLED = True
+    ERROR_TRACKING = True
+else:
+    DEBUG = True
+    LOG_LEVEL = 'DEBUG'
+    CACHE_ENABLED = False
+    ERROR_TRACKING = False
 
-def validate_config() -> Tuple[bool, List[str]]:
-    """설정 검증"""
-    warnings = []
-    
-    # 필수 설정 확인
-    if not GOOGLE_SHEETS_CONFIG.get('spreadsheet_id'):
-        warnings.append("Google Sheets ID가 설정되지 않았습니다.")
-    
-    if not SECURITY_CONFIG.get('jwt_secret_key'):
-        warnings.append("JWT Secret Key가 설정되지 않았습니다.")
-    
-    # API 키 확인 (경고만, 필수 아님)
-    for api_name, config in API_KEYS.items():
-        if config.get('key') == "":
-            warnings.append(f"{api_name} API 키가 비어있습니다. (선택사항)")
-    
-    success = len([w for w in warnings if "선택사항" not in w]) == 0
-    return success, warnings
+# ===== 유틸리티 함수 =====
+def get_ai_engine_config(engine_name: str) -> Optional[Dict[str, Any]]:
+    """특정 AI 엔진의 설정을 반환"""
+    return AI_ENGINES.get(engine_name)
 
-# 설정 검증 실행
-if __name__ != "__main__":
-    success, warnings = validate_config()
-    if warnings:
-        for warning in warnings:
-            logger.warning(warning)
-    
-    logger.info(f"교육적 성장 중심 플랫폼 설정 로드 완료 (환경: {ENV})")
+def get_research_field_experiments(field: str) -> Dict[str, Any]:
+    """특정 연구 분야의 실험 유형을 반환"""
+    return RESEARCH_FIELDS.get(field, {}).get('experiments', {})
+
+def get_doe_method_info(category: str, method: str) -> Optional[Dict[str, Any]]:
+    """특정 DOE 방법의 정보를 반환"""
+    category_info = DOE_METHODS.get(category, {})
+    if 'methods' in category_info:
+        method_name = category_info['methods'].get(method)
+        if method_name:
+            return {
+                'name': method_name,
+                'category': category,
+                'purpose': category_info.get('purpose', ''),
+                **category_info
+            }
+    return None
+
+def validate_file_extension(filename: str, file_type: str = 'data') -> bool:
+    """파일 확장자 검증"""
+    allowed = FILE_UPLOAD_CONFIG['allowed_extensions'].get(file_type, [])
+    return any(filename.lower().endswith(ext) for ext in allowed)
+
+def get_user_level_features(level: UserLevel) -> Dict[str, Any]:
+    """사용자 레벨에 따른 기능 제한 반환"""
+    return USER_LEVELS.get(level, {}).get('features', {})
+
+# ===== 상수 export =====
+__all__ = [
+    'APP_INFO',
+    'AI_ENGINES',
+    'RESEARCH_FIELDS',
+    'DOE_METHODS',
+    'UserLevel',
+    'USER_LEVELS',
+    'DATABASE_CONFIG',
+    'FILE_UPLOAD_CONFIG',
+    'SECURITY_CONFIG',
+    'NOTIFICATION_CONFIG',
+    'PERFORMANCE_CONFIG',
+    'FEATURE_FLAGS',
+    'ANALYSIS_CONFIG',
+    'COLLABORATION_CONFIG',
+    'LOCALIZATION_CONFIG',
+    'INTEGRATIONS',
+    'ERROR_MESSAGES',
+    'HELP_URLS',
+    'ENVIRONMENT',
+    'DEBUG',
+    'get_ai_engine_config',
+    'get_research_field_experiments',
+    'get_doe_method_info',
+    'validate_file_extension',
+    'get_user_level_features'
+]
