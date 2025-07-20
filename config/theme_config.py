@@ -1,1115 +1,733 @@
-# config/theme_config.py
+"""
+🎨 Universal DOE Platform - UI Theme Configuration
+전체 플랫폼의 시각적 일관성을 위한 중앙 테마 설정
+"""
 
-import os
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Tuple
 import streamlit as st
-from pathlib import Path
 
-# ===========================
-# 1. 기본 색상 팔레트
-# ===========================
+# ============================================================================
+# 🎨 색상 시스템 (Color System)
+# ============================================================================
 
-# 브랜드 색상
-BRAND_COLORS = {
-    'primary': '#7C3AED',      # 보라색 - 메인 브랜드 색상
-    'secondary': '#F59E0B',    # 주황색 - 강조색
-    'tertiary': '#10B981',     # 초록색 - 성공/긍정
+class Colors:
+    """플랫폼 전체 색상 팔레트"""
     
-    # 의미 색상
-    'success': '#10B981',      # 초록색
-    'warning': '#F59E0B',      # 주황색
-    'error': '#EF4444',        # 빨간색
-    'info': '#3B82F6',         # 파란색
+    # Primary Colors
+    PRIMARY = "#1E88E5"          # 밝은 파란색 (신뢰, 과학)
+    PRIMARY_DARK = "#1565C0"     # 진한 파란색
+    PRIMARY_LIGHT = "#42A5F5"    # 연한 파란색
     
-    # 중성 색상
-    'gray': {
-        50: '#F9FAFB',
-        100: '#F3F4F6',
-        200: '#E5E7EB',
-        300: '#D1D5DB',
-        400: '#9CA3AF',
-        500: '#6B7280',
-        600: '#4B5563',
-        700: '#374151',
-        800: '#1F2937',
-        900: '#111827'
+    # Secondary Colors  
+    SECONDARY = "#00ACC1"        # 청록색 (혁신, 기술)
+    SECONDARY_DARK = "#00838F"
+    SECONDARY_LIGHT = "#26C6DA"
+    
+    # Accent Colors
+    ACCENT = "#7C4DFF"          # 보라색 (창의성)
+    ACCENT_ORANGE = "#FF6F00"   # 주황색 (활력)
+    
+    # Status Colors
+    SUCCESS = "#4CAF50"         # 녹색
+    WARNING = "#FFA726"         # 주황색
+    ERROR = "#EF5350"           # 빨간색
+    INFO = "#29B6F6"            # 하늘색
+    
+    # Neutral Colors
+    BLACK = "#000000"
+    WHITE = "#FFFFFF"
+    GRAY_900 = "#212121"
+    GRAY_800 = "#424242"
+    GRAY_700 = "#616161"
+    GRAY_600 = "#757575"
+    GRAY_500 = "#9E9E9E"
+    GRAY_400 = "#BDBDBD"
+    GRAY_300 = "#E0E0E0"
+    GRAY_200 = "#EEEEEE"
+    GRAY_100 = "#F5F5F5"
+    GRAY_50 = "#FAFAFA"
+    
+    # Background Colors
+    BG_PRIMARY = "#FFFFFF"
+    BG_SECONDARY = "#F8F9FA"
+    BG_TERTIARY = "#F3F4F6"
+    
+    # Text Colors
+    TEXT_PRIMARY = "#212121"
+    TEXT_SECONDARY = "#616161"
+    TEXT_DISABLED = "#9E9E9E"
+    TEXT_ON_PRIMARY = "#FFFFFF"
+    
+    # 연구 분야별 테마 색상
+    FIELD_COLORS = {
+        "polymer": "#1E88E5",        # 파란색 - 고분자
+        "inorganic": "#43A047",      # 녹색 - 무기재료
+        "nano": "#E53935",           # 빨간색 - 나노재료
+        "organic": "#FB8C00",        # 주황색 - 유기합성
+        "composite": "#8E24AA",      # 보라색 - 복합재료
+        "bio": "#00ACC1",            # 청록색 - 바이오재료
+        "energy": "#FFD600",         # 노란색 - 에너지재료
+        "environmental": "#00897B"   # 에메랄드 - 환경재료
     }
-}
+    
+    # 차트 색상 팔레트
+    CHART_COLORS = [
+        "#1E88E5", "#43A047", "#E53935", "#FB8C00",
+        "#8E24AA", "#00ACC1", "#FFD600", "#00897B",
+        "#5E35B1", "#3949AB", "#1E88E5", "#039BE5"
+    ]
+    
+    # 그라디언트
+    GRADIENT_PRIMARY = "linear-gradient(135deg, #1E88E5 0%, #42A5F5 100%)"
+    GRADIENT_SUCCESS = "linear-gradient(135deg, #43A047 0%, #66BB6A 100%)"
+    GRADIENT_ACCENT = "linear-gradient(135deg, #7C4DFF 0%, #B388FF 100%)"
 
-# ===========================
-# 2. 레벨별 색상 테마
-# ===========================
 
-LEVEL_THEMES = {
-    'beginner': {
-        'name': '🌱 초급 테마',
-        'description': '밝고 친근한 색상으로 학습 동기 부여',
-        
-        # 색상 설정
-        'colors': {
-            'primary': '#10B981',        # 부드러운 초록색
-            'primary_hover': '#059669',
-            'primary_light': '#D1FAE5',
-            'secondary': '#3B82F6',      # 친근한 파란색
-            'background': '#FFFFFF',
-            'surface': '#F9FAFB',
-            'text': '#1F2937',
-            'text_secondary': '#6B7280',
-            'border': '#E5E7EB',
-            'shadow': 'rgba(0, 0, 0, 0.05)',
-            
-            # 교육적 하이라이트
-            'highlight': '#FEF3C7',       # 노란색 하이라이트
-            'guide': '#DBEAFE',          # 파란색 가이드
-            'tip': '#D1FAE5',            # 초록색 팁
-            'warning_bg': '#FEE2E2'      # 경고 배경
-        },
-        
-        # UI 특성
-        'ui': {
-            'border_radius': '12px',      # 둥근 모서리
-            'spacing': 'relaxed',         # 넓은 간격
-            'font_size_base': '16px',    # 큰 글자
-            'line_height': '1.6',        # 넓은 줄간격
-            'contrast': 'high'           # 높은 대비
-        }
-    },
+# ============================================================================
+# 📝 타이포그래피 (Typography)
+# ============================================================================
+
+class Typography:
+    """폰트 및 텍스트 스타일 설정"""
     
-    'intermediate': {
-        'name': '🌿 중급 테마',
-        'description': '균형잡힌 전문적 색상',
-        
-        'colors': {
-            'primary': '#3B82F6',        # 전문적 파란색
-            'primary_hover': '#2563EB',
-            'primary_light': '#DBEAFE',
-            'secondary': '#8B5CF6',      # 보라색
-            'background': '#FFFFFF',
-            'surface': '#F9FAFB',
-            'text': '#1F2937',
-            'text_secondary': '#6B7280',
-            'border': '#E5E7EB',
-            'shadow': 'rgba(0, 0, 0, 0.08)',
-            
-            # 교육적 하이라이트 (축소)
-            'highlight': '#FEF3C7',
-            'guide': '#E0E7FF',
-            'tip': '#D1FAE5',
-            'warning_bg': '#FEE2E2'
-        },
-        
-        'ui': {
-            'border_radius': '8px',
-            'spacing': 'normal',
-            'font_size_base': '15px',
-            'line_height': '1.5',
-            'contrast': 'normal'
-        }
-    },
+    # Font Families
+    FONT_FAMILY_PRIMARY = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+    FONT_FAMILY_HEADING = "'Poppins', 'Inter', sans-serif"
+    FONT_FAMILY_MONO = "'JetBrains Mono', 'Consolas', 'Monaco', monospace"
     
-    'advanced': {
-        'name': '🌳 고급 테마',
-        'description': '세련되고 효율적인 색상',
-        
-        'colors': {
-            'primary': '#7C3AED',        # 브랜드 보라색
-            'primary_hover': '#6D28D9',
-            'primary_light': '#EDE9FE',
-            'secondary': '#EC4899',      # 핑크색
-            'background': '#FFFFFF',
-            'surface': '#FAFAFA',
-            'text': '#111827',
-            'text_secondary': '#6B7280',
-            'border': '#E5E7EB',
-            'shadow': 'rgba(0, 0, 0, 0.1)',
-            
-            # 최소 하이라이트
-            'highlight': 'transparent',
-            'guide': 'transparent',
-            'tip': '#F3F4F6',
-            'warning_bg': '#FEF2F2'
-        },
-        
-        'ui': {
-            'border_radius': '6px',
-            'spacing': 'compact',
-            'font_size_base': '14px',
-            'line_height': '1.5',
-            'contrast': 'normal'
-        }
-    },
+    # Font Sizes
+    SIZE_XXXL = "2.5rem"    # 40px - 대형 헤더
+    SIZE_XXL = "2rem"       # 32px - 페이지 제목
+    SIZE_XL = "1.5rem"      # 24px - 섹션 제목
+    SIZE_LG = "1.25rem"     # 20px - 부제목
+    SIZE_MD = "1rem"        # 16px - 본문
+    SIZE_SM = "0.875rem"    # 14px - 보조 텍스트
+    SIZE_XS = "0.75rem"     # 12px - 캡션
     
-    'expert': {
-        'name': '🏆 전문가 테마',
-        'description': '미니멀하고 집중적인 디자인',
-        
-        'colors': {
-            'primary': '#1F2937',        # 다크 그레이
-            'primary_hover': '#111827',
-            'primary_light': '#F3F4F6',
-            'secondary': '#7C3AED',      # 포인트 색상
-            'background': '#FFFFFF',
-            'surface': '#FAFAFA',
-            'text': '#111827',
-            'text_secondary': '#6B7280',
-            'border': '#E5E7EB',
-            'shadow': 'rgba(0, 0, 0, 0.05)',
-            
-            # 하이라이트 없음
-            'highlight': 'transparent',
-            'guide': 'transparent',
-            'tip': 'transparent',
-            'warning_bg': 'transparent'
+    # Font Weights
+    WEIGHT_LIGHT = 300
+    WEIGHT_REGULAR = 400
+    WEIGHT_MEDIUM = 500
+    WEIGHT_SEMIBOLD = 600
+    WEIGHT_BOLD = 700
+    
+    # Line Heights
+    LINE_HEIGHT_TIGHT = 1.2
+    LINE_HEIGHT_NORMAL = 1.5
+    LINE_HEIGHT_RELAXED = 1.8
+    
+    # Letter Spacing
+    LETTER_SPACING_TIGHT = "-0.02em"
+    LETTER_SPACING_NORMAL = "0"
+    LETTER_SPACING_WIDE = "0.02em"
+
+
+# ============================================================================
+# 🎯 컴포넌트 스타일 (Component Styles)
+# ============================================================================
+
+class ComponentStyles:
+    """UI 컴포넌트별 스타일 정의"""
+    
+    # Buttons
+    BUTTON_STYLES = {
+        "primary": {
+            "bg": Colors.PRIMARY,
+            "color": Colors.WHITE,
+            "hover_bg": Colors.PRIMARY_DARK,
+            "padding": "0.75rem 1.5rem",
+            "border_radius": "0.5rem",
+            "font_weight": Typography.WEIGHT_MEDIUM,
+            "transition": "all 0.2s ease"
         },
-        
-        'ui': {
-            'border_radius': '4px',
-            'spacing': 'dense',
-            'font_size_base': '14px',
-            'line_height': '1.4',
-            'contrast': 'low'
+        "secondary": {
+            "bg": Colors.WHITE,
+            "color": Colors.PRIMARY,
+            "hover_bg": Colors.GRAY_50,
+            "border": f"2px solid {Colors.PRIMARY}",
+            "padding": "0.75rem 1.5rem",
+            "border_radius": "0.5rem"
+        },
+        "ghost": {
+            "bg": "transparent",
+            "color": Colors.PRIMARY,
+            "hover_bg": Colors.GRAY_50,
+            "padding": "0.5rem 1rem",
+            "border_radius": "0.5rem"
+        },
+        "danger": {
+            "bg": Colors.ERROR,
+            "color": Colors.WHITE,
+            "hover_bg": "#D32F2F",
+            "padding": "0.75rem 1.5rem",
+            "border_radius": "0.5rem"
         }
     }
-}
-
-# ===========================
-# 3. 다크 모드 테마
-# ===========================
-
-DARK_THEMES = {
-    'beginner': {
-        'colors': {
-            'primary': '#34D399',        # 밝은 초록
-            'primary_hover': '#10B981',
-            'primary_light': '#064E3B',
-            'secondary': '#60A5FA',      # 밝은 파란색
-            'background': '#111827',
-            'surface': '#1F2937',
-            'text': '#F9FAFB',
-            'text_secondary': '#D1D5DB',
-            'border': '#374151',
-            'shadow': 'rgba(0, 0, 0, 0.3)',
-            
-            'highlight': '#422006',      # 어두운 노란색
-            'guide': '#1E3A8A',         # 어두운 파란색
-            'tip': '#064E3B',           # 어두운 초록색
-            'warning_bg': '#7F1D1D'     # 어두운 빨간색
-        }
-    },
     
-    'intermediate': {
-        'colors': {
-            'primary': '#60A5FA',
-            'primary_hover': '#3B82F6',
-            'primary_light': '#1E3A8A',
-            'secondary': '#A78BFA',
-            'background': '#0F172A',
-            'surface': '#1E293B',
-            'text': '#F1F5F9',
-            'text_secondary': '#CBD5E1',
-            'border': '#334155',
-            'shadow': 'rgba(0, 0, 0, 0.4)'
-        }
-    },
-    
-    'advanced': {
-        'colors': {
-            'primary': '#9333EA',
-            'primary_hover': '#7C3AED',
-            'primary_light': '#4C1D95',
-            'secondary': '#EC4899',
-            'background': '#0F172A',
-            'surface': '#1E293B',
-            'text': '#F1F5F9',
-            'text_secondary': '#CBD5E1',
-            'border': '#334155',
-            'shadow': 'rgba(0, 0, 0, 0.5)'
-        }
-    },
-    
-    'expert': {
-        'colors': {
-            'primary': '#F3F4F6',
-            'primary_hover': '#E5E7EB',
-            'primary_light': '#374151',
-            'secondary': '#9333EA',
-            'background': '#000000',
-            'surface': '#111827',
-            'text': '#F9FAFB',
-            'text_secondary': '#9CA3AF',
-            'border': '#1F2937',
-            'shadow': 'rgba(0, 0, 0, 0.8)'
+    # Cards
+    CARD_STYLES = {
+        "default": {
+            "bg": Colors.WHITE,
+            "border": f"1px solid {Colors.GRAY_200}",
+            "border_radius": "0.75rem",
+            "padding": "1.5rem",
+            "shadow": "0 1px 3px rgba(0,0,0,0.1)"
+        },
+        "elevated": {
+            "bg": Colors.WHITE,
+            "border": "none",
+            "border_radius": "1rem",
+            "padding": "2rem",
+            "shadow": "0 4px 6px rgba(0,0,0,0.1)"
+        },
+        "interactive": {
+            "bg": Colors.WHITE,
+            "border": f"1px solid {Colors.GRAY_200}",
+            "border_radius": "0.75rem",
+            "padding": "1.5rem",
+            "shadow": "0 1px 3px rgba(0,0,0,0.1)",
+            "hover_shadow": "0 4px 12px rgba(0,0,0,0.15)",
+            "transition": "all 0.3s ease"
         }
     }
-}
-
-# ===========================
-# 4. 애니메이션 설정
-# ===========================
-
-ANIMATIONS = {
-    'beginner': {
-        'enabled': True,
-        'duration': {
-            'fast': '200ms',
-            'normal': '300ms',
-            'slow': '500ms'
-        },
-        'easing': 'ease-out',
-        'effects': {
-            'hover': 'scale(1.05) translateY(-2px)',
-            'click': 'scale(0.98)',
-            'page_transition': 'fadeIn',
-            'loading': 'pulse',
-            'success': 'bounceIn',
-            'error': 'shake'
-        },
-        'guide_animations': {
-            'arrow': 'floating',
-            'highlight': 'glow',
-            'tooltip': 'fadeInUp'
-        }
-    },
     
-    'intermediate': {
-        'enabled': True,
-        'duration': {
-            'fast': '150ms',
-            'normal': '200ms',
-            'slow': '300ms'
+    # Input Fields
+    INPUT_STYLES = {
+        "default": {
+            "bg": Colors.WHITE,
+            "border": f"1px solid {Colors.GRAY_300}",
+            "border_radius": "0.5rem",
+            "padding": "0.75rem 1rem",
+            "font_size": Typography.SIZE_MD,
+            "focus_border": Colors.PRIMARY,
+            "focus_shadow": f"0 0 0 3px {Colors.PRIMARY}20"
         },
-        'easing': 'ease-in-out',
-        'effects': {
-            'hover': 'translateY(-1px)',
-            'click': 'scale(0.99)',
-            'page_transition': 'slideIn',
-            'loading': 'spin'
-        },
-        'guide_animations': {
-            'arrow': 'none',
-            'highlight': 'subtle',
-            'tooltip': 'fade'
-        }
-    },
-    
-    'advanced': {
-        'enabled': True,
-        'duration': {
-            'fast': '100ms',
-            'normal': '150ms',
-            'slow': '200ms'
-        },
-        'easing': 'ease',
-        'effects': {
-            'hover': 'opacity(0.8)',
-            'click': 'none',
-            'page_transition': 'none',
-            'loading': 'minimal'
-        }
-    },
-    
-    'expert': {
-        'enabled': False,  # 애니메이션 비활성화
-        'duration': {
-            'fast': '0ms',
-            'normal': '0ms',
-            'slow': '0ms'
+        "error": {
+            "border": f"1px solid {Colors.ERROR}",
+            "focus_border": Colors.ERROR,
+            "focus_shadow": f"0 0 0 3px {Colors.ERROR}20"
         }
     }
-}
-
-# ===========================
-# 5. 타이포그래피 설정
-# ===========================
-
-TYPOGRAPHY = {
-    'fonts': {
-        'primary': "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        'secondary': "'Roboto', sans-serif",
-        'mono': "'Fira Code', 'Consolas', monospace"
-    },
     
-    'beginner': {
-        'base_size': 16,
-        'scale_ratio': 1.25,  # 큰 크기 차이
-        'weights': {
-            'normal': 400,
-            'medium': 500,
-            'bold': 700
+    # Badges
+    BADGE_STYLES = {
+        "default": {
+            "bg": Colors.GRAY_200,
+            "color": Colors.GRAY_700,
+            "padding": "0.25rem 0.75rem",
+            "border_radius": "1rem",
+            "font_size": Typography.SIZE_SM
         },
-        'sizes': {
-            'xs': '0.75rem',   # 12px
-            'sm': '0.875rem',  # 14px
-            'base': '1rem',    # 16px
-            'lg': '1.125rem',  # 18px
-            'xl': '1.25rem',   # 20px
-            'h6': '1.25rem',   # 20px
-            'h5': '1.5rem',    # 24px
-            'h4': '1.875rem',  # 30px
-            'h3': '2.25rem',   # 36px
-            'h2': '2.75rem',   # 44px
-            'h1': '3.5rem'     # 56px
-        }
-    },
-    
-    'intermediate': {
-        'base_size': 15,
-        'scale_ratio': 1.2,
-        'weights': {
-            'normal': 400,
-            'medium': 500,
-            'bold': 600
-        }
-    },
-    
-    'advanced': {
-        'base_size': 14,
-        'scale_ratio': 1.15,
-        'weights': {
-            'normal': 400,
-            'medium': 500,
-            'bold': 600
-        }
-    },
-    
-    'expert': {
-        'base_size': 14,
-        'scale_ratio': 1.125,
-        'weights': {
-            'normal': 400,
-            'medium': 500,
-            'bold': 600
+        "primary": {
+            "bg": f"{Colors.PRIMARY}20",
+            "color": Colors.PRIMARY_DARK
+        },
+        "success": {
+            "bg": f"{Colors.SUCCESS}20",
+            "color": "#2E7D32"
+        },
+        "warning": {
+            "bg": f"{Colors.WARNING}20",
+            "color": "#F57C00"
         }
     }
-}
 
-# ===========================
-# 6. 레이아웃 설정
-# ===========================
 
-LAYOUT = {
-    'beginner': {
-        'container_width': '1200px',
-        'sidebar_width': '320px',
-        'spacing': {
-            'xs': '0.25rem',   # 4px
-            'sm': '0.5rem',    # 8px
-            'md': '1rem',      # 16px
-            'lg': '1.5rem',    # 24px
-            'xl': '2rem',      # 32px
-            'xxl': '3rem'      # 48px
-        },
-        'grid_gap': '1.5rem',
-        'card_padding': '1.5rem',
-        'section_margin': '3rem'
-    },
+# ============================================================================
+# 📐 레이아웃 시스템 (Layout System)
+# ============================================================================
+
+class Layout:
+    """레이아웃 및 간격 설정"""
     
-    'intermediate': {
-        'container_width': '1280px',
-        'sidebar_width': '280px',
-        'spacing': {
-            'xs': '0.25rem',
-            'sm': '0.5rem',
-            'md': '0.75rem',
-            'lg': '1rem',
-            'xl': '1.5rem',
-            'xxl': '2rem'
-        },
-        'grid_gap': '1rem',
-        'card_padding': '1rem',
-        'section_margin': '2rem'
-    },
+    # Container Widths
+    MAX_WIDTH = "1200px"
+    CONTENT_WIDTH = "900px"
+    NARROW_WIDTH = "600px"
     
-    'advanced': {
-        'container_width': '1400px',
-        'sidebar_width': '260px',
-        'spacing': {
-            'xs': '0.125rem',
-            'sm': '0.25rem',
-            'md': '0.5rem',
-            'lg': '0.75rem',
-            'xl': '1rem',
-            'xxl': '1.5rem'
-        },
-        'grid_gap': '0.75rem',
-        'card_padding': '0.75rem',
-        'section_margin': '1.5rem'
-    },
-    
-    'expert': {
-        'container_width': '100%',
-        'sidebar_width': '240px',
-        'spacing': {
-            'xs': '0.125rem',
-            'sm': '0.25rem',
-            'md': '0.375rem',
-            'lg': '0.5rem',
-            'xl': '0.75rem',
-            'xxl': '1rem'
-        },
-        'grid_gap': '0.5rem',
-        'card_padding': '0.5rem',
-        'section_margin': '1rem'
+    # Spacing Scale
+    SPACING = {
+        "xxs": "0.25rem",   # 4px
+        "xs": "0.5rem",     # 8px
+        "sm": "0.75rem",    # 12px
+        "md": "1rem",       # 16px
+        "lg": "1.5rem",     # 24px
+        "xl": "2rem",       # 32px
+        "xxl": "3rem",      # 48px
+        "xxxl": "4rem"      # 64px
     }
-}
-
-# ===========================
-# 7. 컴포넌트 스타일
-# ===========================
-
-COMPONENTS = {
-    'beginner': {
-        'button': {
-            'height': '48px',
-            'padding': '12px 24px',
-            'font_size': '16px',
-            'border_radius': '12px',
-            'shadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-            'hover_shadow': '0 6px 12px rgba(0, 0, 0, 0.15)'
-        },
-        'input': {
-            'height': '48px',
-            'padding': '12px 16px',
-            'font_size': '16px',
-            'border_radius': '8px',
-            'border_width': '2px',
-            'focus_ring_width': '3px'
-        },
-        'card': {
-            'border_radius': '16px',
-            'shadow': '0 2px 8px rgba(0, 0, 0, 0.08)',
-            'hover_shadow': '0 4px 16px rgba(0, 0, 0, 0.12)',
-            'border_width': '1px'
-        },
-        'modal': {
-            'border_radius': '16px',
-            'shadow': '0 20px 25px rgba(0, 0, 0, 0.15)',
-            'overlay_opacity': '0.5'
-        }
-    },
     
-    'intermediate': {
-        'button': {
-            'height': '40px',
-            'padding': '10px 20px',
-            'font_size': '15px',
-            'border_radius': '8px',
-            'shadow': '0 2px 4px rgba(0, 0, 0, 0.08)',
-            'hover_shadow': '0 4px 8px rgba(0, 0, 0, 0.12)'
-        }
-    },
+    # Grid System
+    GRID_COLUMNS = 12
+    GRID_GAP = "1rem"
     
-    'advanced': {
-        'button': {
-            'height': '36px',
-            'padding': '8px 16px',
-            'font_size': '14px',
-            'border_radius': '6px',
-            'shadow': '0 1px 3px rgba(0, 0, 0, 0.08)',
-            'hover_shadow': '0 2px 6px rgba(0, 0, 0, 0.12)'
-        }
-    },
-    
-    'expert': {
-        'button': {
-            'height': '32px',
-            'padding': '6px 12px',
-            'font_size': '14px',
-            'border_radius': '4px',
-            'shadow': 'none',
-            'hover_shadow': 'none'
-        }
+    # Breakpoints
+    BREAKPOINTS = {
+        "mobile": "640px",
+        "tablet": "768px",
+        "desktop": "1024px",
+        "wide": "1280px"
     }
-}
-
-# ===========================
-# 8. 교육적 UI 요소
-# ===========================
-
-EDUCATIONAL_UI = {
-    'beginner': {
-        'tooltips': {
-            'enabled': True,
-            'delay': 0,
-            'position': 'top',
-            'max_width': '300px',
-            'show_icon': True,
-            'style': {
-                'background': '#1F2937',
-                'color': '#FFFFFF',
-                'border_radius': '8px',
-                'padding': '8px 12px',
-                'font_size': '14px'
-            }
-        },
-        'highlights': {
-            'enabled': True,
-            'style': 'glow',
-            'color': '#FEF3C7',
-            'animation': 'pulse'
-        },
-        'guides': {
-            'arrows': True,
-            'overlays': True,
-            'step_numbers': True,
-            'progress_bar': True
-        },
-        'feedback': {
-            'success_animation': 'confetti',
-            'error_shake': True,
-            'sound_effects': False
-        }
-    },
     
-    'intermediate': {
-        'tooltips': {
-            'enabled': True,
-            'delay': 500,
-            'position': 'auto',
-            'max_width': '250px',
-            'show_icon': False
-        },
-        'highlights': {
-            'enabled': False
-        },
-        'guides': {
-            'arrows': False,
-            'overlays': False,
-            'step_numbers': True,
-            'progress_bar': False
-        }
-    },
-    
-    'advanced': {
-        'tooltips': {
-            'enabled': True,
-            'delay': 1000,
-            'on_hover_only': True
-        },
-        'highlights': {
-            'enabled': False
-        },
-        'guides': {
-            'all_disabled': True
-        }
-    },
-    
-    'expert': {
-        'all_disabled': True
+    # Border Radius
+    RADIUS = {
+        "sm": "0.25rem",
+        "md": "0.5rem",
+        "lg": "0.75rem",
+        "xl": "1rem",
+        "full": "9999px"
     }
-}
 
-# ===========================
-# 9. 접근성 설정
-# ===========================
 
-ACCESSIBILITY = {
-    'high_contrast': {
-        'enabled': False,  # 사용자 설정
-        'colors': {
-            'primary': '#0000FF',
-            'secondary': '#FF00FF',
-            'background': '#FFFFFF',
-            'text': '#000000',
-            'border': '#000000'
-        }
-    },
+# ============================================================================
+# 🎭 아이콘 및 이모지 (Icons & Emojis)
+# ============================================================================
+
+class Icons:
+    """아이콘 및 이모지 매핑"""
     
-    'color_blind_modes': {
-        'protanopia': {  # 적색맹
-            'primary': '#0173B2',
-            'secondary': '#DE8F05',
-            'success': '#029E73',
-            'error': '#CC78BC'
-        },
-        'deuteranopia': {  # 녹색맹
-            'primary': '#0173B2',
-            'secondary': '#DE8F05',
-            'success': '#029E73',
-            'error': '#CC78BC'
-        },
-        'tritanopia': {  # 청색맹
-            'primary': '#E51C23',
-            'secondary': '#F57C00',
-            'success': '#00BFA5',
-            'error': '#9C27B0'
-        }
-    },
-    
-    'font_size_multiplier': {
-        'small': 0.85,
-        'normal': 1.0,
-        'large': 1.15,
-        'extra_large': 1.3
-    },
-    
-    'focus_indicators': {
-        'style': 'ring',
-        'color': '#2563EB',
-        'width': '3px',
-        'offset': '2px'
+    # 기능별 아이콘
+    FEATURES = {
+        "home": "🏠",
+        "experiment": "🧪",
+        "analysis": "📊",
+        "collaboration": "👥",
+        "settings": "⚙️",
+        "help": "❓",
+        "search": "🔍",
+        "save": "💾",
+        "export": "📤",
+        "import": "📥",
+        "delete": "🗑️",
+        "edit": "✏️",
+        "add": "➕",
+        "remove": "➖",
+        "refresh": "🔄",
+        "filter": "🔽",
+        "sort": "↕️",
+        "calendar": "📅",
+        "clock": "⏰",
+        "notification": "🔔",
+        "lock": "🔒",
+        "unlock": "🔓",
+        "user": "👤",
+        "team": "👥",
+        "document": "📄",
+        "folder": "📁",
+        "database": "🗄️",
+        "cloud": "☁️",
+        "download": "⬇️",
+        "upload": "⬆️",
+        "star": "⭐",
+        "heart": "❤️",
+        "flag": "🚩",
+        "warning": "⚠️",
+        "info": "ℹ️",
+        "success": "✅",
+        "error": "❌"
     }
-}
-
-# ===========================
-# 10. 반응형 브레이크포인트
-# ===========================
-
-BREAKPOINTS = {
-    'xs': '0px',      # 모바일
-    'sm': '640px',    # 태블릿
-    'md': '768px',    # 작은 데스크톱
-    'lg': '1024px',   # 데스크톱
-    'xl': '1280px',   # 큰 데스크톱
-    '2xl': '1536px'   # 초대형 화면
-}
-
-RESPONSIVE = {
-    'beginner': {
-        'mobile_first': True,
-        'touch_targets': {
-            'min_size': '44px',  # Apple 가이드라인
-            'spacing': '8px'
-        },
-        'font_scale': {
-            'mobile': 0.9,
-            'tablet': 0.95,
-            'desktop': 1.0
-        }
-    },
     
-    'expert': {
-        'mobile_first': False,
-        'touch_targets': {
-            'min_size': '32px',
-            'spacing': '4px'
-        },
-        'font_scale': {
-            'mobile': 1.0,
-            'tablet': 1.0,
-            'desktop': 1.0
-        }
+    # 연구 분야별 아이콘
+    RESEARCH_FIELDS = {
+        "polymer": "🧬",
+        "inorganic": "💎",
+        "nano": "⚛️",
+        "organic": "🧪",
+        "composite": "🔗",
+        "bio": "🧫",
+        "energy": "🔋",
+        "environmental": "🌱",
+        "general": "🔬"
     }
-}
+    
+    # 상태 아이콘
+    STATUS = {
+        "pending": "⏳",
+        "running": "🔄",
+        "completed": "✅",
+        "failed": "❌",
+        "paused": "⏸️",
+        "cancelled": "🚫"
+    }
+    
+    # AI 모델 아이콘
+    AI_MODELS = {
+        "gemini": "✨",
+        "grok": "🚀",
+        "groq": "⚡",
+        "deepseek": "🔍",
+        "sambanova": "🌊",
+        "huggingface": "🤗"
+    }
 
-# ===========================
-# 11. CSS 생성 함수
-# ===========================
 
-def generate_theme_css(user_level: str = 'beginner', dark_mode: bool = False) -> str:
-    """레벨별 테마 CSS 생성"""
+# ============================================================================
+# 🎬 애니메이션 (Animations)
+# ============================================================================
+
+class Animations:
+    """애니메이션 및 전환 효과"""
     
-    # 테마 선택
-    theme = DARK_THEMES[user_level] if dark_mode else LEVEL_THEMES[user_level]
-    colors = theme['colors']
-    ui = LEVEL_THEMES[user_level]['ui']
-    animations = ANIMATIONS[user_level]
-    typography = TYPOGRAPHY[user_level]
-    layout = LAYOUT[user_level]
-    components = COMPONENTS[user_level]
-    educational = EDUCATIONAL_UI[user_level]
+    # Transitions
+    TRANSITION_DEFAULT = "all 0.3s ease"
+    TRANSITION_FAST = "all 0.15s ease"
+    TRANSITION_SLOW = "all 0.5s ease"
     
-    css = f"""
-    <style>
-    /* ===== CSS 변수 정의 ===== */
-    :root {{
-        /* 색상 */
-        --primary: {colors['primary']};
-        --primary-hover: {colors['primary_hover']};
-        --primary-light: {colors['primary_light']};
-        --secondary: {colors['secondary']};
-        --background: {colors['background']};
-        --surface: {colors['surface']};
-        --text: {colors['text']};
-        --text-secondary: {colors['text_secondary']};
-        --border: {colors['border']};
-        --shadow: {colors['shadow']};
-        
-        /* 교육적 색상 */
-        --highlight: {colors.get('highlight', 'transparent')};
-        --guide: {colors.get('guide', 'transparent')};
-        --tip: {colors.get('tip', 'transparent')};
-        --warning-bg: {colors.get('warning_bg', 'transparent')};
-        
-        /* UI 설정 */
-        --border-radius: {ui['border_radius']};
-        --font-size-base: {ui['font_size_base']};
-        --line-height: {ui['line_height']};
-        
-        /* 애니메이션 */
-        --anim-fast: {animations['duration']['fast'] if animations['enabled'] else '0ms'};
-        --anim-normal: {animations['duration']['normal'] if animations['enabled'] else '0ms'};
-        --anim-slow: {animations['duration']['slow'] if animations['enabled'] else '0ms'};
-        --anim-easing: {animations.get('easing', 'ease')};
-        
-        /* 타이포그래피 */
-        --font-primary: {TYPOGRAPHY['fonts']['primary']};
-        --font-mono: {TYPOGRAPHY['fonts']['mono']};
-        
-        /* 레이아웃 */
-        --container-width: {layout['container_width']};
-        --sidebar-width: {layout['sidebar_width']};
-        --spacing-xs: {layout['spacing']['xs']};
-        --spacing-sm: {layout['spacing']['sm']};
-        --spacing-md: {layout['spacing']['md']};
-        --spacing-lg: {layout['spacing']['lg']};
-        --spacing-xl: {layout['spacing']['xl']};
-    }}
-    
-    /* ===== 기본 스타일 ===== */
-    * {{
-        transition: all var(--anim-fast) var(--anim-easing);
-    }}
-    
-    body {{
-        font-family: var(--font-primary);
-        font-size: var(--font-size-base);
-        line-height: var(--line-height);
-        color: var(--text);
-        background-color: var(--background);
-    }}
-    
-    /* ===== 메인 컨테이너 ===== */
-    .main {{
-        max-width: var(--container-width);
-        margin: 0 auto;
-        padding: var(--spacing-lg);
-    }}
-    
-    .sidebar {{
-        width: var(--sidebar-width);
-        background-color: var(--surface);
-        border-right: 1px solid var(--border);
-    }}
-    
-    /* ===== 버튼 스타일 ===== */
-    .stButton > button {{
-        height: {components['button']['height']};
-        padding: {components['button']['padding']};
-        font-size: {components['button']['font_size']};
-        font-weight: 500;
-        border-radius: {components['button']['border_radius']};
-        border: none;
-        background-color: var(--primary);
-        color: white;
-        box-shadow: {components['button']['shadow']};
-        cursor: pointer;
-        transition: all var(--anim-fast) var(--anim-easing);
-    }}
-    
-    .stButton > button:hover {{
-        background-color: var(--primary-hover);
-        box-shadow: {components['button']['hover_shadow']};
-        {f"transform: {animations['effects']['hover']};" if animations['enabled'] else ""}
-    }}
-    
-    .stButton > button:active {{
-        {f"transform: {animations['effects']['click']};" if animations['enabled'] else ""}
-    }}
-    
-    /* ===== 입력 필드 ===== */
-    .stTextInput > div > div > input,
-    .stTextArea > div > div > textarea,
-    .stSelectbox > div > div > select {{
-        height: {components['input']['height']};
-        padding: {components['input']['padding']};
-        font-size: {components['input']['font_size']};
-        border-radius: {components['input']['border_radius']};
-        border: {components['input']['border_width']} solid var(--border);
-        background-color: var(--surface);
-        color: var(--text);
-        transition: all var(--anim-fast) var(--anim-easing);
-    }}
-    
-    .stTextInput > div > div > input:focus,
-    .stTextArea > div > div > textarea:focus,
-    .stSelectbox > div > div > select:focus {{
-        outline: none;
-        border-color: var(--primary);
-        box-shadow: 0 0 0 {components['input']['focus_ring_width']} rgba(124, 58, 237, 0.1);
-    }}
-    
-    /* ===== 카드 스타일 ===== */
-    .card {{
-        background-color: var(--surface);
-        border-radius: {components['card']['border_radius']};
-        border: {components['card']['border_width']} solid var(--border);
-        box-shadow: {components['card']['shadow']};
-        padding: var(--spacing-lg);
-        margin-bottom: var(--spacing-md);
-        transition: all var(--anim-normal) var(--anim-easing);
-    }}
-    
-    .card:hover {{
-        box-shadow: {components['card']['hover_shadow']};
-        {f"transform: translateY(-2px);" if user_level in ['beginner', 'intermediate'] else ""}
-    }}
-    
-    /* ===== 교육적 요소 (초보자) ===== */
-    {f'''
-    .highlight {{
-        background-color: var(--highlight) !important;
-        padding: 2px 4px;
-        border-radius: 4px;
-        {f"animation: {educational['highlights']['animation']} 2s infinite;" if user_level == 'beginner' else ""}
-    }}
-    
-    .guide-arrow {{
-        position: absolute;
-        color: var(--primary);
-        font-size: 24px;
-        animation: floating 2s ease-in-out infinite;
-    }}
-    
-    @keyframes floating {{
-        0%, 100% {{ transform: translateY(0); }}
-        50% {{ transform: translateY(-10px); }}
-    }}
-    
-    @keyframes pulse {{
-        0%, 100% {{ opacity: 1; }}
-        50% {{ opacity: 0.6; }}
-    }}
-    
-    .tooltip {{
-        background: {educational['tooltips']['style']['background']};
-        color: {educational['tooltips']['style']['color']};
-        padding: {educational['tooltips']['style']['padding']};
-        border-radius: {educational['tooltips']['style']['border_radius']};
-        font-size: {educational['tooltips']['style']['font_size']};
-        max-width: {educational['tooltips']['max_width']};
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    }}
-    ''' if user_level == 'beginner' else ''}
-    
-    /* ===== 헤딩 스타일 ===== */
-    h1 {{ font-size: {typography['sizes']['h1']}; font-weight: {typography['weights']['bold']}; }}
-    h2 {{ font-size: {typography['sizes']['h2']}; font-weight: {typography['weights']['bold']}; }}
-    h3 {{ font-size: {typography['sizes']['h3']}; font-weight: {typography['weights']['medium']}; }}
-    h4 {{ font-size: {typography['sizes']['h4']}; font-weight: {typography['weights']['medium']}; }}
-    h5 {{ font-size: {typography['sizes']['h5']}; font-weight: {typography['weights']['medium']}; }}
-    h6 {{ font-size: {typography['sizes']['h6']}; font-weight: {typography['weights']['medium']}; }}
-    
-    /* ===== 메트릭 카드 ===== */
-    div[data-testid="metric-container"] {{
-        background-color: var(--surface);
-        border: 1px solid var(--border);
-        padding: var(--spacing-lg);
-        border-radius: var(--border-radius);
-        box-shadow: var(--shadow);
-        transition: all var(--anim-normal) var(--anim-easing);
-    }}
-    
-    div[data-testid="metric-container"]:hover {{
-        {f"transform: translateY(-2px);" if user_level == 'beginner' else ""}
-        box-shadow: {components['card']['hover_shadow']};
-    }}
-    
-    /* ===== 사이드바 스타일 ===== */
-    .css-1d391kg {{
-        background-color: var(--surface);
-        padding: var(--spacing-lg);
-    }}
-    
-    /* ===== 스크롤바 ===== */
-    ::-webkit-scrollbar {{
-        width: {f"12px" if user_level == 'beginner' else "8px"};
-        height: {f"12px" if user_level == 'beginner' else "8px"};
-    }}
-    
-    ::-webkit-scrollbar-track {{
-        background: var(--surface);
-        border-radius: var(--border-radius);
-    }}
-    
-    ::-webkit-scrollbar-thumb {{
-        background: var(--border);
-        border-radius: var(--border-radius);
-    }}
-    
-    ::-webkit-scrollbar-thumb:hover {{
-        background: var(--text-secondary);
-    }}
-    
-    /* ===== 반응형 디자인 ===== */
-    @media (max-width: 768px) {{
-        .main {{
-            padding: var(--spacing-md);
-        }}
-        
-        .stButton > button {{
-            font-size: {f"{int(components['button']['font_size'][:-2]) * 0.9}px"};
-            height: {f"{int(components['button']['height'][:-2]) * 0.9}px"};
-        }}
-        
-        h1 {{ font-size: {f"{float(typography['sizes']['h1'][:-3]) * 0.8}rem"}; }}
-        h2 {{ font-size: {f"{float(typography['sizes']['h2'][:-3]) * 0.8}rem"}; }}
-    }}
-    
-    /* ===== 접근성 포커스 ===== */
-    *:focus-visible {{
-        outline: {ACCESSIBILITY['focus_indicators']['width']} solid {ACCESSIBILITY['focus_indicators']['color']};
-        outline-offset: {ACCESSIBILITY['focus_indicators']['offset']};
-    }}
-    
-    /* ===== 페이지 전환 애니메이션 ===== */
-    @keyframes fadeIn {{
-        from {{ opacity: 0; transform: translateY(10px); }}
-        to {{ opacity: 1; transform: translateY(0); }}
-    }}
-    
-    @keyframes slideIn {{
-        from {{ transform: translateX(-100%); }}
-        to {{ transform: translateX(0); }}
-    }}
-    
-    .page-enter {{
-        animation: {animations['effects'].get('page_transition', 'fadeIn')} var(--anim-normal) var(--anim-easing);
-    }}
-    
-    /* ===== 다크모드 조정 ===== */
-    {f'''
-    @media (prefers-color-scheme: dark) {{
-        img {{ opacity: 0.9; }}
-        .highlight {{ opacity: 0.8; }}
-    }}
-    ''' if dark_mode else ''}
-    
-    /* ===== 프린트 스타일 ===== */
-    @media print {{
-        .sidebar, .stButton, .stTextInput {{
-            display: none !important;
-        }}
-        
-        body {{
-            font-size: 12pt;
-            color: black;
-            background: white;
-        }}
-    }}
-    </style>
+    # Loading Animations
+    LOADING_SPINNER = """
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
     """
     
-    return css
+    LOADING_PULSE = """
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+    """
+    
+    # Hover Effects
+    HOVER_SCALE = "transform: scale(1.05);"
+    HOVER_SHADOW = "box-shadow: 0 8px 16px rgba(0,0,0,0.15);"
+    HOVER_BRIGHTNESS = "filter: brightness(1.1);"
 
-# ===========================
-# 12. 테마 적용 함수
-# ===========================
 
-def apply_theme(user_level: str = None, dark_mode: bool = None):
-    """사용자 레벨에 맞는 테마 적용"""
+# ============================================================================
+# 🎯 특수 스타일 (Special Styles)
+# ============================================================================
+
+class SpecialStyles:
+    """코드 블록, 수식, 테이블 등 특수 요소 스타일"""
     
-    # 사용자 레벨 확인
-    if user_level is None:
-        user_level = st.session_state.get('user', {}).get('level', 'beginner')
-    
-    # 다크모드 설정 확인
-    if dark_mode is None:
-        dark_mode = st.session_state.get('dark_mode', False)
-    
-    # CSS 생성 및 적용
-    theme_css = generate_theme_css(user_level, dark_mode)
-    st.markdown(theme_css, unsafe_allow_html=True)
-    
-    # Streamlit 네이티브 테마 설정
-    theme_colors = DARK_THEMES[user_level]['colors'] if dark_mode else LEVEL_THEMES[user_level]['colors']
-    
-    # 세션에 테마 정보 저장
-    st.session_state['current_theme'] = {
-        'level': user_level,
-        'dark_mode': dark_mode,
-        'colors': theme_colors
+    # Code Block Styles
+    CODE_BLOCK = {
+        "bg": "#282C34",
+        "color": "#ABB2BF",
+        "padding": "1rem",
+        "border_radius": "0.5rem",
+        "font_family": Typography.FONT_FAMILY_MONO,
+        "font_size": Typography.SIZE_SM,
+        "line_height": Typography.LINE_HEIGHT_RELAXED,
+        "overflow": "auto"
     }
-
-def get_color(color_name: str) -> str:
-    """현재 테마의 색상 가져오기"""
-    current_theme = st.session_state.get('current_theme', {})
-    colors = current_theme.get('colors', LEVEL_THEMES['beginner']['colors'])
-    return colors.get(color_name, '#000000')
-
-def get_spacing(size: str = 'md') -> str:
-    """현재 레벨의 간격 가져오기"""
-    user_level = st.session_state.get('user', {}).get('level', 'beginner')
-    return LAYOUT[user_level]['spacing'].get(size, '1rem')
-
-def should_animate(animation_type: str = 'hover') -> bool:
-    """애니메이션 활성화 여부 확인"""
-    user_level = st.session_state.get('user', {}).get('level', 'beginner')
-    return ANIMATIONS[user_level]['enabled']
-
-# ===========================
-# 13. 교육적 UI 헬퍼 함수
-# ===========================
-
-def show_educational_tooltip(text: str, key: str = None):
-    """레벨별 툴팁 표시"""
-    user_level = st.session_state.get('user', {}).get('level', 'beginner')
     
-    if user_level == 'expert':
-        return  # 전문가는 툴팁 없음
+    # Syntax Highlighting
+    SYNTAX_COLORS = {
+        "keyword": "#C678DD",
+        "string": "#98C379",
+        "number": "#D19A66",
+        "comment": "#5C6370",
+        "function": "#61AFEF",
+        "variable": "#E06C75"
+    }
     
-    tooltip_config = EDUCATIONAL_UI[user_level]['tooltips']
+    # Math Formula Styles
+    MATH_FORMULA = {
+        "font_size": Typography.SIZE_MD,
+        "color": Colors.TEXT_PRIMARY,
+        "padding": "0.5rem 0",
+        "text_align": "center"
+    }
     
-    if tooltip_config['enabled']:
-        st.markdown(
-            f"""
-            <div class="tooltip-container">
-                {f'<span class="tooltip-icon">ℹ️</span>' if tooltip_config.get('show_icon') else ''}
-                <div class="tooltip" style="display: none;">
-                    {text}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    # Table Styles
+    TABLE = {
+        "header_bg": Colors.GRAY_100,
+        "header_color": Colors.TEXT_PRIMARY,
+        "border": f"1px solid {Colors.GRAY_200}",
+        "row_hover": Colors.GRAY_50,
+        "cell_padding": "0.75rem",
+        "font_size": Typography.SIZE_SM
+    }
+    
+    # Scrollbar Styles
+    SCROLLBAR = """
+        /* Webkit browsers */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+    """
 
-def highlight_element(element_id: str, duration: int = 3000):
-    """초보자용 요소 하이라이트"""
-    user_level = st.session_state.get('user', {}).get('level', 'beginner')
-    
-    if user_level == 'beginner':
-        st.markdown(
-            f"""
-            <script>
-            setTimeout(() => {{
-                const element = document.getElementById('{element_id}');
-                if (element) {{
-                    element.classList.add('highlight');
-                    setTimeout(() => element.classList.remove('highlight'), {duration});
-                }}
-            }}, 100);
-            </script>
-            """,
-            unsafe_allow_html=True
-        )
 
-# ===========================
-# 14. 설정 검증
-# ===========================
+# ============================================================================
+# 🎨 Streamlit CSS 생성기 (Streamlit CSS Generator)
+# ============================================================================
 
-def validate_theme_config() -> Tuple[bool, List[str]]:
-    """테마 설정 검증"""
-    warnings = []
+def generate_streamlit_theme() -> str:
+    """Streamlit 커스텀 CSS 생성"""
     
-    # 필수 레벨 확인
-    required_levels = ['beginner', 'intermediate', 'advanced', 'expert']
-    for level in required_levels:
-        if level not in LEVEL_THEMES:
-            warnings.append(f"레벨 '{level}'의 테마가 정의되지 않았습니다.")
-        if level not in DARK_THEMES:
-            warnings.append(f"레벨 '{level}'의 다크 테마가 정의되지 않았습니다.")
-    
-    # 색상 값 검증
-    for level, theme in LEVEL_THEMES.items():
-        for color_name, color_value in theme['colors'].items():
-            if not color_value.startswith('#') and color_value != 'transparent':
-                warnings.append(f"{level} 테마의 {color_name} 색상값이 올바르지 않습니다: {color_value}")
-    
-    return len(warnings) == 0, warnings
+    return f"""
+    <style>
+        /* 폰트 임포트 */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        
+        /* 전역 스타일 */
+        html, body, [class*="css"] {{
+            font-family: {Typography.FONT_FAMILY_PRIMARY};
+            color: {Colors.TEXT_PRIMARY};
+        }}
+        
+        /* 헤더 스타일 */
+        h1, h2, h3, h4, h5, h6 {{
+            font-family: {Typography.FONT_FAMILY_HEADING};
+            color: {Colors.TEXT_PRIMARY};
+            font-weight: {Typography.WEIGHT_SEMIBOLD};
+        }}
+        
+        /* Streamlit 메인 컨테이너 */
+        .stApp {{
+            background-color: {Colors.BG_SECONDARY};
+        }}
+        
+        /* 사이드바 스타일 */
+        section[data-testid="stSidebar"] {{
+            background-color: {Colors.WHITE};
+            border-right: 1px solid {Colors.GRAY_200};
+        }}
+        
+        /* 버튼 스타일 */
+        .stButton > button {{
+            background-color: {Colors.PRIMARY};
+            color: {Colors.WHITE};
+            border: none;
+            padding: {ComponentStyles.BUTTON_STYLES['primary']['padding']};
+            border-radius: {ComponentStyles.BUTTON_STYLES['primary']['border_radius']};
+            font-weight: {ComponentStyles.BUTTON_STYLES['primary']['font_weight']};
+            transition: {ComponentStyles.BUTTON_STYLES['primary']['transition']};
+        }}
+        
+        .stButton > button:hover {{
+            background-color: {Colors.PRIMARY_DARK};
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }}
+        
+        /* 입력 필드 스타일 */
+        .stTextInput > div > div > input,
+        .stSelectbox > div > div > div,
+        .stTextArea > div > div > textarea {{
+            background-color: {ComponentStyles.INPUT_STYLES['default']['bg']};
+            border: {ComponentStyles.INPUT_STYLES['default']['border']};
+            border-radius: {ComponentStyles.INPUT_STYLES['default']['border_radius']};
+            padding: {ComponentStyles.INPUT_STYLES['default']['padding']};
+            font-size: {ComponentStyles.INPUT_STYLES['default']['font_size']};
+            transition: all 0.2s ease;
+        }}
+        
+        .stTextInput > div > div > input:focus,
+        .stSelectbox > div > div > div:focus,
+        .stTextArea > div > div > textarea:focus {{
+            border-color: {ComponentStyles.INPUT_STYLES['default']['focus_border']};
+            box-shadow: {ComponentStyles.INPUT_STYLES['default']['focus_shadow']};
+            outline: none;
+        }}
+        
+        /* 메트릭 카드 스타일 */
+        [data-testid="metric-container"] {{
+            background-color: {Colors.WHITE};
+            border: 1px solid {Colors.GRAY_200};
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }}
+        
+        /* Expander 스타일 */
+        .streamlit-expanderHeader {{
+            background-color: {Colors.GRAY_50};
+            border: 1px solid {Colors.GRAY_200};
+            border-radius: 0.5rem;
+            font-weight: {Typography.WEIGHT_MEDIUM};
+        }}
+        
+        /* 탭 스타일 */
+        .stTabs [data-baseweb="tab-list"] {{
+            gap: 2rem;
+            border-bottom: 2px solid {Colors.GRAY_200};
+        }}
+        
+        .stTabs [data-baseweb="tab"] {{
+            height: 3rem;
+            padding: 0 1rem;
+            background-color: transparent;
+            border: none;
+            color: {Colors.TEXT_SECONDARY};
+            font-weight: {Typography.WEIGHT_MEDIUM};
+        }}
+        
+        .stTabs [aria-selected="true"] {{
+            color: {Colors.PRIMARY};
+            border-bottom: 3px solid {Colors.PRIMARY};
+        }}
+        
+        /* 성공/오류 메시지 */
+        .stSuccess {{
+            background-color: {Colors.SUCCESS}20;
+            color: {Colors.SUCCESS};
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border-left: 4px solid {Colors.SUCCESS};
+        }}
+        
+        .stError {{
+            background-color: {Colors.ERROR}20;
+            color: {Colors.ERROR};
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border-left: 4px solid {Colors.ERROR};
+        }}
+        
+        /* 스크롤바 스타일 */
+        {SpecialStyles.SCROLLBAR}
+        
+        /* 애니메이션 */
+        {Animations.LOADING_SPINNER}
+        {Animations.LOADING_PULSE}
+        
+        /* 코드 블록 스타일 */
+        .stCodeBlock {{
+            background-color: {SpecialStyles.CODE_BLOCK['bg']};
+            border-radius: {SpecialStyles.CODE_BLOCK['border_radius']};
+            padding: {SpecialStyles.CODE_BLOCK['padding']};
+        }}
+        
+        /* 커스텀 클래스 */
+        .primary-button {{
+            background-color: {Colors.PRIMARY} !important;
+            color: {Colors.WHITE} !important;
+        }}
+        
+        .secondary-button {{
+            background-color: {Colors.WHITE} !important;
+            color: {Colors.PRIMARY} !important;
+            border: 2px solid {Colors.PRIMARY} !important;
+        }}
+        
+        .danger-button {{
+            background-color: {Colors.ERROR} !important;
+            color: {Colors.WHITE} !important;
+        }}
+        
+        .card {{
+            background-color: {ComponentStyles.CARD_STYLES['default']['bg']};
+            border: {ComponentStyles.CARD_STYLES['default']['border']};
+            border-radius: {ComponentStyles.CARD_STYLES['default']['border_radius']};
+            padding: {ComponentStyles.CARD_STYLES['default']['padding']};
+            box-shadow: {ComponentStyles.CARD_STYLES['default']['shadow']};
+            margin-bottom: 1rem;
+        }}
+        
+        .card-elevated {{
+            background-color: {ComponentStyles.CARD_STYLES['elevated']['bg']};
+            border: {ComponentStyles.CARD_STYLES['elevated']['border']};
+            border-radius: {ComponentStyles.CARD_STYLES['elevated']['border_radius']};
+            padding: {ComponentStyles.CARD_STYLES['elevated']['padding']};
+            box-shadow: {ComponentStyles.CARD_STYLES['elevated']['shadow']};
+        }}
+        
+        /* 연구 분야별 색상 클래스 */
+        .field-polymer {{ color: {Colors.FIELD_COLORS['polymer']}; }}
+        .field-inorganic {{ color: {Colors.FIELD_COLORS['inorganic']}; }}
+        .field-nano {{ color: {Colors.FIELD_COLORS['nano']}; }}
+        .field-organic {{ color: {Colors.FIELD_COLORS['organic']}; }}
+        .field-composite {{ color: {Colors.FIELD_COLORS['composite']}; }}
+        .field-bio {{ color: {Colors.FIELD_COLORS['bio']}; }}
+        .field-energy {{ color: {Colors.FIELD_COLORS['energy']}; }}
+        .field-environmental {{ color: {Colors.FIELD_COLORS['environmental']}; }}
+    </style>
+    """
 
-# 설정 검증 실행
-if __name__ != "__main__":
-    success, warnings = validate_theme_config()
-    if warnings:
-        for warning in warnings:
-            print(f"경고: {warning}")
+
+# ============================================================================
+# 🎯 테마 적용 함수 (Theme Application)
+# ============================================================================
+
+def apply_theme():
+    """Streamlit 앱에 테마 적용"""
+    st.markdown(generate_streamlit_theme(), unsafe_allow_html=True)
+
+
+def get_field_color(field: str) -> str:
+    """연구 분야별 색상 반환"""
+    return Colors.FIELD_COLORS.get(field.lower(), Colors.PRIMARY)
+
+
+def get_status_color(status: str) -> str:
+    """상태별 색상 반환"""
+    status_colors = {
+        "success": Colors.SUCCESS,
+        "warning": Colors.WARNING,
+        "error": Colors.ERROR,
+        "info": Colors.INFO,
+        "pending": Colors.WARNING,
+        "completed": Colors.SUCCESS,
+        "failed": Colors.ERROR
+    }
+    return status_colors.get(status.lower(), Colors.GRAY_500)
+
+
+def create_gradient_text(text: str, gradient: str = Colors.GRADIENT_PRIMARY) -> str:
+    """그라디언트 텍스트 생성"""
+    return f"""
+    <span style="
+        background: {gradient};
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: {Typography.WEIGHT_BOLD};
+    ">{text}</span>
+    """
+
+
+def create_badge(text: str, type: str = "default") -> str:
+    """배지 HTML 생성"""
+    style = ComponentStyles.BADGE_STYLES.get(type, ComponentStyles.BADGE_STYLES["default"])
+    
+    return f"""
+    <span style="
+        background-color: {style.get('bg', Colors.GRAY_200)};
+        color: {style.get('color', Colors.GRAY_700)};
+        padding: {style.get('padding', '0.25rem 0.75rem')};
+        border-radius: {style.get('border_radius', '1rem')};
+        font-size: {style.get('font_size', Typography.SIZE_SM)};
+        font-weight: {Typography.WEIGHT_MEDIUM};
+        display: inline-block;
+    ">{text}</span>
+    """
+
+
+# ============================================================================
+# 📤 Export
+# ============================================================================
+
+__all__ = [
+    'Colors',
+    'Typography', 
+    'ComponentStyles',
+    'Layout',
+    'Icons',
+    'Animations',
+    'SpecialStyles',
+    'apply_theme',
+    'get_field_color',
+    'get_status_color',
+    'create_gradient_text',
+    'create_badge'
+]
