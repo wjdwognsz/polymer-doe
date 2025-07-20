@@ -476,6 +476,29 @@ def render_modern_sidebar():
                 st.rerun()
 
 
+def show_info_message(message: str, message_type: str = 'info'):
+    """정보 메시지 표시"""
+    icons = {
+        'info': 'ℹ️',
+        'success': '✅',
+        'warning': '⚠️',
+        'error': '❌'
+    }
+    
+    colors = {
+        'info': COLORS['info'],
+        'success': COLORS['success'],
+        'warning': COLORS['warning'],
+        'error': COLORS['danger']
+    }
+    
+    st.markdown(f"""
+    <div class="info-box" style="border-left: 4px solid {colors.get(message_type, colors['info'])};">
+        <strong>{icons.get(message_type, icons['info'])} {message}</strong>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def create_metric_card(title: str, value: str, delta: Optional[str] = None, 
                       delta_type: str = "positive", chart_data: Optional[pd.DataFrame] = None):
     """모던 메트릭 카드 생성"""
