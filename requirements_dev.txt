@@ -1,203 +1,261 @@
 # =================================
-# 📦 requirements_dev.txt
+# 🧪 requirements_dev.txt
 # =================================
 # Universal DOE Platform - Development Dependencies
+# Version: 2.0.0
+# Python: 3.8+
+# Last Updated: 2024-12
+#
+# 용도: 개발 환경 전용 도구 및 패키지
 # 
 # 설치 방법:
 #   pip install -r requirements_dev.txt
 #
+# 선택적 설치:
+#   pip install -r requirements_dev.txt --no-deps black flake8 pytest
+#
 # 주의사항:
 #   - 개발 환경 전용 (운영 환경에서 사용 금지)
-#   - Python 3.8+ 필요
-#   - 일부 도구는 OS별 추가 설정 필요
+#   - 일부 도구는 시스템 패키지 필요
+#   - CI/CD에서는 필요한 도구만 선택적 설치
 #
 # =================================
 
 # ==========================================
-# 🔧 기본 런타임 패키지 포함
+# 🔧 Base Runtime Dependencies
 # ==========================================
 -r requirements.txt
 
 # ==========================================
-# 🎨 코드 품질 및 포매팅
+# 🎨 Code Quality & Formatting
 # ==========================================
-# Black - 코드 포매터 (Python 3.8+ 지원)
-black==24.10.0
+# 코드 포매터
+black==24.10.0                     # Python 코드 자동 포매팅
+isort==5.13.2                      # import 문 정렬
+autopep8==2.3.1                    # PEP8 자동 수정 (대안)
 
-# Flake8 - 린터
-flake8==7.1.1
-flake8-docstrings==1.7.0
-flake8-import-order==0.18.2
-flake8-annotations==3.1.1
-flake8-bugbear==24.10.31
+# 린터
+flake8==7.1.1                      # 기본 Python 린터
+flake8-docstrings==1.7.0           # Docstring 스타일 검사
+flake8-import-order==0.18.2        # Import 순서 검사
+flake8-annotations==3.1.1          # 타입 어노테이션 검사
+flake8-bugbear==24.10.31           # 추가 버그 패턴 검사
+flake8-comprehensions==3.15.0      # List comprehension 최적화
+flake8-simplify==0.21.0            # 코드 단순화 제안
+flake8-pytest-style==2.0.0         # pytest 스타일 가이드
 
-# isort - import 정렬
-isort==5.13.2
+# 타입 체커
+mypy==1.13.0                       # 정적 타입 검사
+types-requests==2.32.0.20241016    # requests 타입 스텁
+types-PyYAML==6.0.12.20240917      # PyYAML 타입 스텁
+types-python-dateutil==2.9.0.20241003  # dateutil 타입 스텁
+types-setuptools==75.5.0.20241122  # setuptools 타입 스텁
 
-# mypy - 타입 체커
-mypy==1.13.0
-types-requests==2.32.0.20241016
-types-python-dateutil==2.9.0.20241003
-
-# pylint - 고급 린터 (선택적)
-pylint==3.3.1
+# 고급 린터
+pylint==3.3.1                      # 종합적인 코드 분석
+bandit==1.7.10                     # 보안 취약점 검사
+safety==3.2.8                      # 의존성 보안 검사
+vulture==2.13                      # 사용하지 않는 코드 탐지
 
 # ==========================================
-# 🧪 테스팅 프레임워크
+# 🧪 Testing Framework
 # ==========================================
-# pytest 및 확장
-pytest==8.3.3
-pytest-cov==6.0.0           # 커버리지 측정
-pytest-asyncio==0.24.0      # 비동기 테스트
-pytest-mock==3.14.0         # Mock 지원
-pytest-timeout==2.3.1       # 타임아웃 설정
-pytest-xdist==3.6.1        # 병렬 실행
-pytest-benchmark==5.0.0     # 성능 벤치마크
+# pytest 코어
+pytest==8.3.3                      # 테스트 프레임워크
+pytest-cov==6.0.0                  # 코드 커버리지
+pytest-asyncio==0.24.0             # 비동기 코드 테스트
+pytest-mock==3.14.0                # Mock 객체 지원
+pytest-timeout==2.3.1              # 테스트 타임아웃
+pytest-xdist==3.6.1                # 병렬 테스트 실행
+pytest-benchmark==5.0.0            # 성능 벤치마크
+pytest-env==1.1.5                  # 환경 변수 설정
+pytest-html==4.1.1                 # HTML 리포트 생성
+pytest-sugar==1.0.0                # 더 나은 출력 포맷
 
 # 테스트 데이터 생성
-faker==30.8.1
-factory-boy==3.3.1
-hypothesis==6.118.0         # 속성 기반 테스팅
+faker==30.8.1                      # 가짜 데이터 생성
+factory-boy==3.3.1                 # 테스트 픽스처 팩토리
+hypothesis==6.118.0                # 속성 기반 테스팅
+mimesis==18.0.0                    # 고성능 가짜 데이터
+
+# 테스트 유틸리티
+responses==0.25.3                  # HTTP 응답 모킹
+freezegun==1.5.1                   # 시간 고정
+pytest-freezegun==0.4.2            # pytest 통합
 
 # ==========================================
-# 🐛 디버깅 및 개발 도구
+# 🐛 Debugging & Development Tools
 # ==========================================
-# IPython 및 디버거
-ipython==8.29.0
-ipdb==0.13.13
+# 대화형 셸
+ipython==8.29.0                    # 향상된 Python 셸
+ipdb==0.13.13                      # IPython 기반 디버거
+pdbpp==0.10.3                      # pdb 개선 버전
 
-# Jupyter 노트북 (실험/프로토타이핑)
-jupyter==1.1.1
-notebook==7.3.1
-jupyterlab==4.3.0
+# Jupyter 생태계
+jupyter==1.1.1                     # Jupyter 메타패키지
+notebook==7.3.1                    # Jupyter 노트북
+jupyterlab==4.3.0                  # JupyterLab
+nbconvert==7.16.4                  # 노트북 변환
+nbformat==5.10.4                   # 노트북 포맷
 
-# 개발 서버 모니터링
-watchdog==6.0.0             # 파일 변경 감지
-
-# 성능 프로파일링
-memory-profiler==0.61.0
-line-profiler==4.1.3
-py-spy==0.3.14             # 샘플링 프로파일러
-
-# ==========================================
-# 📚 문서화 도구
-# ==========================================
-# Sphinx - API 문서
-sphinx==8.1.3
-sphinx-rtd-theme==3.0.2
-sphinx-autodoc-typehints==2.5.0
-sphinxcontrib-napoleon==0.7
-
-# MkDocs - 사용자 가이드
-mkdocs==1.6.1
-mkdocs-material==9.5.44
-mkdocs-mermaid2-plugin==1.1.1
-
-# 다이어그램 생성
-pydocstyle==6.3.0
-doc8==1.1.2                # reStructuredText 린터
+# 개발 편의 도구
+watchdog==6.0.0                    # 파일 변경 감시
+python-dotenv==1.0.1               # .env 파일 로더
+environs==11.2.1                   # 환경 변수 관리
+pyreadline3==3.5.4                 # Windows readline 지원
 
 # ==========================================
-# 🔄 개발 워크플로우
+# 📊 Performance Profiling
 # ==========================================
-# Pre-commit hooks
-pre-commit==4.0.1
+# 프로파일러
+memory-profiler==0.61.0            # 메모리 사용 분석
+line-profiler==4.1.3               # 라인별 성능 분석
+py-spy==0.3.14                     # 샘플링 프로파일러
+scalene==1.5.48                    # 고성능 프로파일러
 
-# 환경 관리
-python-dotenv==1.0.1
-environs==11.2.1
+# 성능 분석 도구
+snakeviz==2.2.0                    # 프로파일 결과 시각화
+pyinstrument==5.0.0                # 통계적 프로파일러
+guppy3==3.1.4.post1                # 메모리 힙 분석
+
+# ==========================================
+# 📚 Documentation Tools
+# ==========================================
+# Sphinx 문서화
+sphinx==8.1.3                      # 문서 생성 엔진
+sphinx-rtd-theme==3.0.2            # Read the Docs 테마
+sphinx-autodoc-typehints==2.5.0    # 타입 힌트 문서화
+sphinxcontrib-napoleon==0.7        # Google/NumPy 스타일 지원
+sphinx-copybutton==0.5.2           # 코드 복사 버튼
+myst-parser==4.0.0                 # Markdown 지원
+
+# MkDocs 문서화
+mkdocs==1.6.1                      # 마크다운 문서 생성
+mkdocs-material==9.5.44            # Material 테마
+mkdocs-mermaid2-plugin==1.1.1      # Mermaid 다이어그램
+mkdocs-git-revision-date-localized-plugin==1.3.0  # 수정 날짜
+
+# 문서 검사
+pydocstyle==6.3.0                  # Docstring 스타일 검사
+doc8==1.1.2                        # reStructuredText 린터
+
+# ==========================================
+# 🔄 Development Workflow
+# ==========================================
+# Git 훅
+pre-commit==4.0.1                  # Git pre-commit 훅 관리
 
 # 의존성 관리
-pip-tools==7.4.1
-pipdeptree==2.23.4
-pip-audit==2.7.3           # 보안 취약점 검사
+pip-tools==7.4.1                   # requirements 파일 관리
+pipdeptree==2.23.4                 # 의존성 트리 시각화
+pip-audit==2.7.3                   # 보안 취약점 검사
+pip-autoremove==0.10.0             # 불필요한 패키지 제거
+
+# 버전 관리
+bump2version==1.0.1                # 버전 번호 자동 증가
+commitizen==3.30.0                 # 커밋 메시지 표준화
 
 # ==========================================
-# 🖥️ 데스크톱 앱 개발 도구
+# 🖥️ Desktop App Development
 # ==========================================
-# PyQt/Tkinter 디버거 (선택적)
-# pyqt5-tools==5.15.10.2.3  # PyQt 사용 시
-# PAGE==8.0                  # Tkinter GUI 빌더
+# GUI 개발 도구
+# pyqt5-tools==5.15.10.2.3         # PyQt5 디자이너 (선택적)
+# tkinter-page==8.0.2              # Tkinter GUI 빌더 (선택적)
 
 # 리소스 모니터링
-psutil==6.1.0
-GPUtil==1.4.0              # GPU 모니터링
+psutil==6.1.0                      # 시스템 리소스 모니터링
+GPUtil==1.4.0                      # GPU 사용량 모니터링
+py-cpuinfo==9.0.0                  # CPU 정보 조회
 
 # ==========================================
-# 🔍 정적 분석 도구
+# 📊 Data Analysis Development
 # ==========================================
-# 보안 검사
-bandit==1.7.10
-safety==3.2.8
+# EDA 도구
+pandas-profiling==3.6.6            # 자동 데이터 프로파일링
+sweetviz==2.3.1                    # EDA 시각화
+dtale==3.15.0                      # 대화형 데이터 탐색
+missingno==0.5.2                   # 결측치 시각화
 
-# 코드 복잡도 분석
-radon==6.0.1
-xenon==0.9.3
-
-# 코드 중복 검사
-pylint-django==2.5.5       # Django 사용 시
-vulture==2.13              # 사용하지 않는 코드 찾기
+# 노트북 확장
+jupyter-contrib-nbextensions==0.7.0 # Jupyter 확장
+jupyterlab-code-formatter==3.0.2   # 코드 포매터
+jupyterlab-git==0.50.2             # Git 통합
 
 # ==========================================
-# 🚀 빌드 및 배포 도구 (개발용)
+# 🔍 Code Analysis
 # ==========================================
-# 패키징 테스트
-wheel==0.44.0
-setuptools==75.3.0
-twine==5.1.1               # PyPI 업로드
+# 코드 복잡도
+radon==6.0.1                       # 코드 복잡도 분석
+xenon==0.9.3                       # 복잡도 임계값 검사
+mccabe==0.7.0                      # McCabe 복잡도
+
+# 코드 품질
+prospector==1.13.2                 # 종합 코드 분석
+pyroma==4.2                        # 패키지 품질 검사
+check-manifest==0.50               # MANIFEST.in 검사
+
+# ==========================================
+# 🚀 Build & Deploy Testing
+# ==========================================
+# 빌드 테스트
+wheel==0.44.0                      # Wheel 패키지 생성
+setuptools==75.5.0                 # 패키지 설정
+twine==5.1.1                       # PyPI 업로드 (테스트용)
 
 # 실행파일 빌드 테스트
-pyinstaller==6.11.0        # 개발 중 테스트용
-auto-py-to-exe==2.45.1     # GUI 빌드 도구
+pyinstaller==6.11.1                # 실행파일 생성 테스트
+auto-py-to-exe==2.45.1             # GUI 빌드 도우미
 
 # ==========================================
-# 📊 데이터 분석 개발 도구
-# ==========================================
-# 대화형 데이터 탐색
-pandas-profiling==3.6.6    # 자동 EDA
-sweetviz==2.3.1           # EDA 시각화
-dtale==3.15.0             # 대화형 데이터 뷰어
-
-# ==========================================
-# 🎯 선택적 도구 (필요 시 주석 해제)
+# 🎯 Optional Tools (uncomment as needed)
 # ==========================================
 # API 개발/테스트
-# httpie==3.2.3            # HTTP 클라이언트
-# locust==2.32.3           # 부하 테스트
-# responses==0.25.3        # HTTP mock
+# httpie==3.2.3                    # CLI HTTP 클라이언트
+# locust==2.32.3                   # 부하 테스트
+# tavern==2.11.0                   # API 테스트 프레임워크
 
 # 데이터베이스 도구
-# sqlalchemy-utils==0.41.2
-# alembic==1.14.0          # DB 마이그레이션
-
-# 비동기 개발
-# aiofiles==24.1.0
-# aiohttp-devtools==1.1.0
+# sqlalchemy-utils==0.41.2         # SQLAlchemy 유틸리티
+# alembic==1.14.0                  # DB 마이그레이션
+# sqlite-utils==3.37               # SQLite 유틸리티
 
 # 머신러닝 실험
-# mlflow==2.17.1           # ML 실험 추적
-# tensorboard==2.18.0      # 시각화
+# mlflow==2.17.1                   # ML 실험 추적
+# tensorboard==2.18.0              # 텐서플로우 시각화
+# wandb==0.18.7                    # Weights & Biases
+
+# 웹 스크래핑 (문헌 검색용)
+# scrapy==2.12.0                   # 웹 크롤링 프레임워크
+# beautifulsoup4==4.12.3           # HTML 파싱
+# selenium==4.27.1                 # 브라우저 자동화
 
 # ==========================================
-# 📝 추가 설정 파일들
+# 📝 Configuration Files
 # ==========================================
-# .flake8 - Flake8 설정
-# pyproject.toml - Black, isort, mypy 설정
-# .pre-commit-config.yaml - Pre-commit hooks
-# pytest.ini - pytest 설정
-# .coveragerc - Coverage 설정
+# 다음 설정 파일들과 함께 사용:
+# - .flake8                        # Flake8 설정
+# - pyproject.toml                 # Black, isort, mypy 설정
+# - .pre-commit-config.yaml        # Pre-commit 훅 설정
+# - pytest.ini / .pytest.ini       # pytest 설정
+# - .coveragerc                    # Coverage 설정
+# - .pylintrc                      # Pylint 설정
 
 # ==========================================
-# ⚠️ 주의사항
+# ⚠️ Important Notes
 # ==========================================
 # 1. 개발 환경에서만 사용
-# 2. CI/CD에서는 필요한 도구만 선택적 설치
-# 3. 일부 도구는 시스템 패키지 필요:
+# 2. CI/CD에서는 필요한 도구만 선택적 설치:
+#    pip install black flake8 pytest pytest-cov
+#
+# 3. 시스템 의존성:
 #    - Ubuntu: apt install graphviz
 #    - macOS: brew install graphviz
 #    - Windows: choco install graphviz
 #
-# 4. GPU 관련 도구는 CUDA 설치 필요
-# 5. 메모리 프로파일러는 추가 설정 필요
+# 4. pre-commit 설정:
+#    pre-commit install
+#    pre-commit run --all-files
 #
-# ==========================================
+# 5. 테스트 실행:
+#    pytest tests/ -v --cov=. --cov-report=html
+# =================================
