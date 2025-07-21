@@ -1,75 +1,141 @@
 # =================================
-# Universal DOE Platform - Python 3.11 Optimized
+# 🧬 Universal DOE Platform - Requirements
 # =================================
-# Python 3.11에 최적화된 안정적인 버전
+# Python 3.11+ 최적화 | 데스크톱 앱 호환
+# 설치: pip3 install -r requirements.txt
+# =================================
 
-# ===== 핵심 프레임워크 =====
+# ===== 🌐 핵심 웹 프레임워크 =====
 streamlit==1.32.2
 streamlit-option-menu==0.3.12
 streamlit-extras==0.4.0
 
-# ===== 데이터 처리 & 시각화 =====
+# ===== 📊 데이터 처리 & 과학 계산 =====
 pandas==2.2.1
 numpy==1.26.4
+scipy==1.12.0
+scikit-learn==1.4.1
+pyDOE3==1.0.2                        # 실험 설계 라이브러리
+
+# ===== 📈 시각화 =====
 plotly==5.19.0
 matplotlib==3.8.3
 seaborn==0.13.2
-scipy==1.12.0
+altair==5.2.0                      # 선택: 추가 시각화
 
-# ===== AI/ML 엔진 =====
-google-generativeai==0.4.1
-openai==1.14.0                      # Groq, DeepSeek 호환
-# anthropic==0.21.0                 # Claude (선택)
-# huggingface-hub==0.21.4          # HuggingFace (선택)
+# ===== 🤖 AI/ML 엔진 =====
+google-generativeai==0.4.1           # Google Gemini (필수)
+openai==1.14.0                       # Groq, DeepSeek, xAI 호환
+anthropic==0.21.0                  # Claude (선택)
+huggingface-hub==0.21.4            # HuggingFace (선택)
 
-# ===== Google 서비스 =====
-gspread==6.0.2
+# ===== 🔐 인증 & 보안 =====
+python-jose[cryptography]==3.3.0     # JWT 토큰
+passlib[bcrypt]==1.7.4              # 비밀번호 암호화
+cryptography==42.0.5                # 일반 암호화
+python-multipart==0.0.9             # 폼 데이터
+
+# ===== 📁 로컬 데이터베이스 =====
+# SQLite는 Python 내장 - 별도 설치 불필요
+sqlalchemy==2.0.28                  # ORM (선택)
+alembic==1.13.1                     # DB 마이그레이션 (선택)
+
+# ===== 🌍 Google 서비스 (선택적) =====
+gspread==6.0.2                      # Google Sheets
 google-auth==2.28.1
 google-auth-oauthlib==1.2.0
 google-api-python-client==2.119.0
 
-# ===== 인증 & 보안 =====
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-cryptography==42.0.5
-python-multipart==0.0.9
+# ===== 📑 파일 처리 =====
+openpyxl==3.1.2                     # Excel 읽기/쓰기
+xlsxwriter==3.2.0                   # Excel 생성
+python-docx==1.1.0                  # Word 문서
+PyPDF2==3.0.1                       # PDF 처리
+Pillow==10.2.0                      # 이미지 처리
 
-# ===== 실험 설계 & 통계 =====
-pyDOE3==1.0.1
-scikit-learn==1.4.0
-statsmodels==0.14.1
+# ===== 🔧 유틸리티 =====
+python-dotenv==1.0.1                # 환경변수
+requests==2.31.0                    # HTTP 요청
+httpx==0.27.0                       # 비동기 HTTP
+pydantic==2.6.3                     # 데이터 검증
+python-dateutil==2.9.0              # 날짜 처리
+pytz==2024.1                        # 시간대
+tenacity==8.2.3                     # 재시도 로직
+loguru==0.7.2                       # 향상된 로깅
 
-# ===== 파일 처리 =====
-openpyxl==3.1.2
-xlsxwriter==3.2.0
-Pillow==10.2.0                      # Python 3.11과 완벽 호환
+# ===== 📊 통계 분석 =====
+statsmodels==0.14.1                 # 고급 통계
+pingouin==0.5.4                     # 통계 테스트
 
-# ===== 유틸리티 =====
-python-dotenv==1.0.1
-requests==2.31.0
-httpx==0.27.0
-pydantic==2.6.3
-python-dateutil==2.9.0
-pytz==2024.1
-tqdm==4.66.2
-tenacity==8.2.3
-loguru==0.7.2
+# ===== 🚀 성능 & 진행률 =====
+tqdm==4.66.2                        # 진행률 표시
+joblib==1.3.2                       # 병렬 처리
+numba==0.59.0                     # JIT 컴파일 (선택)
 
-# ===== 추가 기능 (선택) =====
-# transformers==4.38.2              # 대용량 - 필요시 주석 해제
-# torch==2.2.1                      # 대용량 - 필요시 주석 해제
-# altair==5.2.0
-# watchdog==4.0.0
-# schedule==1.2.0
-# jinja2==3.1.3
-# markdown==3.5.2
-# pyyaml==6.0.1
-# toml==0.10.2
+# ===== 📦 데스크톱 앱 빌드 (개발용) =====
+pyinstaller==6.4.0                # 실행파일 생성
+auto-py-to-exe==2.42.0            # GUI 빌더
+
+# ===== 🧪 화학/재료 특화 (선택) =====
+rdkit==2023.9.5                   # 화학 정보학 (대용량)
+mendeleev==0.15.0                 # 주기율표
+chempy==0.8.3                     # 화학 계산
+pymatgen==2024.2.20               # 재료 과학 (대용량)
+
+# ===== 🤖 대용량 AI 모델 (선택) =====
+transformers==4.38.2              # HuggingFace 모델 (대용량)
+torch==2.2.1                      # PyTorch (매우 대용량)
+tensorflow==2.15.0                # TensorFlow (매우 대용량)
+
+# ===== 🛠️ 개발 도구 (선택) =====
+# pytest==8.0.2                     # 테스트
+# black==24.2.0                     # 코드 포맷터
+# flake8==7.0.0                     # 린터
+# mypy==1.8.0                       # 타입 체크
+# jupyter==1.0.0                    # 노트북
+# ipykernel==6.29.2                 # Jupyter 커널
+
+# ===== 📝 추가 유틸리티 (선택) =====
+watchdog==4.0.0                   # 파일 모니터링
+schedule==1.2.0                   # 작업 스케줄링
+jinja2==3.1.3                     # 템플릿 엔진
+markdown==3.5.2                   # 마크다운 처리
+pyyaml==6.0.1                     # YAML 파일
+toml==0.10.2                      # TOML 파일
+beautifulsoup4==4.12.3            # HTML 파싱
+lxml==5.1.0                       # XML 처리
 
 # =================================
-# Python 3.11 장점:
-# - 모든 패키지 바이너리 휠 제공
-# - 빠른 설치 (2-3분)
-# - 검증된 안정성
-# - 최고의 호환성
+# 📌 설치 가이드
+# =================================
+# 1. 기본 설치 (필수 기능만):
+#    pip3 install -r requirements.txt
+#
+# 2. 전체 설치 (주석 포함):
+#    - requirements.txt에서 필요한 # 제거 후
+#    pip3 install -r requirements.txt
+#
+# 3. 개발 환경:
+#    pip3 install -r requirements.txt
+#    pip3 install pytest black flake8 mypy
+#
+# 4. 데스크톱 앱 빌드:
+#    pip3 install pyinstaller
+#
+# =================================
+# ⚡ Python 3.11 최적화
+# =================================
+# - 모든 패키지가 Python 3.11 바이너리 휠 제공
+# - 설치 시간: 약 2-3분 (기본 패키지)
+# - 메모리 사용량 최적화
+# - PyInstaller 완벽 호환
+#
+# =================================
+# 🔄 업데이트 정책
+# =================================
+# - 보안 패치: 즉시 적용
+# - 마이너 업데이트: 월 1회 검토
+# - 메이저 업데이트: 분기별 테스트
+#
+# Last Updated: 2024-12-27
 # =================================
