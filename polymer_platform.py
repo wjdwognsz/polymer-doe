@@ -525,16 +525,21 @@ class UniversalDOEApp:
         
         # 현재 페이지에 따른 메뉴 항목 필터링
         menu_items = []
-        for page_key, page_info in PAGES.items():
-            # 인증 필요 여부 확인
-            if page_info.get('requires_auth', False) and not st.session_state.authenticated:
-                continue
-                
-            # 게스트 모드에서는 일부 기능만
-            if st.session_state.guest_mode and page_key not in ['auth', 'dashboard', 'literature_search']:
-                continue
-                
-            menu_items.append(page_key)
+        
+        # 인증되지 않은 경우 로그인 페이지만
+        if not st.session_state.authenticated and not st.session_state.guest_mode:
+            menu_items = ['auth']
+        else:
+            # 인증된 경우 모든 메뉴
+            for page_key, page_info in PAGES.items():
+                if page_key == 'auth':
+                    continue  # 로그인된 상태에서는 auth 페이지 숨김
+                    
+                # 게스트 모드에서는 일부 기능만
+                if st.session_state.guest_mode and page_key not in ['dashboard', 'literature_search', 'visualization']:
+                    continue
+                    
+                menu_items.append(page_key)
             
         # 메뉴 렌더링
         for page_key in menu_items:
