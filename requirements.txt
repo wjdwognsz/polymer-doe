@@ -1,103 +1,44 @@
 # =================================
-# Universal DOE Platform Dependencies
+# Universal DOE Platform - Smart Grouping
 # =================================
-# Python 3.13 완전 호환 버전
+# 관련 기능끼리 묶어서 관리
 
-# Core Framework
+# ===== GROUP 1: 핵심 (항상 필요) =====
 streamlit==1.32.2
-streamlit-extras==0.4.0
 streamlit-option-menu==0.3.12
-streamlit-pills==0.3.0
-streamlit-tags==1.2.8
-streamlit-elements==0.1.0
-
-# AI/ML Engines
-google-generativeai==0.4.1          # Google Gemini
-openai==1.14.0                      # For Groq, DeepSeek, SambaNova (OpenAI compatible)
-huggingface-hub==0.21.4             # HuggingFace models
-transformers==4.38.2                # HuggingFace transformers
-# torch>=2.5.0                      # 필요시 사용 (Python 3.13 호환)
-anthropic==0.21.0                   # Optional: if adding Claude
-
-# Data Processing & Science
-pandas>=2.2.0                       # 최신 버전 자동 선택
-numpy>=1.26.0                       # 최신 버전 자동 선택
-scipy>=1.12.0                       # 최신 버전 자동 선택
-scikit-learn>=1.4.0                 # 최신 버전 자동 선택
-pyDOE3==1.0.1                       # Design of Experiments
-statsmodels>=0.14.0                 # Statistical analysis
-
-# Visualization
+pandas
+numpy
 plotly==5.19.0
-matplotlib>=3.8.0                   # 호환 버전 자동 선택
-seaborn==0.13.2
-altair==5.2.0
-# bokeh==3.3.4                      # 선택적 - 크기가 큼
-
-# Google Services Integration
-google-auth==2.28.1
-google-auth-oauthlib==1.2.0
-google-api-python-client==2.119.0
-gspread==6.0.2                      # Simplified Google Sheets
-
-# File Handling
-openpyxl==3.1.2                     # Excel files
-xlsxwriter==3.2.0                   # Excel writing
-# python-docx==1.1.0                # Word documents - 선택적
-# reportlab==4.1.0                  # PDF generation - 선택적
-# PyPDF2==3.0.1                     # PDF manipulation - 선택적
-
-# Authentication & Security
-python-jose[cryptography]==3.3.0    # JWT tokens
-passlib[bcrypt]==1.7.4              # Password hashing
-cryptography==42.0.5                # Encryption
-python-multipart==0.0.9             # Form data
-
-# API & Networking
+python-dotenv==1.0.1
 requests==2.31.0
-httpx==0.27.0                       # Async HTTP
-# aiohttp==3.9.3                    # Async HTTP client - 선택적
-# websockets==12.0                  # WebSocket support - 선택적
-# python-socketio==5.11.1           # Socket.IO for real-time - 선택적
 
-# Environment & Configuration
-python-dotenv==1.0.1                # Environment variables
-pydantic==2.6.3                     # Data validation
-pydantic-settings==2.2.1            # Settings management
+# ===== GROUP 2: AI 기능 (주석 해제하여 활성화) =====
+google-generativeai==0.4.1
+# openai==1.14.0              # Groq, DeepSeek용
+# anthropic==0.21.0           # Claude용
+# huggingface-hub==0.21.4     # HuggingFace 모델용
 
-# Utilities
-# asyncio-mqtt==0.16.2              # MQTT for IoT integration - 선택적
-schedule==1.2.0                     # Task scheduling
-pytz==2024.1                        # Timezone handling
-python-dateutil==2.9.0              # Date utilities
-tqdm==4.66.2                        # Progress bars
+# ===== GROUP 3: 인증/보안 (로그인 필요시) =====
+# gspread==6.0.2
+# google-auth==2.28.1
+# python-jose[cryptography]==3.3.0
+# passlib[bcrypt]==1.7.4
 
-# Scientific Computing
-sympy==1.12                         # Symbolic mathematics
-# uncertainties==3.1.7              # Error propagation - 선택적
-# pint==0.23                        # Unit handling - 선택적
+# ===== GROUP 4: 데이터 과학 (분석 기능) =====
+# scipy>=1.12.0
+# scikit-learn>=1.4.0
+# matplotlib>=3.8.0
+# seaborn==0.13.2
+# statsmodels>=0.14.0
 
-# Additional Utilities
-Pillow>=10.3.0                      # Image processing - Python 3.13 호환 버전
-watchdog==4.0.0                     # File system monitoring
-tenacity==8.2.3                     # Retry logic
-cachetools==5.3.3                   # Caching utilities
-
-# Logging & Monitoring
-loguru==0.7.2                       # Enhanced logging
-
-# Data Export Formats
-jinja2==3.1.3                       # Template engine
-markdown==3.5.2                     # Markdown processing
-# html2text==2020.1.16              # HTML to text - 선택적
-toml==0.10.2                        # TOML config files
-pyyaml==6.0.1                       # YAML files
+# ===== GROUP 5: 파일 처리 =====
+# openpyxl==3.1.2            # Excel 읽기/쓰기
+# python-docx==1.1.0         # Word 문서
+# Pillow>=10.3.0             # 이미지 처리
 
 # =================================
-# Notes:
-# =================================
-# - Python 3.13 호환성을 위해 Pillow 버전을 >=10.3.0으로 변경
-# - Pillow 10.3.0 이상은 Python 3.13을 지원합니다
-# - 다른 패키지들도 >= 사용으로 호환 버전 자동 선택
-# - 선택적 패키지는 주석 처리하여 설치 시간 단축
+# 사용법:
+# 1. 필요한 그룹의 # 제거
+# 2. GitHub에 커밋/푸시
+# 3. Streamlit Cloud 자동 재배포
 # =================================
