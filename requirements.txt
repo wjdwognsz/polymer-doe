@@ -1,44 +1,75 @@
 # =================================
-# Universal DOE Platform - Smart Grouping
+# Universal DOE Platform - Python 3.11 Optimized
 # =================================
-# 관련 기능끼리 묶어서 관리
+# Python 3.11에 최적화된 안정적인 버전
 
-# ===== GROUP 1: 핵심 (항상 필요) =====
+# ===== 핵심 프레임워크 =====
 streamlit==1.32.2
 streamlit-option-menu==0.3.12
-pandas
-numpy
+streamlit-extras==0.4.0
+
+# ===== 데이터 처리 & 시각화 =====
+pandas==2.2.1
+numpy==1.26.4
 plotly==5.19.0
+matplotlib==3.8.3
+seaborn==0.13.2
+scipy==1.12.0
+
+# ===== AI/ML 엔진 =====
+google-generativeai==0.4.1
+openai==1.14.0                      # Groq, DeepSeek 호환
+# anthropic==0.21.0                 # Claude (선택)
+# huggingface-hub==0.21.4          # HuggingFace (선택)
+
+# ===== Google 서비스 =====
+gspread==6.0.2
+google-auth==2.28.1
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.119.0
+
+# ===== 인증 & 보안 =====
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+cryptography==42.0.5
+python-multipart==0.0.9
+
+# ===== 실험 설계 & 통계 =====
+pyDOE3==1.0.1
+scikit-learn==1.4.1
+statsmodels==0.14.1
+
+# ===== 파일 처리 =====
+openpyxl==3.1.2
+xlsxwriter==3.2.0
+Pillow==10.2.0                      # Python 3.11과 완벽 호환
+
+# ===== 유틸리티 =====
 python-dotenv==1.0.1
 requests==2.31.0
+httpx==0.27.0
+pydantic==2.6.3
+python-dateutil==2.9.0
+pytz==2024.1
+tqdm==4.66.2
+tenacity==8.2.3
+loguru==0.7.2
 
-# ===== GROUP 2: AI 기능 (주석 해제하여 활성화) =====
-google-generativeai==0.4.1
-# openai==1.14.0              # Groq, DeepSeek용
-# anthropic==0.21.0           # Claude용
-# huggingface-hub==0.21.4     # HuggingFace 모델용
-
-# ===== GROUP 3: 인증/보안 (로그인 필요시) =====
-# gspread==6.0.2
-# google-auth==2.28.1
-# python-jose[cryptography]==3.3.0
-# passlib[bcrypt]==1.7.4
-
-# ===== GROUP 4: 데이터 과학 (분석 기능) =====
-# scipy>=1.12.0
-# scikit-learn>=1.4.0
-# matplotlib>=3.8.0
-# seaborn==0.13.2
-# statsmodels>=0.14.0
-
-# ===== GROUP 5: 파일 처리 =====
-# openpyxl==3.1.2            # Excel 읽기/쓰기
-# python-docx==1.1.0         # Word 문서
-# Pillow>=10.3.0             # 이미지 처리
+# ===== 추가 기능 (선택) =====
+# transformers==4.38.2              # 대용량 - 필요시 주석 해제
+# torch==2.2.1                      # 대용량 - 필요시 주석 해제
+# altair==5.2.0
+# watchdog==4.0.0
+# schedule==1.2.0
+# jinja2==3.1.3
+# markdown==3.5.2
+# pyyaml==6.0.1
+# toml==0.10.2
 
 # =================================
-# 사용법:
-# 1. 필요한 그룹의 # 제거
-# 2. GitHub에 커밋/푸시
-# 3. Streamlit Cloud 자동 재배포
+# Python 3.11 장점:
+# - 모든 패키지 바이너리 휠 제공
+# - 빠른 설치 (2-3분)
+# - 검증된 안정성
+# - 최고의 호환성
 # =================================
