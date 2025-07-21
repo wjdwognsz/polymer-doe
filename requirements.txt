@@ -36,7 +36,7 @@ python-multipart==0.0.9
 
 # ===== 실험 설계 & 통계 =====
 pyDOE3==1.0.1
-scikit-learn==1.4.1
+scikit-learn==1.4.0
 statsmodels==0.14.1
 
 # ===== 파일 처리 =====
