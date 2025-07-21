@@ -210,9 +210,9 @@ pyicu==2.14                        # ICU 바인딩 (선택적)
 # 📊 Scientific Computing (선택적)
 # ==========================================
 # 화학정보학
-# rdkit==2023.9.6                  # 화학 구조 처리 (별도 설치)
-# pubchempy==1.0.4                 # PubChem API
-# chembl-webresource-client==0.10.8 # ChEMBL API
+rdkit==2023.9.6                  # 화학 구조 처리 (별도 설치)
+pubchempy==1.0.4                 # PubChem API
+chembl-webresource-client==0.10.8 # ChEMBL API
 
 # 최적화 알고리즘
 deap==1.4.1                        # 진화 알고리즘
