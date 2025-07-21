@@ -6,25 +6,29 @@ Universal DOE Platform - General Experiment Module
 import streamlit as st
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Tuple, Union, Set
 from dataclasses import dataclass, field
 import json
 from datetime import datetime
 import traceback
 import logging
 from itertools import product
-from scipy.stats import norm
+from scipy import stats
+from scipy.optimize import minimize
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 
 # DOE 관련 라이브러리
 try:
     from pyDOE2 import (
         fullfact, fracfact, pbdesign, ccdesign, bbdesign,
-        lhs, gsd, factorial, ff2n
+        lhs, factorial, ff2n
     )
+    PYDOE2_AVAILABLE = True
 except ImportError:
-    st.error("pyDOE2가 설치되지 않았습니다. pip install pyDOE2를 실행하세요.")
+    PYDOE2_AVAILABLE = False
+    st.warning("pyDOE2가 설치되지 않았습니다. 일부 고급 설계 기능이 제한됩니다.")
 
 # 모듈 기본 클래스 임포트
 import sys
@@ -51,8 +55,11 @@ class DesignMethod:
     max_factors: int
     supports_categorical: bool
     supports_constraints: bool
+    supports_blocks: bool
     complexity: str  # low, medium, high
     use_cases: List[str] = field(default_factory=list)
+    pros: List[str] = field(default_factory=list)
+    cons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -81,6 +88,30 @@ class ResponseTemplate:
     description: str = ""
 
 
+@dataclass
+class DesignQuality:
+    """설계 품질 지표"""
+    d_efficiency: float = 0.0
+    a_efficiency: float = 0.0
+    g_efficiency: float = 0.0
+    condition_number: float = 0.0
+    vif_max: float = 0.0
+    orthogonality: float = 0.0
+    power: Dict[str, float] = field(default_factory=dict)
+    
+    @property
+    def overall_score(self) -> float:
+        """종합 품질 점수 (0-100)"""
+        scores = []
+        if self.d_efficiency > 0:
+            scores.append(self.d_efficiency)
+        if self.orthogonality > 0:
+            scores.append(self.orthogonality * 100)
+        if self.condition_number > 0:
+            scores.append(min(100, 100 / self.condition_number))
+        return np.mean(scores) if scores else 0.0
+
+
 # ==================== 템플릿 정의 ====================
 
 class ExperimentTemplates:
@@ -92,108 +123,104 @@ class ExperimentTemplates:
         return {
             "공정 변수": [
                 FactorTemplate(
-                    name="온도",
-                    category="공정 변수",
+                    name="온도", category="공정 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="°C",
-                    default_min=20,
-                    default_max=200,
+                    default_unit="°C", default_min=20, default_max=200,
                     description="공정 온도"
                 ),
                 FactorTemplate(
-                    name="압력",
-                    category="공정 변수",
+                    name="압력", category="공정 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="bar",
-                    default_min=1,
-                    default_max=10,
+                    default_unit="bar", default_min=1, default_max=10,
                     description="공정 압력"
                 ),
                 FactorTemplate(
-                    name="시간",
-                    category="공정 변수",
+                    name="시간", category="공정 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="min",
-                    default_min=10,
-                    default_max=120,
-                    description="반응 시간"
+                    default_unit="min", default_min=10, default_max=180,
+                    description="반응/처리 시간"
                 ),
                 FactorTemplate(
-                    name="교반 속도",
-                    category="공정 변수",
+                    name="교반속도", category="공정 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="rpm",
-                    default_min=100,
-                    default_max=1000,
-                    description="교반기 회전 속도"
+                    default_unit="rpm", default_min=100, default_max=1000,
+                    description="교반 속도"
                 ),
+                FactorTemplate(
+                    name="유속", category="공정 변수",
+                    default_type=FactorType.CONTINUOUS,
+                    default_unit="mL/min", default_min=0.1, default_max=10,
+                    description="유체 흐름 속도"
+                )
             ],
             "조성 변수": [
                 FactorTemplate(
-                    name="농도",
-                    category="조성 변수",
+                    name="농도", category="조성 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="%",
-                    default_min=0,
-                    default_max=100,
-                    description="물질 농도"
+                    default_unit="M", default_min=0.01, default_max=2.0,
+                    description="용질 농도"
                 ),
                 FactorTemplate(
-                    name="pH",
-                    category="조성 변수",
+                    name="pH", category="조성 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="",
-                    default_min=0,
-                    default_max=14,
-                    description="용액 pH"
+                    default_unit="", default_min=1, default_max=14,
+                    description="수용액 pH"
                 ),
                 FactorTemplate(
-                    name="첨가제 종류",
-                    category="조성 변수",
-                    default_type=FactorType.CATEGORICAL,
-                    default_unit="",
-                    default_levels=["A", "B", "C"],
-                    description="첨가제 종류"
+                    name="함량", category="조성 변수",
+                    default_type=FactorType.CONTINUOUS,
+                    default_unit="wt%", default_min=0, default_max=100,
+                    description="성분 함량"
                 ),
+                FactorTemplate(
+                    name="몰비", category="조성 변수",
+                    default_type=FactorType.CONTINUOUS,
+                    default_unit="", default_min=0.1, default_max=10,
+                    description="반응물 몰비"
+                )
             ],
             "물리적 변수": [
                 FactorTemplate(
-                    name="입자 크기",
-                    category="물리적 변수",
+                    name="입자크기", category="물리적 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="μm",
-                    default_min=0.1,
-                    default_max=1000,
+                    default_unit="μm", default_min=0.1, default_max=1000,
                     description="평균 입자 크기"
                 ),
                 FactorTemplate(
-                    name="두께",
-                    category="물리적 변수",
+                    name="두께", category="물리적 변수",
                     default_type=FactorType.CONTINUOUS,
-                    default_unit="mm",
-                    default_min=0.1,
-                    default_max=10,
-                    description="시료 두께"
+                    default_unit="mm", default_min=0.1, default_max=10,
+                    description="필름/코팅 두께"
                 ),
+                FactorTemplate(
+                    name="표면적", category="물리적 변수",
+                    default_type=FactorType.CONTINUOUS,
+                    default_unit="m²/g", default_min=1, default_max=1000,
+                    description="비표면적"
+                )
             ],
-            "환경 변수": [
+            "범주형 변수": [
                 FactorTemplate(
-                    name="습도",
-                    category="환경 변수",
-                    default_type=FactorType.CONTINUOUS,
-                    default_unit="%RH",
-                    default_min=0,
-                    default_max=100,
-                    description="상대 습도"
+                    name="촉매종류", category="범주형 변수",
+                    default_type=FactorType.CATEGORICAL,
+                    default_unit="", 
+                    default_levels=["Pd/C", "Pt/C", "Ru/C", "None"],
+                    description="촉매 종류"
                 ),
                 FactorTemplate(
-                    name="분위기",
-                    category="환경 변수",
+                    name="용매", category="범주형 변수",
                     default_type=FactorType.CATEGORICAL,
                     default_unit="",
-                    default_levels=["공기", "질소", "아르곤"],
-                    description="반응 분위기"
+                    default_levels=["물", "에탄올", "아세톤", "톨루엔"],
+                    description="반응 용매"
                 ),
+                FactorTemplate(
+                    name="첨가제", category="범주형 변수",
+                    default_type=FactorType.CATEGORICAL,
+                    default_unit="",
+                    default_levels=["A", "B", "C", "없음"],
+                    description="첨가제 종류"
+                )
             ]
         }
     
@@ -201,207 +228,674 @@ class ExperimentTemplates:
     def get_response_templates() -> Dict[str, List[ResponseTemplate]]:
         """반응변수 템플릿 반환"""
         return {
-            "물성": [
+            "수율/효율": [
                 ResponseTemplate(
-                    name="수율",
-                    category="물성",
-                    default_unit="%",
-                    default_goal=ResponseGoal.MAXIMIZE,
+                    name="수율", category="수율/효율",
+                    default_unit="%", default_goal=ResponseGoal.MAXIMIZE,
                     typical_range=(0, 100),
-                    description="반응 수율"
+                    description="반응/공정 수율"
                 ),
                 ResponseTemplate(
-                    name="순도",
-                    category="물성",
-                    default_unit="%",
-                    default_goal=ResponseGoal.MAXIMIZE,
-                    typical_range=(90, 100),
+                    name="순도", category="수율/효율",
+                    default_unit="%", default_goal=ResponseGoal.MAXIMIZE,
+                    typical_range=(0, 100),
                     description="제품 순도"
                 ),
                 ResponseTemplate(
-                    name="강도",
-                    category="물성",
-                    default_unit="MPa",
-                    default_goal=ResponseGoal.MAXIMIZE,
-                    description="기계적 강도"
+                    name="전환율", category="수율/효율",
+                    default_unit="%", default_goal=ResponseGoal.MAXIMIZE,
+                    typical_range=(0, 100),
+                    description="반응물 전환율"
                 ),
                 ResponseTemplate(
-                    name="점도",
-                    category="물성",
-                    default_unit="cP",
-                    default_goal=ResponseGoal.TARGET,
+                    name="선택성", category="수율/효율",
+                    default_unit="%", default_goal=ResponseGoal.MAXIMIZE,
+                    typical_range=(0, 100),
+                    description="목표 생성물 선택성"
+                )
+            ],
+            "물성": [
+                ResponseTemplate(
+                    name="강도", category="물성",
+                    default_unit="MPa", default_goal=ResponseGoal.MAXIMIZE,
+                    description="인장/압축 강도"
+                ),
+                ResponseTemplate(
+                    name="경도", category="물성",
+                    default_unit="HV", default_goal=ResponseGoal.MAXIMIZE,
+                    description="비커스 경도"
+                ),
+                ResponseTemplate(
+                    name="점도", category="물성",
+                    default_unit="cP", default_goal=ResponseGoal.TARGET,
                     description="용액 점도"
                 ),
+                ResponseTemplate(
+                    name="밀도", category="물성",
+                    default_unit="g/cm³", default_goal=ResponseGoal.TARGET,
+                    description="재료 밀도"
+                )
             ],
-            "성능": [
+            "분석값": [
                 ResponseTemplate(
-                    name="효율",
-                    category="성능",
-                    default_unit="%",
-                    default_goal=ResponseGoal.MAXIMIZE,
-                    typical_range=(0, 100),
-                    description="공정 효율"
+                    name="분해능", category="분석값",
+                    default_unit="", default_goal=ResponseGoal.MAXIMIZE,
+                    description="크로마토그래피 분해능"
                 ),
                 ResponseTemplate(
-                    name="선택성",
-                    category="성능",
-                    default_unit="%",
-                    default_goal=ResponseGoal.MAXIMIZE,
-                    typical_range=(0, 100),
-                    description="반응 선택성"
+                    name="감도", category="분석값",
+                    default_unit="S/N", default_goal=ResponseGoal.MAXIMIZE,
+                    description="신호 대 잡음비"
                 ),
+                ResponseTemplate(
+                    name="분석시간", category="분석값",
+                    default_unit="min", default_goal=ResponseGoal.MINIMIZE,
+                    description="총 분석 시간"
+                )
             ],
-            "품질": [
+            "비용/환경": [
                 ResponseTemplate(
-                    name="색상 L*",
-                    category="품질",
-                    default_unit="",
-                    default_goal=ResponseGoal.TARGET,
-                    typical_range=(0, 100),
-                    description="CIE L*a*b* 명도"
-                ),
-                ResponseTemplate(
-                    name="투명도",
-                    category="품질",
-                    default_unit="%",
-                    default_goal=ResponseGoal.MAXIMIZE,
-                    typical_range=(0, 100),
-                    description="광학적 투명도"
-                ),
-            ],
-            "경제성": [
-                ResponseTemplate(
-                    name="비용",
-                    category="경제성",
-                    default_unit="$/kg",
-                    default_goal=ResponseGoal.MINIMIZE,
+                    name="비용", category="비용/환경",
+                    default_unit="$/kg", default_goal=ResponseGoal.MINIMIZE,
                     description="단위 생산 비용"
                 ),
                 ResponseTemplate(
-                    name="처리 시간",
-                    category="경제성",
-                    default_unit="h",
-                    default_goal=ResponseGoal.MINIMIZE,
-                    description="총 처리 시간"
+                    name="에너지소비", category="비용/환경",
+                    default_unit="kWh", default_goal=ResponseGoal.MINIMIZE,
+                    description="에너지 소비량"
                 ),
+                ResponseTemplate(
+                    name="폐기물", category="비용/환경",
+                    default_unit="kg", default_goal=ResponseGoal.MINIMIZE,
+                    description="폐기물 발생량"
+                )
             ]
         }
     
     @staticmethod
-    def get_design_methods() -> List[DesignMethod]:
-        """실험설계법 목록 반환"""
-        return [
-            DesignMethod(
+    def get_experiment_presets() -> Dict[str, Dict[str, Any]]:
+        """실험 프리셋 반환"""
+        return {
+            "화학합성 최적화": {
+                "description": "유기/무기 화학 반응 최적화",
+                "factors": [
+                    {"name": "온도", "type": "continuous", "min": 20, "max": 150, "unit": "°C"},
+                    {"name": "시간", "type": "continuous", "min": 30, "max": 360, "unit": "min"},
+                    {"name": "촉매량", "type": "continuous", "min": 0.1, "max": 5, "unit": "mol%"},
+                    {"name": "용매", "type": "categorical", "levels": ["THF", "톨루엔", "DMF"]}
+                ],
+                "responses": [
+                    {"name": "수율", "unit": "%", "goal": "maximize"},
+                    {"name": "순도", "unit": "%", "goal": "maximize"},
+                    {"name": "비용", "unit": "$/g", "goal": "minimize"}
+                ],
+                "suggested_design": "central_composite"
+            },
+            "재료 물성 최적화": {
+                "description": "재료의 기계적/물리적 특성 최적화",
+                "factors": [
+                    {"name": "조성A", "type": "continuous", "min": 0, "max": 100, "unit": "wt%"},
+                    {"name": "조성B", "type": "continuous", "min": 0, "max": 100, "unit": "wt%"},
+                    {"name": "처리온도", "type": "continuous", "min": 100, "max": 500, "unit": "°C"},
+                    {"name": "처리시간", "type": "continuous", "min": 1, "max": 24, "unit": "h"}
+                ],
+                "responses": [
+                    {"name": "강도", "unit": "MPa", "goal": "maximize"},
+                    {"name": "경도", "unit": "HV", "goal": "maximize"},
+                    {"name": "밀도", "unit": "g/cm³", "goal": "target", "target": 2.5}
+                ],
+                "suggested_design": "box_behnken"
+            },
+            "분석법 개발": {
+                "description": "크로마토그래피/분광법 최적화",
+                "factors": [
+                    {"name": "유속", "type": "continuous", "min": 0.5, "max": 2.0, "unit": "mL/min"},
+                    {"name": "컬럼온도", "type": "continuous", "min": 25, "max": 60, "unit": "°C"},
+                    {"name": "이동상조성", "type": "continuous", "min": 10, "max": 90, "unit": "%B"},
+                    {"name": "pH", "type": "continuous", "min": 2, "max": 8, "unit": ""}
+                ],
+                "responses": [
+                    {"name": "분해능", "unit": "", "goal": "maximize"},
+                    {"name": "분석시간", "unit": "min", "goal": "minimize"},
+                    {"name": "감도", "unit": "S/N", "goal": "maximize"}
+                ],
+                "suggested_design": "d_optimal"
+            },
+            "공정 최적화": {
+                "description": "생산 공정 파라미터 최적화",
+                "factors": [
+                    {"name": "온도", "type": "continuous", "min": 60, "max": 120, "unit": "°C"},
+                    {"name": "압력", "type": "continuous", "min": 1, "max": 10, "unit": "bar"},
+                    {"name": "체류시간", "type": "continuous", "min": 10, "max": 60, "unit": "min"},
+                    {"name": "교반속도", "type": "continuous", "min": 100, "max": 500, "unit": "rpm"}
+                ],
+                "responses": [
+                    {"name": "생산량", "unit": "kg/h", "goal": "maximize"},
+                    {"name": "품질", "unit": "%", "goal": "maximize"},
+                    {"name": "에너지소비", "unit": "kWh/kg", "goal": "minimize"}
+                ],
+                "suggested_design": "fractional_factorial"
+            }
+        }
+
+
+# ==================== 설계 엔진 ====================
+
+class DesignEngine:
+    """실험 설계 생성 엔진"""
+    
+    def __init__(self):
+        self.methods = self._initialize_methods()
+        
+    def _initialize_methods(self) -> Dict[str, DesignMethod]:
+        """설계 방법 초기화"""
+        return {
+            "full_factorial": DesignMethod(
                 name="full_factorial",
                 display_name="완전요인설계",
-                description="모든 요인 수준의 조합을 실험하는 가장 기본적인 설계",
-                min_factors=2,
-                max_factors=5,
+                description="모든 요인 수준의 조합을 실험",
+                min_factors=2, max_factors=8,
                 supports_categorical=True,
                 supports_constraints=False,
+                supports_blocks=True,
                 complexity="low",
-                use_cases=["스크리닝", "주효과 분석", "교호작용 분석"]
+                use_cases=["스크리닝", "주효과와 교호작용 분석"],
+                pros=["모든 효과 추정 가능", "해석 용이"],
+                cons=["실험 횟수 급증", "비용 증가"]
             ),
-            DesignMethod(
+            "fractional_factorial": DesignMethod(
                 name="fractional_factorial",
                 display_name="부분요인설계",
-                description="완전요인설계의 일부만 실험하여 효율성을 높인 설계",
-                min_factors=3,
-                max_factors=10,
+                description="완전요인설계의 일부만 실험",
+                min_factors=3, max_factors=15,
                 supports_categorical=True,
                 supports_constraints=False,
+                supports_blocks=True,
                 complexity="medium",
-                use_cases=["많은 요인 스크리닝", "주효과 중심 분석"]
+                use_cases=["다요인 스크리닝", "주효과 추정"],
+                pros=["실험 횟수 절감", "효율적"],
+                cons=["일부 교호작용 추정 불가", "해상도 제한"]
             ),
-            DesignMethod(
-                name="ccd",
-                display_name="중심합성설계 (CCD)",
-                description="2차 모델 적합을 위한 반응표면 설계",
-                min_factors=2,
-                max_factors=6,
+            "central_composite": DesignMethod(
+                name="central_composite",
+                display_name="중심합성설계",
+                description="2차 모델 적합을 위한 RSM 설계",
+                min_factors=2, max_factors=8,
                 supports_categorical=False,
                 supports_constraints=True,
+                supports_blocks=True,
                 complexity="medium",
-                use_cases=["최적화", "곡률 효과 분석", "반응표면 모델링"]
+                use_cases=["최적화", "곡면 반응 모델링"],
+                pros=["2차 효과 추정", "최적점 예측"],
+                cons=["연속형 요인만 가능", "축점 실행 어려움"]
             ),
-            DesignMethod(
-                name="bbd",
+            "box_behnken": DesignMethod(
+                name="box_behnken",
                 display_name="Box-Behnken 설계",
-                description="3수준 요인을 위한 효율적인 반응표면 설계",
-                min_factors=3,
-                max_factors=5,
+                description="3수준 요인설계와 중심점 조합",
+                min_factors=3, max_factors=7,
                 supports_categorical=False,
                 supports_constraints=True,
+                supports_blocks=True,
                 complexity="medium",
-                use_cases=["최적화", "극값 회피", "효율적 실험"]
+                use_cases=["최적화", "극값 회피"],
+                pros=["극값 조합 없음", "효율적"],
+                cons=["3요인 이상 필요", "범주형 불가"]
             ),
-            DesignMethod(
+            "plackett_burman": DesignMethod(
                 name="plackett_burman",
                 display_name="Plackett-Burman 설계",
-                description="많은 요인의 주효과를 효율적으로 스크리닝",
-                min_factors=4,
-                max_factors=47,
-                supports_categorical=False,
+                description="주효과 스크리닝을 위한 설계",
+                min_factors=2, max_factors=47,
+                supports_categorical=True,
                 supports_constraints=False,
+                supports_blocks=False,
                 complexity="low",
-                use_cases=["대규모 스크리닝", "중요 요인 식별"]
+                use_cases=["다요인 스크리닝", "중요 요인 선별"],
+                pros=["매우 효율적", "많은 요인 처리"],
+                cons=["교호작용 추정 불가", "주효과만"]
             ),
-            DesignMethod(
+            "latin_hypercube": DesignMethod(
+                name="latin_hypercube",
+                display_name="Latin Hypercube 설계",
+                description="공간 충진 설계",
+                min_factors=2, max_factors=20,
+                supports_categorical=False,
+                supports_constraints=True,
+                supports_blocks=False,
+                complexity="low",
+                use_cases=["컴퓨터 실험", "비선형 모델"],
+                pros=["균등 분포", "유연한 실험수"],
+                cons=["통계 모델 약함", "범주형 불가"]
+            ),
+            "d_optimal": DesignMethod(
                 name="d_optimal",
                 display_name="D-최적 설계",
-                description="제약조건이 있을 때 최적의 실험점을 선택",
-                min_factors=2,
-                max_factors=10,
+                description="모델 파라미터 추정 최적화",
+                min_factors=1, max_factors=20,
                 supports_categorical=True,
                 supports_constraints=True,
+                supports_blocks=True,
                 complexity="high",
-                use_cases=["제약조건 처리", "비정형 설계 공간", "맞춤형 설계"]
+                use_cases=["제약 조건 하 최적화", "불규칙 영역"],
+                pros=["매우 유연", "최적 정보량"],
+                cons=["계산 복잡", "알고리즘 의존"]
             ),
-            DesignMethod(
-                name="latin_hypercube",
-                display_name="라틴 하이퍼큐브 샘플링",
-                description="설계 공간을 균등하게 탐색하는 공간충진 설계",
-                min_factors=2,
-                max_factors=20,
-                supports_categorical=False,
-                supports_constraints=True,
-                complexity="low",
-                use_cases=["컴퓨터 실험", "시뮬레이션", "초기 탐색"]
-            ),
-            DesignMethod(
-                name="mixture",
-                display_name="혼합물 설계",
-                description="성분 비율의 합이 1인 혼합물 실험 설계",
-                min_factors=3,
-                max_factors=10,
-                supports_categorical=False,
-                supports_constraints=True,
-                complexity="high",
-                use_cases=["배합 최적화", "조성 연구", "제형 개발"]
-            ),
-            DesignMethod(
-                name="taguchi",
-                display_name="다구치 설계",
-                description="강건 설계를 위한 직교배열표 기반 설계",
-                min_factors=2,
-                max_factors=15,
-                supports_categorical=True,
-                supports_constraints=False,
-                complexity="medium",
-                use_cases=["품질 개선", "강건 설계", "잡음 요인 제어"]
-            ),
-            DesignMethod(
+            "custom": DesignMethod(
                 name="custom",
-                display_name="사용자 정의 설계",
-                description="사용자가 직접 실험점을 지정하는 설계",
-                min_factors=1,
-                max_factors=50,
+                display_name="사용자 정의",
+                description="직접 실험점 지정",
+                min_factors=1, max_factors=50,
                 supports_categorical=True,
                 supports_constraints=True,
+                supports_blocks=True,
                 complexity="low",
-                use_cases=["특수 목적", "기존 데이터 활용", "단계적 실험"]
+                use_cases=["특수 목적", "기존 데이터 활용"],
+                pros=["완전한 자유도", "기존 지식 활용"],
+                cons=["통계적 최적성 보장 안됨", "전문성 필요"]
             )
-        ]
+        }
+    
+    def get_method(self, method_name: str) -> Optional[DesignMethod]:
+        """설계 방법 반환"""
+        return self.methods.get(method_name)
+    
+    def recommend_method(self, 
+                        n_factors: int,
+                        factor_types: List[str],
+                        objective: str,
+                        n_runs_budget: Optional[int] = None) -> str:
+        """설계 방법 추천"""
+        has_categorical = any(t == "categorical" for t in factor_types)
+        
+        # 목적별 추천
+        if objective == "screening":
+            if n_factors > 7:
+                return "plackett_burman"
+            elif n_factors > 4:
+                return "fractional_factorial"
+            else:
+                return "full_factorial"
+                
+        elif objective == "optimization":
+            if has_categorical:
+                return "d_optimal"
+            elif n_factors <= 3:
+                return "box_behnken"
+            else:
+                return "central_composite"
+                
+        elif objective == "robustness":
+            return "fractional_factorial"
+            
+        else:  # exploration
+            if has_categorical:
+                return "d_optimal"
+            else:
+                return "latin_hypercube"
+    
+    def generate_design(self, 
+                       method: str,
+                       factors: List[Factor],
+                       constraints: Optional[Dict[str, Any]] = None,
+                       options: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """설계 매트릭스 생성"""
+        if not PYDOE2_AVAILABLE and method != "custom":
+            raise ImportError("pyDOE2가 필요합니다. pip install pyDOE2를 실행하세요.")
+            
+        options = options or {}
+        
+        # 연속형 요인만 추출
+        continuous_factors = [f for f in factors if f.type == FactorType.CONTINUOUS]
+        categorical_factors = [f for f in factors if f.type == FactorType.CATEGORICAL]
+        
+        n_continuous = len(continuous_factors)
+        
+        # 설계별 생성
+        if method == "full_factorial":
+            design_matrix = self._generate_full_factorial(continuous_factors, options)
+        elif method == "fractional_factorial":
+            design_matrix = self._generate_fractional_factorial(continuous_factors, options)
+        elif method == "central_composite":
+            design_matrix = self._generate_ccd(continuous_factors, options)
+        elif method == "box_behnken":
+            design_matrix = self._generate_box_behnken(continuous_factors, options)
+        elif method == "plackett_burman":
+            design_matrix = self._generate_plackett_burman(continuous_factors, options)
+        elif method == "latin_hypercube":
+            design_matrix = self._generate_lhs(continuous_factors, options)
+        elif method == "d_optimal":
+            design_matrix = self._generate_d_optimal(factors, constraints, options)
+        else:  # custom
+            design_matrix = self._generate_custom(factors, options)
+        
+        # 실제 값으로 변환
+        df = self._convert_to_actual_values(design_matrix, continuous_factors, categorical_factors)
+        
+        # 제약조건 적용
+        if constraints:
+            df = self._apply_constraints(df, constraints)
+        
+        # 실행 순서 랜덤화
+        if options.get("randomize", True):
+            df = df.sample(frac=1).reset_index(drop=True)
+        
+        # Run 번호 추가
+        df.index = range(1, len(df) + 1)
+        df.index.name = "Run"
+        
+        return df
+    
+    def _generate_full_factorial(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """완전요인설계 생성"""
+        n_levels = options.get("n_levels", 2)
+        n_factors = len(factors)
+        
+        if n_levels == 2:
+            return ff2n(n_factors)
+        else:
+            levels = [n_levels] * n_factors
+            return fullfact(levels)
+    
+    def _generate_fractional_factorial(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """부분요인설계 생성"""
+        n_factors = len(factors)
+        resolution = options.get("resolution", 3)
+        
+        # 생성자 결정
+        if n_factors <= 3:
+            gen = None
+        elif n_factors == 4:
+            gen = "D = A B C" if resolution >= 4 else "D = A B"
+        elif n_factors == 5:
+            gen = "D = A B; E = A C" if resolution >= 3 else "E = A B C D"
+        else:
+            # 일반적인 생성자
+            gen = self._get_fractional_generators(n_factors, resolution)
+        
+        return fracfact(gen) if gen else ff2n(n_factors)
+    
+    def _generate_ccd(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """중심합성설계 생성"""
+        n_factors = len(factors)
+        center = options.get("center_points", (4, 4))
+        alpha = options.get("alpha", "orthogonal")
+        face = options.get("face", "circumscribed")
+        
+        return ccdesign(n_factors, center=center, alpha=alpha, face=face)
+    
+    def _generate_box_behnken(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """Box-Behnken 설계 생성"""
+        n_factors = len(factors)
+        center = options.get("center_points", 3)
+        
+        return bbdesign(n_factors, center=center)
+    
+    def _generate_plackett_burman(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """Plackett-Burman 설계 생성"""
+        n_factors = len(factors)
+        return pbdesign(n_factors)
+    
+    def _generate_lhs(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """Latin Hypercube 설계 생성"""
+        n_factors = len(factors)
+        n_samples = options.get("n_samples", n_factors * 10)
+        criterion = options.get("criterion", "maximin")
+        
+        # 0-1 범위로 생성 후 -1~1로 변환
+        lhs_design = lhs(n_factors, samples=n_samples, criterion=criterion)
+        return 2 * lhs_design - 1
+    
+    def _generate_d_optimal(self, factors: List[Factor], 
+                           constraints: Dict, options: Dict) -> np.ndarray:
+        """D-최적 설계 생성 (간단한 구현)"""
+        n_runs = options.get("n_runs", len(factors) * 3)
+        
+        # 후보점 생성
+        continuous_factors = [f for f in factors if f.type == FactorType.CONTINUOUS]
+        n_continuous = len(continuous_factors)
+        
+        if n_continuous > 0:
+            # 격자점 생성
+            levels_per_factor = 5
+            candidates = fullfact([levels_per_factor] * n_continuous)
+            # -1 ~ 1로 정규화
+            candidates = 2 * (candidates / (levels_per_factor - 1)) - 1
+        else:
+            candidates = np.array([[0]])  # 더미
+        
+        # 간단한 교환 알고리즘으로 D-최적 선택
+        selected_indices = np.random.choice(len(candidates), n_runs, replace=False)
+        return candidates[selected_indices]
+    
+    def _generate_custom(self, factors: List[Factor], options: Dict) -> np.ndarray:
+        """사용자 정의 설계"""
+        custom_points = options.get("custom_points", [])
+        if not custom_points:
+            # 기본값: 각 요인의 min, center, max 조합
+            n_factors = len([f for f in factors if f.type == FactorType.CONTINUOUS])
+            return np.array([[-1, 0, 1]] * n_factors).T
+        return np.array(custom_points)
+    
+    def _convert_to_actual_values(self, design_matrix: np.ndarray,
+                                 continuous_factors: List[Factor],
+                                 categorical_factors: List[Factor]) -> pd.DataFrame:
+        """코드화된 값을 실제 값으로 변환"""
+        df_data = {}
+        
+        # 연속형 요인 변환
+        for i, factor in enumerate(continuous_factors):
+            if i < design_matrix.shape[1]:
+                coded_values = design_matrix[:, i]
+                # -1 ~ 1 코드를 실제 값으로 변환
+                actual_values = factor.min_value + (coded_values + 1) / 2 * \
+                               (factor.max_value - factor.min_value)
+                df_data[factor.name] = actual_values
+        
+        # 범주형 요인 추가
+        n_runs = len(design_matrix)
+        for factor in categorical_factors:
+            # 균등하게 레벨 할당
+            n_levels = len(factor.levels)
+            level_indices = np.tile(range(n_levels), n_runs // n_levels + 1)[:n_runs]
+            np.random.shuffle(level_indices)
+            df_data[factor.name] = [factor.levels[i] for i in level_indices]
+        
+        return pd.DataFrame(df_data)
+    
+    def _apply_constraints(self, df: pd.DataFrame, constraints: Dict) -> pd.DataFrame:
+        """제약조건 적용"""
+        # 선형 제약조건 예시
+        if "linear_constraints" in constraints:
+            for constraint in constraints["linear_constraints"]:
+                # 예: {"factors": ["A", "B"], "coefficients": [1, 1], "bound": 100}
+                factors = constraint["factors"]
+                coeffs = constraint["coefficients"]
+                bound = constraint["bound"]
+                
+                if all(f in df.columns for f in factors):
+                    constraint_value = sum(df[f] * c for f, c in zip(factors, coeffs))
+                    df = df[constraint_value <= bound]
+        
+        # 금지 조합 제거
+        if "forbidden_combinations" in constraints:
+            for forbidden in constraints["forbidden_combinations"]:
+                mask = pd.Series(True, index=df.index)
+                for factor, value in forbidden.items():
+                    if factor in df.columns:
+                        mask &= (df[factor] != value)
+                df = df[mask]
+        
+        return df.reset_index(drop=True)
+    
+    def _get_fractional_generators(self, n_factors: int, resolution: int) -> str:
+        """부분요인설계 생성자 결정"""
+        # 간단한 규칙 기반 생성자
+        generators = {
+            (5, 3): "D = A B; E = A C",
+            (6, 3): "D = A B; E = A C; F = B C",
+            (7, 3): "D = A B; E = A C; F = B C; G = A B C",
+            (5, 4): "E = A B C D",
+            (6, 4): "E = A B C; F = B C D",
+            (7, 4): "E = A B C; F = A B D; G = A C D"
+        }
+        return generators.get((n_factors, resolution), "")
+
+
+# ==================== 검증 시스템 ====================
+
+class ValidationSystem:
+    """설계 검증 시스템"""
+    
+    def validate_design(self, design: pd.DataFrame, 
+                       factors: List[Factor],
+                       responses: List[Response]) -> ValidationResult:
+        """종합 설계 검증"""
+        result = ValidationResult()
+        
+        # 기본 검증
+        self._validate_basic(design, factors, result)
+        
+        # 통계적 검증
+        self._validate_statistical(design, factors, result)
+        
+        # 실용적 검증
+        self._validate_practical(design, factors, responses, result)
+        
+        return result
+    
+    def _validate_basic(self, design: pd.DataFrame, 
+                       factors: List[Factor], 
+                       result: ValidationResult):
+        """기본 검증"""
+        # 실험 횟수
+        n_runs = len(design)
+        n_factors = len(factors)
+        
+        if n_runs < n_factors + 1:
+            result.add_error(f"실험 횟수({n_runs})가 요인 수({n_factors})보다 적습니다.")
+        elif n_runs < 2 * n_factors:
+            result.add_warning(f"실험 횟수가 권장 최소값(2×요인수={2*n_factors})보다 적습니다.")
+        
+        # 요인 범위 확인
+        for factor in factors:
+            if factor.name in design.columns:
+                if factor.type == FactorType.CONTINUOUS:
+                    values = design[factor.name]
+                    if values.min() < factor.min_value or values.max() > factor.max_value:
+                        result.add_error(f"{factor.name}의 값이 설정 범위를 벗어났습니다.")
+        
+        # 중복 실험점
+        duplicates = design.duplicated().sum()
+        if duplicates > 0:
+            result.add_warning(f"{duplicates}개의 중복 실험점이 있습니다.")
+    
+    def _validate_statistical(self, design: pd.DataFrame,
+                            factors: List[Factor],
+                            result: ValidationResult):
+        """통계적 검증"""
+        continuous_cols = [f.name for f in factors 
+                          if f.type == FactorType.CONTINUOUS and f.name in design.columns]
+        
+        if len(continuous_cols) < 2:
+            return
+        
+        # 상관관계 확인
+        corr_matrix = design[continuous_cols].corr()
+        high_corr = np.where(np.abs(corr_matrix) > 0.9)
+        for i, j in zip(high_corr[0], high_corr[1]):
+            if i < j:
+                result.add_warning(
+                    f"{continuous_cols[i]}와 {continuous_cols[j]} 간 높은 상관관계 "
+                    f"({corr_matrix.iloc[i, j]:.3f})"
+                )
+        
+        # VIF 계산 (간단한 버전)
+        try:
+            from statsmodels.stats.outliers_influence import variance_inflation_factor
+            X = design[continuous_cols].values
+            for i, col in enumerate(continuous_cols):
+                vif = variance_inflation_factor(X, i)
+                if vif > 10:
+                    result.add_warning(f"{col}의 VIF가 높습니다 ({vif:.1f})")
+        except:
+            pass
+    
+    def _validate_practical(self, design: pd.DataFrame,
+                          factors: List[Factor],
+                          responses: List[Response],
+                          result: ValidationResult):
+        """실용적 검증"""
+        # 실험 실행 가능성
+        n_runs = len(design)
+        if n_runs > 100:
+            result.add_warning(f"실험 횟수가 많습니다 ({n_runs}회). 단계적 접근을 고려하세요.")
+        
+        # 극단값 조합
+        continuous_factors = [f for f in factors if f.type == FactorType.CONTINUOUS]
+        if continuous_factors:
+            extreme_runs = 0
+            for _, row in design.iterrows():
+                extreme_count = sum(
+                    row[f.name] in [f.min_value, f.max_value]
+                    for f in continuous_factors
+                    if f.name in row
+                )
+                if extreme_count == len(continuous_factors):
+                    extreme_runs += 1
+            
+            if extreme_runs > n_runs * 0.5:
+                result.add_warning("극단값 조합이 많습니다. 실행 가능성을 확인하세요.")
+    
+    def calculate_design_quality(self, design: pd.DataFrame,
+                               factors: List[Factor]) -> DesignQuality:
+        """설계 품질 지표 계산"""
+        quality = DesignQuality()
+        
+        continuous_cols = [f.name for f in factors 
+                          if f.type == FactorType.CONTINUOUS and f.name in design.columns]
+        
+        if not continuous_cols:
+            return quality
+        
+        X = design[continuous_cols].values
+        n, p = X.shape
+        
+        # 정규화
+        X_norm = (X - X.mean(axis=0)) / (X.std(axis=0) + 1e-8)
+        
+        # D-efficiency
+        try:
+            XtX = X_norm.T @ X_norm
+            det_XtX = np.linalg.det(XtX)
+            det_full = n ** p  # 완전요인설계 기준
+            quality.d_efficiency = (det_XtX / det_full) ** (1/p) * 100
+        except:
+            quality.d_efficiency = 0
+        
+        # Condition number
+        try:
+            quality.condition_number = np.linalg.cond(X_norm)
+        except:
+            quality.condition_number = np.inf
+        
+        # Orthogonality
+        try:
+            corr_matrix = np.corrcoef(X_norm.T)
+            off_diagonal = corr_matrix[np.triu_indices_from(corr_matrix, k=1)]
+            quality.orthogonality = 1 - np.mean(np.abs(off_diagonal))
+        except:
+            quality.orthogonality = 0
+        
+        # VIF (maximum)
+        try:
+            from statsmodels.stats.outliers_influence import variance_inflation_factor
+            vifs = [variance_inflation_factor(X_norm, i) for i in range(p)]
+            quality.vif_max = max(vifs)
+        except:
+            quality.vif_max = 0
+        
+        return quality
 
 
 # ==================== 메인 모듈 클래스 ====================
@@ -413,7 +907,7 @@ class GeneralExperimentModule(BaseExperimentModule):
         """모듈 초기화"""
         super().__init__()
         
-        # 메타데이터 업데이트
+        # 메타데이터 설정
         self.metadata.update({
             'module_id': 'general_experiment_v2',
             'name': '범용 실험 설계',
@@ -421,1372 +915,593 @@ class GeneralExperimentModule(BaseExperimentModule):
             'author': 'Universal DOE Platform Team',
             'description': '모든 연구 분야를 위한 범용 실험 설계 모듈',
             'category': 'core',
-            'tags': ['general', 'universal', 'flexible', 'all-purpose'],
+            'tags': ['general', 'universal', 'flexible', 'all-purpose', 'doe'],
             'icon': '🌐',
-            'color': '#0066cc'
+            'color': '#0066cc',
+            'supported_designs': list(DesignEngine().methods.keys()),
+            'min_factors': 1,
+            'max_factors': 50,
+            'min_responses': 1,
+            'max_responses': 20
         })
         
-        # 템플릿 매니저
+        # 내부 컴포넌트
         self.templates = ExperimentTemplates()
-        
-        # 사용자 정의 요인/반응변수 저장
-        self.custom_factors: List[Factor] = []
-        self.custom_responses: List[Response] = []
-        
-        # 설계 엔진
         self.design_engine = DesignEngine()
-        
-        # 검증 시스템
         self.validator = ValidationSystem()
         
-        self._initialized = True
+        # 상태 저장
+        self.current_factors: List[Factor] = []
+        self.current_responses: List[Response] = []
+        self.current_design: Optional[pd.DataFrame] = None
+        self.design_quality: Optional[DesignQuality] = None
         
+        self._initialized = True
+        logger.info("GeneralExperimentModule 초기화 완료")
+    
     # ==================== 필수 구현 메서드 ====================
     
     def get_factors(self) -> List[Factor]:
-        """실험 요인 목록 반환"""
-        return self.custom_factors
+        """현재 정의된 요인 목록 반환"""
+        return self.current_factors
     
     def get_responses(self) -> List[Response]:
-        """반응변수 목록 반환"""
-        return self.custom_responses
+        """현재 정의된 반응변수 목록 반환"""
+        return self.current_responses
     
     def validate_input(self, inputs: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """입력값 검증"""
         try:
-            # 요인 검증
+            # 필수 필드 확인
             if 'factors' not in inputs or not inputs['factors']:
                 return False, "최소 1개 이상의 실험 요인이 필요합니다."
             
-            # 반응변수 검증
             if 'responses' not in inputs or not inputs['responses']:
                 return False, "최소 1개 이상의 반응변수가 필요합니다."
             
+            # 요인 검증
+            factors = inputs['factors']
+            if len(factors) > self.metadata['max_factors']:
+                return False, f"요인 수는 {self.metadata['max_factors']}개를 초과할 수 없습니다."
+            
+            # 요인별 검증
+            for i, factor_data in enumerate(factors):
+                if 'name' not in factor_data or not factor_data['name']:
+                    return False, f"요인 {i+1}의 이름이 없습니다."
+                
+                if factor_data.get('type') == 'continuous':
+                    min_val = factor_data.get('min_value', 0)
+                    max_val = factor_data.get('max_value', 1)
+                    if min_val >= max_val:
+                        return False, f"요인 '{factor_data['name']}'의 최소값이 최대값보다 크거나 같습니다."
+                
+                elif factor_data.get('type') == 'categorical':
+                    levels = factor_data.get('levels', [])
+                    if len(levels) < 2:
+                        return False, f"범주형 요인 '{factor_data['name']}'은 최소 2개 수준이 필요합니다."
+            
+            # 반응변수 검증
+            responses = inputs['responses']
+            if len(responses) > self.metadata['max_responses']:
+                return False, f"반응변수 수는 {self.metadata['max_responses']}개를 초과할 수 없습니다."
+            
+            for i, response_data in enumerate(responses):
+                if 'name' not in response_data or not response_data['name']:
+                    return False, f"반응변수 {i+1}의 이름이 없습니다."
+            
             # 설계 방법 검증
-            if 'design_method' not in inputs:
-                return False, "실험설계법을 선택해주세요."
-            
-            # 각 요인 검증
-            for factor in inputs['factors']:
-                valid, msg = self._validate_factor(factor)
-                if not valid:
-                    return False, msg
-            
-            # 각 반응변수 검증
-            for response in inputs['responses']:
-                valid, msg = self._validate_response(response)
-                if not valid:
-                    return False, msg
-            
-            # 설계별 특수 검증
-            method = inputs['design_method']
-            valid, msg = self._validate_design_specific(method, inputs)
-            if not valid:
-                return False, msg
+            if 'design_method' in inputs:
+                method = inputs['design_method']
+                if method not in self.design_engine.methods:
+                    return False, f"지원하지 않는 설계 방법입니다: {method}"
             
             return True, None
             
         except Exception as e:
-            logger.error(f"입력 검증 중 오류: {str(e)}")
+            logger.error(f"입력 검증 중 오류: {e}")
             return False, f"검증 중 오류 발생: {str(e)}"
     
-    def generate_design(self, inputs: Dict[str, Any]) -> ExperimentDesign:
+    def generate_design(self, inputs: Dict[str, Any]) -> Tuple[bool, Union[str, ExperimentDesign]]:
         """실험 설계 생성"""
         try:
-            # 입력 데이터 추출
-            self.custom_factors = self._create_factors_from_input(inputs['factors'])
-            self.custom_responses = self._create_responses_from_input(inputs['responses'])
-            design_method = inputs['design_method']
-            design_params = inputs.get('design_params', {})
+            # 입력 검증
+            is_valid, error_msg = self.validate_input(inputs)
+            if not is_valid:
+                return False, error_msg
+            
+            # Factor 객체 생성
+            self.current_factors = []
+            for factor_data in inputs['factors']:
+                factor = Factor(
+                    name=factor_data['name'],
+                    display_name=factor_data.get('display_name', factor_data['name']),
+                    type=FactorType(factor_data.get('type', 'continuous')),
+                    unit=factor_data.get('unit', ''),
+                    min_value=factor_data.get('min_value'),
+                    max_value=factor_data.get('max_value'),
+                    levels=factor_data.get('levels', []),
+                    description=factor_data.get('description', '')
+                )
+                self.current_factors.append(factor)
+            
+            # Response 객체 생성
+            self.current_responses = []
+            for response_data in inputs['responses']:
+                response = Response(
+                    name=response_data['name'],
+                    display_name=response_data.get('display_name', response_data['name']),
+                    unit=response_data.get('unit', ''),
+                    goal=ResponseGoal(response_data.get('goal', 'maximize')),
+                    target_value=response_data.get('target_value'),
+                    description=response_data.get('description', '')
+                )
+                self.current_responses.append(response)
+            
+            # 설계 방법 결정
+            design_method = inputs.get('design_method', 'auto')
+            if design_method == 'auto':
+                factor_types = [f.type.value for f in self.current_factors]
+                objective = inputs.get('objective', 'optimization')
+                n_runs_budget = inputs.get('n_runs_budget')
+                design_method = self.design_engine.recommend_method(
+                    len(self.current_factors), factor_types, objective, n_runs_budget
+                )
+            
+            # 설계 옵션
+            design_options = inputs.get('design_options', {})
+            constraints = inputs.get('constraints', {})
             
             # 설계 생성
-            design_matrix = self.design_engine.generate_design_matrix(
+            self.current_design = self.design_engine.generate_design(
                 design_method,
-                self.custom_factors,
-                design_params
+                self.current_factors,
+                constraints,
+                design_options
             )
             
-            # 설계 평가
-            quality_metrics = self.design_engine.evaluate_design(
-                design_matrix,
-                self.custom_factors
+            # 반응변수 열 추가
+            for response in self.current_responses:
+                self.current_design[response.name] = np.nan
+            
+            # 품질 지표 계산
+            self.design_quality = self.validator.calculate_design_quality(
+                self.current_design, self.current_factors
             )
             
-            # 실행 순서 생성
-            run_order = self._generate_run_order(design_matrix, inputs.get('randomize', True))
+            # 검증
+            validation_result = self.validator.validate_design(
+                self.current_design, self.current_factors, self.current_responses
+            )
             
-            # 결과 생성
-            design = ExperimentDesign(
-                design_id=f"GEN_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                name=inputs.get('name', 'General Experiment'),
-                description=inputs.get('description', ''),
-                factors=self.custom_factors,
-                responses=self.custom_responses,
-                design_matrix=design_matrix,
-                run_order=run_order,
+            # ExperimentDesign 객체 생성
+            experiment_design = ExperimentDesign(
+                design_matrix=self.current_design,
+                factors=self.current_factors,
+                responses=self.current_responses,
+                design_type=design_method,
+                quality_metrics={
+                    'd_efficiency': self.design_quality.d_efficiency,
+                    'condition_number': self.design_quality.condition_number,
+                    'orthogonality': self.design_quality.orthogonality,
+                    'overall_score': self.design_quality.overall_score
+                },
+                validation_result=validation_result,
                 metadata={
-                    'design_method': design_method,
-                    'design_params': design_params,
-                    'quality_metrics': quality_metrics,
-                    'total_runs': len(design_matrix),
-                    'created_at': datetime.now().isoformat()
+                    'created_at': datetime.now().isoformat(),
+                    'module_id': self.metadata['module_id'],
+                    'module_version': self.metadata['version'],
+                    'design_method': self.design_engine.get_method(design_method).display_name,
+                    'n_runs': len(self.current_design),
+                    'n_factors': len(self.current_factors),
+                    'n_responses': len(self.current_responses)
                 }
             )
             
-            return design
+            logger.info(f"실험 설계 생성 완료: {design_method}, {len(self.current_design)}회")
+            return True, experiment_design
             
         except Exception as e:
-            logger.error(f"설계 생성 중 오류: {str(e)}\n{traceback.format_exc()}")
-            raise
+            logger.error(f"설계 생성 중 오류: {e}\n{traceback.format_exc()}")
+            return False, f"설계 생성 실패: {str(e)}"
     
-    def analyze_results(self, data: pd.DataFrame) -> AnalysisResult:
+    def analyze_results(self, results: pd.DataFrame) -> Tuple[bool, Union[str, AnalysisResult]]:
         """실험 결과 분석"""
         try:
+            if self.current_design is None:
+                return False, "먼저 실험 설계를 생성하세요."
+            
+            if results.empty:
+                return False, "분석할 결과 데이터가 없습니다."
+            
             analysis = AnalysisResult()
             
-            # 기술 통계
-            analysis.summary_statistics = self._calculate_summary_stats(data)
+            # 기본 통계
+            summary_stats = {}
+            for response in self.current_responses:
+                if response.name in results.columns:
+                    data = results[response.name].dropna()
+                    if len(data) > 0:
+                        summary_stats[response.name] = {
+                            'count': len(data),
+                            'mean': float(data.mean()),
+                            'std': float(data.std()),
+                            'min': float(data.min()),
+                            'max': float(data.max()),
+                            'cv': float(data.std() / data.mean() * 100) if data.mean() != 0 else np.inf
+                        }
+            analysis.summary_statistics = summary_stats
             
-            # 주효과 분석
-            analysis.main_effects = self._analyze_main_effects(data)
+            # 요인 효과 분석 (간단한 버전)
+            factor_effects = {}
+            continuous_factors = [f for f in self.current_factors if f.type == FactorType.CONTINUOUS]
             
-            # 교호작용 분석
-            if len(self.custom_factors) >= 2:
-                analysis.interactions = self._analyze_interactions(data)
+            for response in self.current_responses:
+                if response.name in results.columns:
+                    effects = {}
+                    for factor in continuous_factors:
+                        if factor.name in results.columns:
+                            # 상관관계
+                            corr = results[[factor.name, response.name]].corr().iloc[0, 1]
+                            effects[factor.name] = {
+                                'correlation': float(corr),
+                                'significant': abs(corr) > 0.3  # 간단한 기준
+                            }
+                    factor_effects[response.name] = effects
+            analysis.factor_effects = factor_effects
             
-            # 회귀 모델
-            analysis.regression_models = self._fit_regression_models(data)
-            
-            # 최적 조건 찾기
-            analysis.optimal_conditions = self._find_optimal_conditions(data)
+            # 최적 조건 찾기 (간단한 버전)
+            optimal_conditions = {}
+            for response in self.current_responses:
+                if response.name in results.columns:
+                    data = results[response.name].dropna()
+                    if len(data) > 0:
+                        if response.goal == ResponseGoal.MAXIMIZE:
+                            opt_idx = data.idxmax()
+                        elif response.goal == ResponseGoal.MINIMIZE:
+                            opt_idx = data.idxmin()
+                        else:  # TARGET
+                            target = response.target_value or 0
+                            opt_idx = (data - target).abs().idxmin()
+                        
+                        opt_conditions = {}
+                        for factor in self.current_factors:
+                            if factor.name in results.columns:
+                                opt_conditions[factor.name] = results.loc[opt_idx, factor.name]
+                        
+                        optimal_conditions[response.name] = {
+                            'conditions': opt_conditions,
+                            'predicted_value': float(data.loc[opt_idx]),
+                            'run_number': int(opt_idx)
+                        }
+            analysis.optimal_conditions = optimal_conditions
             
             # 시각화 생성
-            analysis.visualizations = self._create_visualizations(data)
+            analysis.visualizations = self._create_analysis_plots(results)
             
-            # 추천사항 생성
-            analysis.recommendations = self._generate_recommendations(analysis)
+            # 추천사항
+            recommendations = []
             
-            return analysis
+            # CV 기반 추천
+            for resp_name, stats in summary_stats.items():
+                if stats['cv'] > 20:
+                    recommendations.append(f"{resp_name}의 변동계수가 높습니다 (CV={stats['cv']:.1f}%). "
+                                         "실험 조건 제어를 개선하세요.")
             
-        except Exception as e:
-            logger.error(f"결과 분석 중 오류: {str(e)}")
-            raise
-    
-    # ==================== UI 메서드 ====================
-    
-    def render_design_interface(self) -> Dict[str, Any]:
-        """실험 설계 인터페이스 렌더링"""
-        st.header("🌐 범용 실험 설계")
-        
-        inputs = {}
-        
-        # 기본 정보
-        with st.container():
-            col1, col2 = st.columns(2)
-            with col1:
-                inputs['name'] = st.text_input("실험 이름", value="새 실험")
-            with col2:
-                inputs['description'] = st.text_input("설명")
-        
-        # 탭 인터페이스
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 요인 설정", "🎯 반응변수 설정", "🔧 설계 방법", "⚙️ 고급 설정"])
-        
-        with tab1:
-            inputs['factors'] = self._render_factor_interface()
-        
-        with tab2:
-            inputs['responses'] = self._render_response_interface()
-        
-        with tab3:
-            inputs['design_method'], inputs['design_params'] = self._render_design_method_interface()
-        
-        with tab4:
-            inputs.update(self._render_advanced_settings())
-        
-        # 검증 및 미리보기
-        if st.button("🔍 설계 검증 및 미리보기", type="primary"):
-            valid, msg = self.validate_input(inputs)
+            # 상관관계 기반 추천
+            for resp_name, effects in factor_effects.items():
+                significant_factors = [f for f, e in effects.items() if e['significant']]
+                if significant_factors:
+                    recommendations.append(f"{resp_name}에 대해 {', '.join(significant_factors)}가 "
+                                         "유의한 영향을 미칩니다.")
             
-            if valid:
-                st.success("✅ 입력값 검증 통과!")
-                
-                # 설계 미리보기
-                with st.spinner("설계 생성 중..."):
-                    try:
-                        design = self.generate_design(inputs)
-                        self._render_design_preview(design)
-                        
-                        # 세션에 저장
-                        st.session_state['current_design'] = design
-                        st.session_state['design_inputs'] = inputs
-                        
-                    except Exception as e:
-                        st.error(f"설계 생성 실패: {str(e)}")
-            else:
-                st.error(f"❌ 검증 실패: {msg}")
-        
-        return inputs
-    
-    def _render_factor_interface(self) -> List[Dict[str, Any]]:
-        """요인 설정 인터페이스"""
-        factors = []
-        
-        # 템플릿에서 추가
-        st.subheader("템플릿에서 요인 추가")
-        
-        templates = self.templates.get_factor_templates()
-        
-        # 카테고리 선택
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            category = st.selectbox("카테고리", list(templates.keys()))
-        
-        with col2:
-            if category:
-                template_options = [t.name for t in templates[category]]
-                selected_templates = st.multiselect(
-                    "템플릿 선택",
-                    template_options,
-                    help="여러 개 선택 가능"
-                )
-        
-        if st.button("템플릿 추가"):
-            for template_name in selected_templates:
-                template = next(t for t in templates[category] if t.name == template_name)
-                factors.append(self._template_to_factor_dict(template))
-            st.success(f"{len(selected_templates)}개 요인이 추가되었습니다.")
-            st.rerun()
-        
-        # 사용자 정의 요인
-        st.subheader("사용자 정의 요인")
-        
-        if 'custom_factors' not in st.session_state:
-            st.session_state.custom_factors = []
-        
-        # 요인 추가 폼
-        with st.expander("➕ 새 요인 추가"):
-            new_factor = self._render_factor_form()
-            if st.button("요인 추가", key="add_custom_factor"):
-                st.session_state.custom_factors.append(new_factor)
-                st.success("요인이 추가되었습니다.")
-                st.rerun()
-        
-        # 기존 요인 표시 및 편집
-        if st.session_state.custom_factors:
-            st.write("**현재 요인 목록:**")
+            analysis.recommendations = recommendations
             
-            for i, factor in enumerate(st.session_state.custom_factors):
-                with st.container():
-                    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-                    
-                    with col1:
-                        st.write(f"**{factor['name']}**")
-                        st.caption(f"{factor['type']} | {factor.get('unit', '')}")
-                    
-                    with col2:
-                        if factor['type'] == 'continuous':
-                            st.write(f"범위: {factor['min_value']} - {factor['max_value']}")
-                        else:
-                            st.write(f"수준: {', '.join(map(str, factor['levels']))}")
-                    
-                    with col3:
-                        if st.button("✏️ 편집", key=f"edit_factor_{i}"):
-                            st.session_state[f'editing_factor_{i}'] = True
-                    
-                    with col4:
-                        if st.button("🗑️", key=f"delete_factor_{i}"):
-                            st.session_state.custom_factors.pop(i)
-                            st.rerun()
-                
-                # 편집 모드
-                if st.session_state.get(f'editing_factor_{i}', False):
-                    edited_factor = self._render_factor_form(factor)
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("저장", key=f"save_factor_{i}"):
-                            st.session_state.custom_factors[i] = edited_factor
-                            st.session_state[f'editing_factor_{i}'] = False
-                            st.rerun()
-                    with col2:
-                        if st.button("취소", key=f"cancel_factor_{i}"):
-                            st.session_state[f'editing_factor_{i}'] = False
-                            st.rerun()
-        
-        return st.session_state.custom_factors
-    
-    def _render_factor_form(self, existing_factor: Optional[Dict] = None) -> Dict[str, Any]:
-        """요인 입력 폼"""
-        factor = existing_factor or {}
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            name = st.text_input("요인 이름", value=factor.get('name', ''), key="factor_name_input")
-            factor_type = st.selectbox(
-                "요인 타입",
-                ['continuous', 'categorical', 'discrete'],
-                index=['continuous', 'categorical', 'discrete'].index(factor.get('type', 'continuous')),
-                key="factor_type_input"
-            )
-        
-        with col2:
-            unit = st.text_input("단위", value=factor.get('unit', ''), key="factor_unit_input")
-            description = st.text_input("설명", value=factor.get('description', ''), key="factor_desc_input")
-        
-        if factor_type == 'continuous':
-            col1, col2 = st.columns(2)
-            with col1:
-                min_val = st.number_input("최소값", value=factor.get('min_value', 0.0), key="factor_min_input")
-            with col2:
-                max_val = st.number_input("최대값", value=factor.get('max_value', 100.0), key="factor_max_input")
-            
-            levels = None
-        else:
-            levels_str = st.text_input(
-                "수준 (쉼표로 구분)",
-                value=', '.join(map(str, factor.get('levels', []))),
-                key="factor_levels_input"
-            )
-            levels = [l.strip() for l in levels_str.split(',') if l.strip()]
-            min_val = None
-            max_val = None
-        
-        return {
-            'name': name,
-            'type': factor_type,
-            'unit': unit,
-            'description': description,
-            'min_value': min_val,
-            'max_value': max_val,
-            'levels': levels
-        }
-    
-    def _render_response_interface(self) -> List[Dict[str, Any]]:
-        """반응변수 설정 인터페이스"""
-        responses = []
-        
-        # 템플릿에서 추가
-        st.subheader("템플릿에서 반응변수 추가")
-        
-        templates = self.templates.get_response_templates()
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            category = st.selectbox("카테고리", list(templates.keys()), key="response_category")
-        
-        with col2:
-            if category:
-                template_options = [t.name for t in templates[category]]
-                selected_templates = st.multiselect(
-                    "템플릿 선택",
-                    template_options,
-                    key="response_templates"
-                )
-        
-        if st.button("템플릿 추가", key="add_response_template"):
-            for template_name in selected_templates:
-                template = next(t for t in templates[category] if t.name == template_name)
-                responses.append(self._template_to_response_dict(template))
-            st.success(f"{len(selected_templates)}개 반응변수가 추가되었습니다.")
-            st.rerun()
-        
-        # 사용자 정의 반응변수
-        st.subheader("사용자 정의 반응변수")
-        
-        if 'custom_responses' not in st.session_state:
-            st.session_state.custom_responses = []
-        
-        # 반응변수 추가 폼
-        with st.expander("➕ 새 반응변수 추가"):
-            new_response = self._render_response_form()
-            if st.button("반응변수 추가", key="add_custom_response"):
-                st.session_state.custom_responses.append(new_response)
-                st.success("반응변수가 추가되었습니다.")
-                st.rerun()
-        
-        # 기존 반응변수 표시
-        if st.session_state.custom_responses:
-            st.write("**현재 반응변수 목록:**")
-            
-            for i, response in enumerate(st.session_state.custom_responses):
-                with st.container():
-                    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-                    
-                    with col1:
-                        st.write(f"**{response['name']}**")
-                        st.caption(f"{response['unit']} | {response['goal']}")
-                    
-                    with col2:
-                        if response['goal'] == 'target':
-                            st.write(f"목표: {response.get('target_value', 'N/A')}")
-                        else:
-                            st.write(f"목표: {response['goal']}")
-                    
-                    with col3:
-                        st.write(f"가중치: {response.get('weight', 1.0)}")
-                    
-                    with col4:
-                        if st.button("🗑️", key=f"delete_response_{i}"):
-                            st.session_state.custom_responses.pop(i)
-                            st.rerun()
-        
-        return st.session_state.custom_responses
-    
-    def _render_response_form(self, existing_response: Optional[Dict] = None) -> Dict[str, Any]:
-        """반응변수 입력 폼"""
-        response = existing_response or {}
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            name = st.text_input("반응변수 이름", value=response.get('name', ''), key="response_name_input")
-            unit = st.text_input("단위", value=response.get('unit', ''), key="response_unit_input")
-        
-        with col2:
-            goal = st.selectbox(
-                "최적화 목표",
-                ['maximize', 'minimize', 'target'],
-                index=['maximize', 'minimize', 'target'].index(response.get('goal', 'maximize')),
-                key="response_goal_input"
-            )
-            weight = st.number_input("가중치", min_value=0.0, max_value=10.0, value=response.get('weight', 1.0), key="response_weight_input")
-        
-        if goal == 'target':
-            target_value = st.number_input("목표값", value=response.get('target_value', 0.0), key="response_target_input")
-        else:
-            target_value = None
-        
-        measurement_method = st.text_input("측정 방법", value=response.get('measurement_method', ''), key="response_method_input")
-        
-        return {
-            'name': name,
-            'unit': unit,
-            'goal': goal,
-            'weight': weight,
-            'target_value': target_value,
-            'measurement_method': measurement_method
-        }
-    
-    def _render_design_method_interface(self) -> Tuple[str, Dict[str, Any]]:
-        """설계 방법 선택 인터페이스"""
-        st.subheader("실험설계법 선택")
-        
-        # 현재 요인 수 확인
-        num_factors = len(st.session_state.get('custom_factors', []))
-        
-        if num_factors == 0:
-            st.warning("먼저 실험 요인을 추가해주세요.")
-            return None, {}
-        
-        # 사용 가능한 설계법 필터링
-        available_methods = []
-        for method in self.templates.get_design_methods():
-            if method.min_factors <= num_factors <= method.max_factors:
-                # 범주형 요인 체크
-                has_categorical = any(f['type'] == 'categorical' for f in st.session_state.custom_factors)
-                if has_categorical and not method.supports_categorical:
-                    continue
-                available_methods.append(method)
-        
-        if not available_methods:
-            st.error(f"{num_factors}개 요인에 사용 가능한 설계법이 없습니다.")
-            return None, {}
-        
-        # AI 추천
-        with st.container():
-            st.info("🤖 **AI 추천**: " + self._get_ai_recommendation(num_factors))
-        
-        # 설계법 선택
-        method_names = [m.display_name for m in available_methods]
-        selected_name = st.selectbox("설계법 선택", method_names)
-        
-        selected_method = next(m for m in available_methods if m.display_name == selected_name)
-        
-        # 설계법 설명
-        with st.expander("ℹ️ 설계법 상세 정보"):
-            st.write(f"**{selected_method.display_name}**")
-            st.write(selected_method.description)
-            st.write(f"**복잡도**: {selected_method.complexity}")
-            st.write(f"**사용 사례**: {', '.join(selected_method.use_cases)}")
-        
-        # 설계 파라미터
-        design_params = {}
-        
-        st.subheader("설계 파라미터")
-        
-        if selected_method.name == "full_factorial":
-            # 각 요인의 수준 수 설정
-            st.write("각 요인의 수준 수를 설정하세요:")
-            levels = []
-            for factor in st.session_state.custom_factors:
-                if factor['type'] == 'continuous':
-                    n_levels = st.number_input(
-                        f"{factor['name']} 수준 수",
-                        min_value=2,
-                        max_value=5,
-                        value=3,
-                        key=f"levels_{factor['name']}"
-                    )
-                    levels.append(n_levels)
-                else:
-                    levels.append(len(factor['levels']))
-            design_params['levels'] = levels
-            
-            # 중심점
-            design_params['center_points'] = st.number_input(
-                "중심점 개수",
-                min_value=0,
-                max_value=10,
-                value=3
-            )
-            
-        elif selected_method.name == "ccd":
-            design_params['alpha'] = st.selectbox(
-                "Alpha 값",
-                ['rotatable', 'orthogonal', 'face'],
-                help="rotatable: 회전가능, orthogonal: 직교, face: 면중심"
-            )
-            design_params['center_points'] = st.number_input(
-                "중심점 개수",
-                min_value=1,
-                max_value=10,
-                value=3
-            )
-            
-        elif selected_method.name == "bbd":
-            design_params['center_points'] = st.number_input(
-                "중심점 개수",
-                min_value=1,
-                max_value=10,
-                value=3
-            )
-            
-        elif selected_method.name == "d_optimal":
-            design_params['n_runs'] = st.number_input(
-                "실험 횟수",
-                min_value=num_factors + 1,
-                max_value=100,
-                value=min(20, 2 * num_factors)
-            )
-            design_params['criterion'] = st.selectbox(
-                "최적화 기준",
-                ['D', 'A', 'I', 'G'],
-                help="D: 결정계수, A: 평균분산, I: 적분분산, G: 최대분산"
-            )
-            
-        elif selected_method.name == "latin_hypercube":
-            design_params['n_samples'] = st.number_input(
-                "샘플 수",
-                min_value=num_factors + 1,
-                max_value=1000,
-                value=min(50, 10 * num_factors)
-            )
-            design_params['criterion'] = st.selectbox(
-                "샘플링 기준",
-                ['maximin', 'centermaximin', 'correlation'],
-                help="최적 공간 충진을 위한 기준"
-            )
-        
-        # 반복 실험
-        design_params['replicates'] = st.number_input(
-            "반복 실험 횟수",
-            min_value=1,
-            max_value=5,
-            value=1,
-            help="각 실험점에서의 반복 횟수"
-        )
-        
-        return selected_method.name, design_params
-    
-    def _render_advanced_settings(self) -> Dict[str, Any]:
-        """고급 설정 인터페이스"""
-        settings = {}
-        
-        st.subheader("고급 설정")
-        
-        # 실행 순서
-        col1, col2 = st.columns(2)
-        with col1:
-            settings['randomize'] = st.checkbox(
-                "실행 순서 랜덤화",
-                value=True,
-                help="실험 순서를 무작위로 배치하여 시간 효과 제거"
-            )
-        
-        with col2:
-            if settings['randomize']:
-                settings['blocks'] = st.number_input(
-                    "블록 수",
-                    min_value=1,
-                    max_value=10,
-                    value=1,
-                    help="실험을 여러 블록으로 나누어 실행"
-                )
-        
-        # 제약조건
-        st.subheader("제약조건")
-        
-        settings['constraints'] = []
-        
-        if st.checkbox("제약조건 추가"):
-            constraint_type = st.selectbox(
-                "제약조건 유형",
-                ["선형 제약", "실행 불가능 조합", "필수 포함 실험점"]
-            )
-            
-            if constraint_type == "선형 제약":
-                st.write("예: 2*X1 + 3*X2 <= 100")
-                constraint_expr = st.text_input("제약조건 수식")
-                if constraint_expr:
-                    settings['constraints'].append({
-                        'type': 'linear',
-                        'expression': constraint_expr
-                    })
-            
-            elif constraint_type == "실행 불가능 조합":
-                st.write("특정 요인 조합이 실행 불가능한 경우")
-                # TODO: 구현
-            
-            elif constraint_type == "필수 포함 실험점":
-                st.write("반드시 포함해야 하는 실험 조합")
-                # TODO: 구현
-        
-        # 최적화 설정
-        st.subheader("최적화 설정")
-        
-        settings['optimization'] = {
-            'max_iterations': st.number_input(
-                "최대 반복 횟수",
-                min_value=10,
-                max_value=1000,
-                value=100
-            ),
-            'convergence_tol': st.number_input(
-                "수렴 허용 오차",
-                min_value=0.0001,
-                max_value=0.1,
-                value=0.001,
-                format="%.4f"
-            )
-        }
-        
-        return settings
-    
-    def _render_design_preview(self, design: ExperimentDesign):
-        """설계 미리보기"""
-        st.subheader("📋 실험 설계 미리보기")
-        
-        # 설계 요약
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("총 실험 횟수", design.metadata['total_runs'])
-        with col2:
-            st.metric("요인 수", len(design.factors))
-        with col3:
-            st.metric("반응변수 수", len(design.responses))
-        with col4:
-            st.metric("예상 소요 시간", f"{design.metadata['total_runs'] * 2}시간")
-        
-        # 품질 지표
-        if 'quality_metrics' in design.metadata:
-            st.subheader("품질 지표")
-            metrics = design.metadata['quality_metrics']
-            
-            cols = st.columns(len(metrics))
-            for i, (key, value) in enumerate(metrics.items()):
-                with cols[i]:
-                    st.metric(key, f"{value:.3f}")
-        
-        # 설계 매트릭스
-        st.subheader("실험 설계 매트릭스")
-        
-        # DataFrame 생성
-        df_data = []
-        for i, run in enumerate(design.design_matrix):
-            row = {'Run': i+1}
-            for j, factor in enumerate(design.factors):
-                row[factor.name] = run[j]
-            df_data.append(row)
-        
-        df = pd.DataFrame(df_data)
-        
-        # 실행 순서 추가
-        if design.run_order:
-            df['실행 순서'] = [design.run_order[i] for i in range(len(df))]
-        
-        st.dataframe(df, use_container_width=True)
-        
-        # 시각화
-        if len(design.factors) >= 2:
-            st.subheader("설계 공간 시각화")
-            
-            if len(design.factors) == 2:
-                # 2D 산점도
-                fig = px.scatter(
-                    df,
-                    x=design.factors[0].name,
-                    y=design.factors[1].name,
-                    title="2D 설계 공간"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-            else:
-                # 평행 좌표 플롯
-                factor_names = [f.name for f in design.factors]
-                fig = px.parallel_coordinates(
-                    df[factor_names],
-                    title="다차원 설계 공간 (평행 좌표)"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        
-        # 다운로드 옵션
-        st.subheader("📥 내보내기")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            csv = df.to_csv(index=False)
-            st.download_button(
-                "CSV로 다운로드",
-                csv,
-                "experiment_design.csv",
-                "text/csv"
-            )
-        
-        with col2:
-            # Excel 다운로드 (openpyxl 필요)
-            try:
-                import io
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df.to_excel(writer, sheet_name='Design', index=False)
-                
-                st.download_button(
-                    "Excel로 다운로드",
-                    buffer.getvalue(),
-                    "experiment_design.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            except ImportError:
-                st.info("Excel 내보내기를 위해 openpyxl 설치가 필요합니다.")
-        
-        with col3:
-            # JSON 다운로드
-            design_dict = {
-                'design_id': design.design_id,
-                'name': design.name,
-                'factors': [f.__dict__ for f in design.factors],
-                'responses': [r.__dict__ for r in design.responses],
-                'design_matrix': design.design_matrix.tolist(),
-                'metadata': design.metadata
+            # 메타데이터
+            analysis.metadata = {
+                'analysis_date': datetime.now().isoformat(),
+                'n_observations': len(results),
+                'n_complete_cases': len(results.dropna()),
+                'module_id': self.metadata['module_id']
             }
             
-            st.download_button(
-                "JSON으로 다운로드",
-                json.dumps(design_dict, indent=2),
-                "experiment_design.json",
-                "application/json"
-            )
-    
-    # ==================== 내부 헬퍼 메서드 ====================
-    
-    def _validate_factor(self, factor: Dict) -> Tuple[bool, Optional[str]]:
-        """개별 요인 검증"""
-        if not factor.get('name'):
-            return False, "요인 이름이 필요합니다."
-        
-        if factor['type'] == 'continuous':
-            if factor.get('min_value') is None or factor.get('max_value') is None:
-                return False, f"{factor['name']}: 연속형 요인은 최소/최대값이 필요합니다."
-            if factor['min_value'] >= factor['max_value']:
-                return False, f"{factor['name']}: 최소값은 최대값보다 작아야 합니다."
-        else:
-            if not factor.get('levels'):
-                return False, f"{factor['name']}: 범주형/이산형 요인은 수준이 필요합니다."
-            if len(factor['levels']) < 2:
-                return False, f"{factor['name']}: 최소 2개 이상의 수준이 필요합니다."
-        
-        return True, None
-    
-    def _validate_response(self, response: Dict) -> Tuple[bool, Optional[str]]:
-        """개별 반응변수 검증"""
-        if not response.get('name'):
-            return False, "반응변수 이름이 필요합니다."
-        
-        if response.get('goal') not in ['maximize', 'minimize', 'target']:
-            return False, f"{response['name']}: 올바른 최적화 목표를 선택하세요."
-        
-        if response['goal'] == 'target' and response.get('target_value') is None:
-            return False, f"{response['name']}: 목표값이 필요합니다."
-        
-        return True, None
-    
-    def _validate_design_specific(self, method: str, inputs: Dict) -> Tuple[bool, Optional[str]]:
-        """설계법별 특수 검증"""
-        num_factors = len(inputs['factors'])
-        
-        # 설계법별 검증
-        if method == 'mixture':
-            # 혼합물 설계는 모든 요인의 합이 1이어야 함
-            continuous_factors = [f for f in inputs['factors'] if f['type'] == 'continuous']
-            if len(continuous_factors) < 3:
-                return False, "혼합물 설계는 최소 3개 이상의 연속형 요인이 필요합니다."
-        
-        return True, None
-    
-    def _create_factors_from_input(self, factor_dicts: List[Dict]) -> List[Factor]:
-        """입력 딕셔너리에서 Factor 객체 생성"""
-        factors = []
-        
-        for f_dict in factor_dicts:
-            if f_dict['type'] == 'continuous':
-                factor_type = FactorType.CONTINUOUS
-            elif f_dict['type'] == 'categorical':
-                factor_type = FactorType.CATEGORICAL
-            elif f_dict['type'] == 'discrete':
-                factor_type = FactorType.DISCRETE
-            else:
-                factor_type = FactorType.ORDINAL
+            logger.info("결과 분석 완료")
+            return True, analysis
             
-            factor = Factor(
-                name=f_dict['name'],
-                type=factor_type,
-                unit=f_dict.get('unit', ''),
-                min_value=f_dict.get('min_value'),
-                max_value=f_dict.get('max_value'),
-                levels=f_dict.get('levels', []),
-                description=f_dict.get('description', '')
-            )
-            factors.append(factor)
-        
-        return factors
+        except Exception as e:
+            logger.error(f"결과 분석 중 오류: {e}\n{traceback.format_exc()}")
+            return False, f"분석 실패: {str(e)}"
     
-    def _create_responses_from_input(self, response_dicts: List[Dict]) -> List[Response]:
-        """입력 딕셔너리에서 Response 객체 생성"""
-        responses = []
+    # ==================== 추가 기능 메서드 ====================
+    
+    def get_factor_templates(self) -> Dict[str, List[FactorTemplate]]:
+        """요인 템플릿 반환"""
+        return self.templates.get_factor_templates()
+    
+    def get_response_templates(self) -> Dict[str, List[ResponseTemplate]]:
+        """반응변수 템플릿 반환"""
+        return self.templates.get_response_templates()
+    
+    def get_experiment_presets(self) -> Dict[str, Dict[str, Any]]:
+        """실험 프리셋 반환"""
+        return self.templates.get_experiment_presets()
+    
+    def get_design_methods(self) -> Dict[str, DesignMethod]:
+        """사용 가능한 설계 방법 반환"""
+        return self.design_engine.methods
+    
+    def suggest_next_runs(self, current_results: pd.DataFrame, 
+                         n_additional: int = 5) -> pd.DataFrame:
+        """추가 실험점 제안 (적응형 설계)"""
+        if self.current_design is None or current_results.empty:
+            return pd.DataFrame()
         
-        for r_dict in response_dicts:
-            if r_dict['goal'] == 'maximize':
-                goal = ResponseGoal.MAXIMIZE
-            elif r_dict['goal'] == 'minimize':
-                goal = ResponseGoal.MINIMIZE
+        # 간단한 구현: 예측 분산이 큰 영역 탐색
+        continuous_factors = [f for f in self.current_factors if f.type == FactorType.CONTINUOUS]
+        
+        if not continuous_factors:
+            return pd.DataFrame()
+        
+        # 현재 실험점에서 가장 먼 점들 찾기
+        factor_names = [f.name for f in continuous_factors]
+        existing_points = current_results[factor_names].values
+        
+        # 후보점 생성 (LHS)
+        candidates = self.design_engine._generate_lhs(
+            continuous_factors, 
+            {'n_samples': n_additional * 10}
+        )
+        candidate_df = self.design_engine._convert_to_actual_values(
+            candidates, continuous_factors, []
+        )
+        
+        # 거리 계산하여 가장 먼 점 선택
+        selected_indices = []
+        candidate_array = candidate_df[factor_names].values
+        
+        for _ in range(n_additional):
+            if len(selected_indices) == 0:
+                # 첫 점은 중심에서 가장 먼 점
+                center = existing_points.mean(axis=0)
+                distances = np.linalg.norm(candidate_array - center, axis=1)
             else:
-                goal = ResponseGoal.TARGET
+                # 기존 점들과의 최소 거리가 최대인 점
+                all_points = np.vstack([existing_points, 
+                                       candidate_array[selected_indices]])
+                min_distances = []
+                for i, cand in enumerate(candidate_array):
+                    if i not in selected_indices:
+                        dists = np.linalg.norm(all_points - cand, axis=1)
+                        min_distances.append(dists.min())
+                    else:
+                        min_distances.append(-1)
+                distances = np.array(min_distances)
             
-            response = Response(
-                name=r_dict['name'],
-                unit=r_dict.get('unit', ''),
-                goal=goal,
-                target_value=r_dict.get('target_value'),
-                weight=r_dict.get('weight', 1.0),
-                measurement_method=r_dict.get('measurement_method', '')
-            )
-            responses.append(response)
+            next_idx = distances.argmax()
+            selected_indices.append(next_idx)
         
-        return responses
+        # 선택된 점들 반환
+        next_runs = candidate_df.iloc[selected_indices].copy()
+        next_runs.index = range(1, len(next_runs) + 1)
+        next_runs.index.name = "Additional_Run"
+        
+        # 반응변수 열 추가
+        for response in self.current_responses:
+            next_runs[response.name] = np.nan
+        
+        return next_runs
     
-    def _template_to_factor_dict(self, template: FactorTemplate) -> Dict[str, Any]:
-        """요인 템플릿을 딕셔너리로 변환"""
-        return {
-            'name': template.name,
-            'type': template.default_type.value,
-            'unit': template.default_unit,
-            'min_value': template.default_min,
-            'max_value': template.default_max,
-            'levels': template.default_levels,
-            'description': template.description
-        }
-    
-    def _template_to_response_dict(self, template: ResponseTemplate) -> Dict[str, Any]:
-        """반응변수 템플릿을 딕셔너리로 변환"""
-        return {
-            'name': template.name,
-            'unit': template.default_unit,
-            'goal': template.default_goal.value,
-            'measurement_method': template.measurement_method,
-            'description': template.description,
-            'weight': 1.0
-        }
-    
-    def _get_ai_recommendation(self, num_factors: int) -> str:
-        """AI 기반 설계법 추천"""
-        if num_factors <= 3:
-            return "요인이 적으므로 완전요인설계를 추천합니다. 모든 조합을 실험하여 정확한 분석이 가능합니다."
-        elif num_factors <= 5:
-            return "중심합성설계(CCD) 또는 Box-Behnken 설계를 추천합니다. 2차 효과까지 분석 가능합니다."
-        elif num_factors <= 10:
-            return "부분요인설계 또는 D-최적 설계를 추천합니다. 효율적으로 주요 효과를 파악할 수 있습니다."
-        else:
-            return "Plackett-Burman 설계로 스크리닝 후, 중요 요인만으로 상세 실험을 진행하세요."
-    
-    def _generate_run_order(self, design_matrix: np.ndarray, randomize: bool) -> List[int]:
-        """실험 실행 순서 생성"""
-        n_runs = len(design_matrix)
+    def export_design(self, format: str = 'excel', 
+                     include_analysis: bool = False) -> bytes:
+        """설계 내보내기"""
+        if self.current_design is None:
+            raise ValueError("내보낼 설계가 없습니다.")
         
-        if randomize:
-            run_order = np.random.permutation(n_runs).tolist()
-        else:
-            run_order = list(range(n_runs))
+        import io
         
-        return run_order
-    
-    def _calculate_summary_stats(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """기술 통계 계산"""
-        stats = {}
-        
-        # 반응변수별 통계
-        for response in self.custom_responses:
-            if response.name in data.columns:
-                col_data = data[response.name].dropna()
-                stats[response.name] = {
-                    'mean': col_data.mean(),
-                    'std': col_data.std(),
-                    'min': col_data.min(),
-                    'max': col_data.max(),
-                    'cv': col_data.std() / col_data.mean() * 100 if col_data.mean() != 0 else 0
-                }
-        
-        return stats
-    
-    def _analyze_main_effects(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """주효과 분석"""
-        # TODO: 구현
-        return {}
-    
-    def _analyze_interactions(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """교호작용 분석"""
-        # TODO: 구현
-        return {}
-    
-    def _fit_regression_models(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """회귀 모델 적합"""
-        # TODO: 구현
-        return {}
-    
-    def _find_optimal_conditions(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """최적 조건 찾기"""
-        # TODO: 구현
-        return {}
-    
-    def _create_visualizations(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """시각화 생성"""
-        # TODO: 구현
-        return {}
-    
-    def _generate_recommendations(self, analysis: AnalysisResult) -> List[str]:
-        """분석 기반 추천사항 생성"""
-        recommendations = []
-        
-        # 기본 추천사항
-        recommendations.append("실험 설계가 성공적으로 생성되었습니다.")
-        
-        # TODO: 분석 결과 기반 추천사항 추가
-        
-        return recommendations
-
-
-# ==================== 설계 엔진 ====================
-
-class DesignEngine:
-    """실험 설계 생성 엔진"""
-    
-    def generate_design_matrix(self, method: str, factors: List[Factor], params: Dict) -> np.ndarray:
-        """설계 매트릭스 생성"""
-        
-        if method == "full_factorial":
-            return self._generate_full_factorial(factors, params)
-        elif method == "fractional_factorial":
-            return self._generate_fractional_factorial(factors, params)
-        elif method == "ccd":
-            return self._generate_ccd(factors, params)
-        elif method == "bbd":
-            return self._generate_bbd(factors, params)
-        elif method == "plackett_burman":
-            return self._generate_plackett_burman(factors, params)
-        elif method == "d_optimal":
-            return self._generate_d_optimal(factors, params)
-        elif method == "latin_hypercube":
-            return self._generate_latin_hypercube(factors, params)
-        elif method == "custom":
-            return self._generate_custom(factors, params)
-        else:
-            raise ValueError(f"Unknown design method: {method}")
-    
-    def evaluate_design(self, design_matrix: np.ndarray, factors: List[Factor]) -> Dict[str, float]:
-        """설계 품질 평가"""
-        metrics = {}
-        
-        # 실험 횟수
-        metrics['총 실험수'] = len(design_matrix)
-        
-        # D-efficiency 계산 (간단한 버전)
-        try:
-            X = design_matrix
-            XtX = X.T @ X
-            det_XtX = np.linalg.det(XtX)
-            n = len(X)
-            p = len(factors)
-            d_eff = (det_XtX / n**p) ** (1/p)
-            metrics['D-efficiency'] = min(d_eff, 1.0)
-        except:
-            metrics['D-efficiency'] = 0.0
-        
-        # 균형성
-        balance_score = self._calculate_balance(design_matrix)
-        metrics['균형성'] = balance_score
-        
-        # 직교성
-        orthogonality = self._calculate_orthogonality(design_matrix)
-        metrics['직교성'] = orthogonality
-        
-        return metrics
-    
-    def _generate_full_factorial(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """완전요인설계 생성"""
-        levels = params.get('levels', [3] * len(factors))
-        
-        # pyDOE2 사용
-        design = fullfact(levels)
-        
-        # 실제 값으로 변환
-        scaled_design = np.zeros_like(design)
-        for i, factor in enumerate(factors):
-            if factor.type == FactorType.CONTINUOUS:
-                # -1 to 1 스케일을 실제 범위로 변환
-                min_val = factor.min_value
-                max_val = factor.max_value
-                scaled_design[:, i] = min_val + (design[:, i] / (levels[i] - 1)) * (max_val - min_val)
-            else:
-                scaled_design[:, i] = design[:, i]
-        
-        # 중심점 추가
-        n_center = params.get('center_points', 0)
-        if n_center > 0:
-            center_points = self._generate_center_points(factors, n_center)
-            scaled_design = np.vstack([scaled_design, center_points])
-        
-        return scaled_design
-    
-    def _generate_ccd(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """중심합성설계 생성"""
-        n_factors = len(factors)
-        alpha = params.get('alpha', 'rotatable')
-        n_center = params.get('center_points', 3)
-        
-        # pyDOE2의 ccdesign 사용
-        design = ccdesign(n_factors, center=(n_center, n_center), alpha=alpha, face='ccc')
-        
-        # 실제 값으로 변환
-        scaled_design = self._scale_design(design, factors)
-        
-        return scaled_design
-    
-    def _generate_bbd(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """Box-Behnken 설계 생성"""
-        n_factors = len(factors)
-        n_center = params.get('center_points', 3)
-        
-        # pyDOE2의 bbdesign 사용
-        design = bbdesign(n_factors, center=n_center)
-        
-        # 실제 값으로 변환
-        scaled_design = self._scale_design(design, factors)
-        
-        return scaled_design
-    
-    def _generate_latin_hypercube(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """라틴 하이퍼큐브 샘플링"""
-        n_samples = params.get('n_samples', 10)
-        n_factors = len(factors)
-        
-        # pyDOE2의 lhs 사용
-        design = lhs(n_factors, samples=n_samples)
-        
-        # 실제 값으로 변환
-        scaled_design = np.zeros_like(design)
-        for i, factor in enumerate(factors):
-            if factor.type == FactorType.CONTINUOUS:
-                min_val = factor.min_value
-                max_val = factor.max_value
-                scaled_design[:, i] = min_val + design[:, i] * (max_val - min_val)
-            else:
-                # 범주형은 균등하게 분배
-                n_levels = len(factor.levels)
-                level_indices = np.floor(design[:, i] * n_levels).astype(int)
-                level_indices = np.clip(level_indices, 0, n_levels - 1)
-                scaled_design[:, i] = level_indices
-        
-        return scaled_design
-    
-    def _generate_fractional_factorial(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """부분요인설계 생성"""
-        # 간단한 구현 (2수준만)
-        n_factors = len(factors)
-        
-        # 해상도에 따른 생성기 선택
-        if n_factors <= 4:
-            design = ff2n(n_factors)
-        else:
-            # 2^(k-p) 설계
-            from pyDOE2 import fracfact
-            gen_string = self._get_fractional_generators(n_factors)
-            design = fracfact(gen_string)
-        
-        # -1, 1을 실제 값으로 변환
-        scaled_design = self._scale_design(design, factors)
-        
-        return scaled_design
-    
-    def _generate_plackett_burman(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """Plackett-Burman 설계 생성"""
-        n_factors = len(factors)
-        
-        # pyDOE2의 pbdesign 사용
-        design = pbdesign(n_factors)
-        
-        # 실제 값으로 변환
-        scaled_design = self._scale_design(design, factors)
-        
-        return scaled_design
-    
-    def _generate_d_optimal(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """D-최적 설계 생성"""
-        # 간단한 구현 - 후보점 생성 후 선택
-        n_runs = params.get('n_runs', 20)
-        
-        # 후보점 생성 (그리드)
-        candidates = self._generate_candidate_points(factors, resolution=10)
-        
-        # 욕심쟁이 알고리즘으로 D-최적 점 선택
-        selected_indices = self._select_d_optimal_points(candidates, n_runs)
-        
-        return candidates[selected_indices]
-    
-    def _generate_custom(self, factors: List[Factor], params: Dict) -> np.ndarray:
-        """사용자 정의 설계"""
-        # 사용자가 직접 입력한 설계 매트릭스 반환
-        custom_matrix = params.get('custom_matrix', np.array([]))
-        return custom_matrix
-    
-    def _scale_design(self, coded_design: np.ndarray, factors: List[Factor]) -> np.ndarray:
-        """코딩된 설계를 실제 값으로 변환"""
-        scaled = np.zeros_like(coded_design)
-        
-        for i, factor in enumerate(factors):
-            if factor.type == FactorType.CONTINUOUS:
-                # -1 to 1 범위를 실제 범위로 변환
-                min_val = factor.min_value
-                max_val = factor.max_value
-                center = (max_val + min_val) / 2
-                half_range = (max_val - min_val) / 2
-                scaled[:, i] = center + coded_design[:, i] * half_range
-            else:
-                # 범주형은 인덱스로 변환
-                unique_vals = np.unique(coded_design[:, i])
-                n_levels = len(factor.levels)
-                for j, val in enumerate(unique_vals):
-                    if j < n_levels:
-                        scaled[coded_design[:, i] == val, i] = j
-        
-        return scaled
-    
-    def _generate_center_points(self, factors: List[Factor], n_points: int) -> np.ndarray:
-        """중심점 생성"""
-        center = []
-        
-        for factor in factors:
-            if factor.type == FactorType.CONTINUOUS:
-                center.append((factor.max_value + factor.min_value) / 2)
-            else:
-                center.append(0)  # 범주형은 첫 번째 수준
-        
-        return np.tile(center, (n_points, 1))
-    
-    def _get_fractional_generators(self, n_factors: int) -> str:
-        """부분요인설계 생성기 문자열 반환"""
-        # 일반적인 생성기
-        generators = {
-            5: "a b c d e",
-            6: "a b c d e f",
-            7: "a b c d e f g",
-            8: "a b c d e f g h"
-        }
-        
-        return generators.get(n_factors, "a b c d")
-    
-    def _generate_candidate_points(self, factors: List[Factor], resolution: int) -> np.ndarray:
-        """D-최적을 위한 후보점 생성"""
-        grids = []
-        
-        for factor in factors:
-            if factor.type == FactorType.CONTINUOUS:
-                grid = np.linspace(factor.min_value, factor.max_value, resolution)
-            else:
-                grid = np.arange(len(factor.levels))
-            grids.append(grid)
-        
-        # 모든 조합 생성
-        mesh = np.meshgrid(*grids)
-        candidates = np.column_stack([m.ravel() for m in mesh])
-        
-        return candidates
-    
-    def _select_d_optimal_points(self, candidates: np.ndarray, n_select: int) -> np.ndarray:
-        """D-최적 점 선택 알고리즘"""
-        n_candidates = len(candidates)
-        n_factors = candidates.shape[1]
-        
-        # 초기 선택 (랜덤)
-        selected = np.random.choice(n_candidates, n_select, replace=False)
-        
-        # 간단한 교환 알고리즘
-        for _ in range(100):  # 최대 반복
-            improved = False
-            
-            for i in range(n_select):
-                current_design = candidates[selected]
-                current_det = self._calculate_determinant(current_design)
+        if format == 'excel':
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # 실험 설계
+                self.current_design.to_excel(writer, sheet_name='Design Matrix')
                 
-                # 교환 시도
-                for j in range(n_candidates):
-                    if j not in selected:
-                        # i번째를 j로 교환
-                        new_selected = selected.copy()
-                        new_selected[i] = j
-                        new_design = candidates[new_selected]
-                        new_det = self._calculate_determinant(new_design)
-                        
-                        if new_det > current_det:
-                            selected = new_selected
-                            improved = True
-                            break
+                # 요인 정보
+                factor_info = pd.DataFrame([
+                    {
+                        'Name': f.name,
+                        'Type': f.type.value,
+                        'Unit': f.unit,
+                        'Min': f.min_value,
+                        'Max': f.max_value,
+                        'Levels': ', '.join(map(str, f.levels)) if f.levels else ''
+                    }
+                    for f in self.current_factors
+                ])
+                factor_info.to_excel(writer, sheet_name='Factors', index=False)
                 
-                if improved:
-                    break
+                # 반응변수 정보
+                response_info = pd.DataFrame([
+                    {
+                        'Name': r.name,
+                        'Unit': r.unit,
+                        'Goal': r.goal.value,
+                        'Target': r.target_value
+                    }
+                    for r in self.current_responses
+                ])
+                response_info.to_excel(writer, sheet_name='Responses', index=False)
+                
+                # 품질 지표
+                if self.design_quality:
+                    quality_df = pd.DataFrame([{
+                        'D-Efficiency': self.design_quality.d_efficiency,
+                        'Condition Number': self.design_quality.condition_number,
+                        'Orthogonality': self.design_quality.orthogonality,
+                        'Overall Score': self.design_quality.overall_score
+                    }])
+                    quality_df.to_excel(writer, sheet_name='Quality Metrics', index=False)
             
-            if not improved:
-                break
+            output.seek(0)
+            return output.getvalue()
         
-        return selected
+        elif format == 'csv':
+            output = io.StringIO()
+            self.current_design.to_csv(output)
+            return output.getvalue().encode('utf-8')
+        
+        else:
+            raise ValueError(f"지원하지 않는 형식: {format}")
     
-    def _calculate_determinant(self, design: np.ndarray) -> float:
-        """정보 행렬의 행렬식 계산"""
+    def _create_analysis_plots(self, results: pd.DataFrame) -> Dict[str, Any]:
+        """분석 시각화 생성"""
+        plots = {}
+        
         try:
-            X = np.column_stack([np.ones(len(design)), design])
-            XtX = X.T @ X
-            return np.linalg.det(XtX)
-        except:
-            return 0.0
-    
-    def _calculate_balance(self, design: np.ndarray) -> float:
-        """설계 균형성 계산"""
-        balance_scores = []
+            # 1. 반응변수 분포
+            response_names = [r.name for r in self.current_responses if r.name in results.columns]
+            if response_names:
+                fig = make_subplots(
+                    rows=1, cols=len(response_names),
+                    subplot_titles=response_names
+                )
+                
+                for i, resp_name in enumerate(response_names):
+                    data = results[resp_name].dropna()
+                    fig.add_trace(
+                        go.Box(y=data, name=resp_name, boxpoints='all'),
+                        row=1, col=i+1
+                    )
+                
+                fig.update_layout(
+                    title="반응변수 분포",
+                    showlegend=False,
+                    height=400
+                )
+                plots['response_distribution'] = fig.to_dict()
+            
+            # 2. 요인-반응변수 산점도 (연속형 요인만)
+            continuous_factors = [f for f in self.current_factors 
+                                if f.type == FactorType.CONTINUOUS and f.name in results.columns]
+            
+            if continuous_factors and response_names:
+                n_factors = len(continuous_factors)
+                n_responses = len(response_names)
+                
+                fig = make_subplots(
+                    rows=n_responses, cols=n_factors,
+                    subplot_titles=[f.name for f in continuous_factors] * n_responses
+                )
+                
+                for i, response in enumerate(response_names):
+                    for j, factor in enumerate(continuous_factors):
+                        fig.add_trace(
+                            go.Scatter(
+                                x=results[factor.name],
+                                y=results[response],
+                                mode='markers',
+                                name=f"{factor.name} vs {response}",
+                                marker=dict(size=8)
+                            ),
+                            row=i+1, col=j+1
+                        )
+                
+                fig.update_layout(
+                    title="요인-반응변수 관계",
+                    showlegend=False,
+                    height=300 * n_responses
+                )
+                plots['factor_response_scatter'] = fig.to_dict()
+            
+            # 3. 상관관계 히트맵
+            numeric_cols = [f.name for f in self.current_factors if f.type == FactorType.CONTINUOUS]
+            numeric_cols.extend(response_names)
+            
+            if len(numeric_cols) > 1:
+                corr_data = results[numeric_cols].corr()
+                
+                fig = go.Figure(data=go.Heatmap(
+                    z=corr_data.values,
+                    x=corr_data.columns,
+                    y=corr_data.columns,
+                    colorscale='RdBu',
+                    zmid=0,
+                    text=np.round(corr_data.values, 2),
+                    texttemplate='%{text}'
+                ))
+                
+                fig.update_layout(
+                    title="상관관계 히트맵",
+                    height=600,
+                    width=600
+                )
+                plots['correlation_heatmap'] = fig.to_dict()
+            
+        except Exception as e:
+            logger.error(f"시각화 생성 중 오류: {e}")
         
-        for col in design.T:
-            unique, counts = np.unique(col, return_counts=True)
-            if len(unique) > 1:
-                balance = 1 - np.std(counts) / np.mean(counts)
-                balance_scores.append(balance)
-        
-        return np.mean(balance_scores) if balance_scores else 0.0
-    
-    def _calculate_orthogonality(self, design: np.ndarray) -> float:
-        """설계 직교성 계산"""
-        n_factors = design.shape[1]
-        
-        if n_factors < 2:
-            return 1.0
-        
-        # 상관계수 행렬
-        corr_matrix = np.corrcoef(design.T)
-        
-        # 대각선 제외 평균 절대 상관계수
-        off_diagonal = np.abs(corr_matrix[np.triu_indices(n_factors, k=1)])
-        
-        # 직교성 점수 (0에 가까울수록 직교)
-        orthogonality = 1 - np.mean(off_diagonal)
-        
-        return orthogonality
+        return plots
 
 
-# ==================== 검증 시스템 ====================
+# ==================== 모듈 등록 ====================
 
-class ValidationSystem:
-    """실험 설계 검증 시스템"""
+def register_module():
+    """모듈 레지스트리에 등록"""
+    return GeneralExperimentModule()
+
+
+# ==================== 테스트 코드 ====================
+
+if __name__ == "__main__":
+    # 모듈 테스트
+    module = GeneralExperimentModule()
     
-    def validate_design(self, design: ExperimentDesign) -> ValidationResult:
-        """종합적인 설계 검증"""
-        result = ValidationResult(passed=True)
-        
-        # 통계적 검증
-        stat_result = self._validate_statistical(design)
-        if not stat_result.passed:
-            result.passed = False
-            result.errors.extend(stat_result.errors)
-        result.warnings.extend(stat_result.warnings)
-        
-        # 실용적 검증
-        prac_result = self._validate_practical(design)
-        if not prac_result.passed:
-            result.passed = False
-            result.errors.extend(prac_result.errors)
-        result.warnings.extend(prac_result.warnings)
-        
-        # 품질 평가
-        result.quality_metrics = self._assess_quality(design)
-        
-        return result
+    # 테스트 입력
+    test_inputs = {
+        'factors': [
+            {
+                'name': '온도',
+                'type': 'continuous',
+                'min_value': 20,
+                'max_value': 100,
+                'unit': '°C'
+            },
+            {
+                'name': '시간',
+                'type': 'continuous',
+                'min_value': 10,
+                'max_value': 60,
+                'unit': 'min'
+            },
+            {
+                'name': '촉매',
+                'type': 'categorical',
+                'levels': ['A', 'B', 'C']
+            }
+        ],
+        'responses': [
+            {
+                'name': '수율',
+                'unit': '%',
+                'goal': 'maximize'
+            },
+            {
+                'name': '순도',
+                'unit': '%',
+                'goal': 'maximize'
+            }
+        ],
+        'design_method': 'central_composite',
+        'objective': 'optimization'
+    }
     
-    def _validate_statistical(self, design: ExperimentDesign) -> ValidationResult:
-        """통계적 타당성 검증"""
-        result = ValidationResult(passed=True)
-        
-        n_runs = len(design.design_matrix)
-        n_factors = len(design.factors)
-        n_responses = len(design.responses)
-        
-        # 자유도 검사
-        min_runs = n_factors + 1
-        if n_runs < min_runs:
-            result.passed = False
-            result.errors.append(f"실험 횟수({n_runs})가 최소 요구사항({min_runs})보다 적습니다.")
-        
-        # 검정력 검사 (간단한 추정)
-        if n_runs < 2 * n_factors:
-            result.warnings.append("주효과 검정력이 낮을 수 있습니다.")
-        
-        if n_runs < n_factors * (n_factors + 1) / 2:
-            result.warnings.append("교호작용 검출이 어려울 수 있습니다.")
-        
-        return result
+    # 검증
+    is_valid, msg = module.validate_input(test_inputs)
+    print(f"검증 결과: {is_valid}, {msg}")
     
-    def _validate_practical(self, design: ExperimentDesign) -> ValidationResult:
-        """실용적 타당성 검증"""
-        result = ValidationResult(passed=True)
-        
-        # 실험 횟수 체크
-        n_runs = len(design.design_matrix)
-        if n_runs > 100:
-            result.warnings.append(f"실험 횟수가 많습니다 ({n_runs}회). 단계적 접근을 고려하세요.")
-        
-        # 극단값 체크
-        for i, factor in enumerate(design.factors):
-            if factor.type == FactorType.CONTINUOUS:
-                values = design.design_matrix[:, i]
-                if np.any(values == factor.min_value) or np.any(values == factor.max_value):
-                    result.warnings.append(f"{factor.name}의 극단값이 포함되어 있습니다.")
-        
-        return result
-    
-    def _assess_quality(self, design: ExperimentDesign) -> Dict[str, float]:
-        """설계 품질 평가"""
-        metrics = {}
-        
-        # 기본 메트릭은 이미 계산됨
-        if 'quality_metrics' in design.metadata:
-            metrics.update(design.metadata['quality_metrics'])
-        
-        # 추가 메트릭
-        metrics['completeness'] = 1.0  # 모든 필수 정보 포함 여부
-        
-        return metrics
+    if is_valid:
+        # 설계 생성
+        success, design = module.generate_design(test_inputs)
+        if success:
+            print(f"\n생성된 설계:\n{design.design_matrix}")
+            print(f"\n품질 지표: {design.quality_metrics}")
+        else:
+            print(f"설계 생성 실패: {design}")
