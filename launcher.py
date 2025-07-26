@@ -2,7 +2,7 @@
 🚀 Universal DOE Platform - 데스크톱 애플리케이션 실행기
 ================================================================================
 Streamlit 기반 데스크톱 앱을 실행하는 메인 런처
-크로스 플랫폼 지원, 자동 포트 관리, 프로세스 모니터링
+크로스플랫폼 지원, 자동 포트 관리, 프로세스 모니터링, 시스템 트레이
 ================================================================================
 """
 
@@ -18,10 +18,13 @@ import atexit
 import json
 import logging
 import argparse
+import psutil
+import queue
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 from contextlib import closing
+import platform
 
 # 프로젝트 루트 경로 설정
 if getattr(sys, 'frozen', False):
@@ -43,6 +46,7 @@ sys.path.insert(0, str(BASE_DIR))
 # 앱 정보
 APP_NAME = "Universal DOE Platform"
 APP_VERSION = "2.0.0"
+APP_ID = "com.universaldoe.platform"
 APP_ICON = str(BASE_DIR / 'assets' / 'icon.ico') if (BASE_DIR / 'assets' / 'icon.ico').exists() else None
 
 # 서버 설정
@@ -50,14 +54,20 @@ DEFAULT_PORT = 8501
 PORT_RANGE = (8501, 8510)
 STARTUP_TIMEOUT = 30  # 초
 CHECK_INTERVAL = 0.5  # 초
+HEALTH_CHECK_INTERVAL = 10  # 초
 
 # 로그 설정
 LOG_DIR = DATA_DIR / 'logs'
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / f'launcher_{datetime.now().strftime("%Y%m%d")}.log'
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_LOG_BACKUPS = 5
 
 # PID 파일
 PID_FILE = DATA_DIR / 'app.pid'
+
+# 설정 파일
+CONFIG_FILE = DATA_DIR / 'launcher_config.json'
 
 # ===========================================================================
 # 🔍 로깅 설정
@@ -65,6 +75,8 @@ PID_FILE = DATA_DIR / 'app.pid'
 
 def setup_logging(debug: bool = False):
     """로깅 시스템 설정"""
+    from logging.handlers import RotatingFileHandler
+    
     log_level = logging.DEBUG if debug else logging.INFO
     
     # 포맷터 설정
@@ -73,8 +85,13 @@ def setup_logging(debug: bool = False):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # 파일 핸들러
-    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    # 파일 핸들러 (순환)
+    file_handler = RotatingFileHandler(
+        LOG_FILE, 
+        maxBytes=MAX_LOG_SIZE,
+        backupCount=MAX_LOG_BACKUPS,
+        encoding='utf-8'
+    )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(log_level)
     
@@ -89,20 +106,128 @@ def setup_logging(debug: bool = False):
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
     
-    return logging.getLogger(__name__)
+    return logging.getLogger('launcher')
 
 # ===========================================================================
-# 🖥️ 시스템 유틸리티
+# 🔧 유틸리티 함수
+# ===========================================================================
+
+def find_free_port(start_port: int = DEFAULT_PORT, 
+                  end_port: int = PORT_RANGE[1]) -> Optional[int]:
+    """사용 가능한 포트 찾기"""
+    for port in range(start_port, end_port + 1):
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            if sock.connect_ex(('localhost', port)) != 0:
+                return port
+    return None
+
+def check_port_in_use(port: int) -> bool:
+    """포트 사용 여부 확인"""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        return sock.connect_ex(('localhost', port)) == 0
+
+def get_streamlit_processes() -> List[psutil.Process]:
+    """실행 중인 Streamlit 프로세스 찾기"""
+    streamlit_processes = []
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            cmdline = proc.info.get('cmdline', [])
+            if cmdline and any('streamlit' in arg for arg in cmdline):
+                streamlit_processes.append(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return streamlit_processes
+
+def kill_existing_processes():
+    """기존 Streamlit 프로세스 종료"""
+    processes = get_streamlit_processes()
+    for proc in processes:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+def save_pid(pid: int):
+    """PID 파일 저장"""
+    with open(PID_FILE, 'w') as f:
+        f.write(str(pid))
+
+def load_pid() -> Optional[int]:
+    """저장된 PID 로드"""
+    if PID_FILE.exists():
+        try:
+            with open(PID_FILE, 'r') as f:
+                return int(f.read().strip())
+        except Exception:
+            pass
+    return None
+
+def remove_pid():
+    """PID 파일 제거"""
+    if PID_FILE.exists():
+        try:
+            PID_FILE.unlink()
+        except Exception:
+            pass
+
+# ===========================================================================
+# 💾 설정 관리
+# ===========================================================================
+
+class LauncherConfig:
+    """런처 설정 관리"""
+    
+    DEFAULT_CONFIG = {
+        'theme': 'light',
+        'auto_open_browser': True,
+        'use_system_tray': True,
+        'minimize_to_tray': True,
+        'start_minimized': False,
+        'check_updates': True,
+        'webview_mode': False,
+        'kiosk_mode': False,
+        'debug_mode': False,
+        'custom_port': None,
+        'window_size': [1280, 800],
+        'window_position': None
+    }
+    
+    @classmethod
+    def load(cls) -> Dict[str, Any]:
+        """설정 로드"""
+        if CONFIG_FILE.exists():
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return {**cls.DEFAULT_CONFIG, **config}
+            except Exception:
+                pass
+        return cls.DEFAULT_CONFIG.copy()
+    
+    @classmethod
+    def save(cls, config: Dict[str, Any]):
+        """설정 저장"""
+        try:
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.error(f"설정 저장 실패: {e}")
+
+# ===========================================================================
+# 🔍 시스템 체크
 # ===========================================================================
 
 class SystemChecker:
-    """시스템 요구사항 검사"""
+    """시스템 요구사항 체크"""
     
     @staticmethod
     def check_requirements() -> Tuple[bool, Dict[str, Any]]:
         """시스템 요구사항 확인"""
-        import platform
-        
         results = {
             'passed': True,
             'checks': {},
@@ -111,8 +236,8 @@ class SystemChecker:
         }
         
         # Python 버전 확인
-        python_version = sys.version_info
         min_version = (3, 8)
+        python_version = sys.version_info
         
         results['checks']['python_version'] = {
             'current': f"{python_version.major}.{python_version.minor}.{python_version.micro}",
@@ -135,9 +260,8 @@ class SystemChecker:
         
         # 메모리 확인
         try:
-            import psutil
             memory = psutil.virtual_memory()
-            min_memory_gb = 2
+            min_memory_gb = 4  # 권장 4GB
             
             results['checks']['memory'] = {
                 'total_gb': round(memory.total / (1024**3), 2),
@@ -148,14 +272,13 @@ class SystemChecker:
             
             if not results['checks']['memory']['passed']:
                 results['warnings'].append(f"권장 메모리: {min_memory_gb}GB 이상")
-        except ImportError:
-            results['warnings'].append("메모리 확인 불가 (psutil 미설치)")
+        except Exception:
+            results['warnings'].append("메모리 확인 불가")
         
         # 디스크 공간 확인
         try:
-            import shutil
-            disk_usage = shutil.disk_usage(DATA_DIR.parent)
-            min_disk_mb = 500
+            disk_usage = psutil.disk_usage(str(DATA_DIR.parent))
+            min_disk_mb = 2000  # 2GB
             
             results['checks']['disk_space'] = {
                 'free_mb': round(disk_usage.free / (1024**2), 2),
@@ -168,7 +291,186 @@ class SystemChecker:
         except Exception:
             results['warnings'].append("디스크 공간 확인 불가")
         
+        # 필수 모듈 확인
+        required_modules = ['streamlit', 'pandas', 'numpy', 'plotly']
+        missing_modules = []
+        
+        for module in required_modules:
+            try:
+                __import__(module)
+            except ImportError:
+                missing_modules.append(module)
+        
+        results['checks']['modules'] = {
+            'required': required_modules,
+            'missing': missing_modules,
+            'passed': len(missing_modules) == 0
+        }
+        
+        if missing_modules:
+            results['errors'].append(f"필수 모듈 누락: {', '.join(missing_modules)}")
+            results['passed'] = False
+        
         return results['passed'], results
+
+# ===========================================================================
+# 🖥️ 시스템 트레이
+# ===========================================================================
+
+class SystemTray:
+    """시스템 트레이 관리"""
+    
+    def __init__(self, launcher):
+        self.launcher = launcher
+        self.icon = None
+        self._running = False
+        
+    def create_tray_icon(self):
+        """트레이 아이콘 생성"""
+        try:
+            import pystray
+            from PIL import Image
+            
+            # 아이콘 이미지 로드
+            if APP_ICON and Path(APP_ICON).exists():
+                image = Image.open(APP_ICON)
+            else:
+                # 기본 아이콘 생성
+                image = Image.new('RGB', (64, 64), color='blue')
+            
+            # 메뉴 생성
+            menu = pystray.Menu(
+                pystray.MenuItem("열기", self.on_open),
+                pystray.MenuItem("대시보드", self.on_dashboard),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("로그 보기", self.on_view_logs),
+                pystray.MenuItem("설정", self.on_settings),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("재시작", self.on_restart),
+                pystray.MenuItem("종료", self.on_quit)
+            )
+            
+            # 아이콘 생성
+            self.icon = pystray.Icon(
+                APP_NAME,
+                image,
+                APP_NAME,
+                menu
+            )
+            
+            return True
+            
+        except ImportError:
+            logging.warning("pystray 모듈이 없어 시스템 트레이를 사용할 수 없습니다.")
+            return False
+        except Exception as e:
+            logging.error(f"트레이 아이콘 생성 실패: {e}")
+            return False
+    
+    def run(self):
+        """트레이 아이콘 실행"""
+        if self.create_tray_icon():
+            self._running = True
+            self.icon.run()
+    
+    def stop(self):
+        """트레이 아이콘 중지"""
+        self._running = False
+        if self.icon:
+            self.icon.stop()
+    
+    def on_open(self, icon, item):
+        """앱 열기"""
+        self.launcher.open_browser()
+    
+    def on_dashboard(self, icon, item):
+        """대시보드 열기"""
+        webbrowser.open(f"{self.launcher.app_url}/1_📊_Dashboard")
+    
+    def on_view_logs(self, icon, item):
+        """로그 보기"""
+        if platform.system() == 'Windows':
+            os.startfile(LOG_FILE)
+        elif platform.system() == 'Darwin':
+            subprocess.run(['open', LOG_FILE])
+        else:
+            subprocess.run(['xdg-open', LOG_FILE])
+    
+    def on_settings(self, icon, item):
+        """설정 열기"""
+        webbrowser.open(f"{self.launcher.app_url}/settings")
+    
+    def on_restart(self, icon, item):
+        """앱 재시작"""
+        self.launcher.restart()
+    
+    def on_quit(self, icon, item):
+        """앱 종료"""
+        self.launcher.shutdown()
+
+# ===========================================================================
+# 🌐 WebView 관리
+# ===========================================================================
+
+class WebViewManager:
+    """WebView 관리자"""
+    
+    def __init__(self, url: str, config: Dict[str, Any]):
+        self.url = url
+        self.config = config
+        self.window = None
+        
+    def create_window(self):
+        """WebView 창 생성"""
+        try:
+            import webview
+            
+            # 창 설정
+            window_config = {
+                'title': APP_NAME,
+                'width': self.config.get('window_size', [1280, 800])[0],
+                'height': self.config.get('window_size', [1280, 800])[1],
+                'resizable': True,
+                'fullscreen': self.config.get('kiosk_mode', False),
+                'min_size': (800, 600)
+            }
+            
+            # 위치 설정
+            if self.config.get('window_position'):
+                window_config['x'] = self.config['window_position'][0]
+                window_config['y'] = self.config['window_position'][1]
+            
+            # 창 생성
+            self.window = webview.create_window(
+                **window_config,
+                url=self.url
+            )
+            
+            # 이벤트 핸들러
+            self.window.events.closed += self.on_closed
+            
+            return True
+            
+        except ImportError:
+            logging.warning("pywebview 모듈이 없어 WebView를 사용할 수 없습니다.")
+            return False
+        except Exception as e:
+            logging.error(f"WebView 창 생성 실패: {e}")
+            return False
+    
+    def start(self):
+        """WebView 시작"""
+        try:
+            import webview
+            
+            if self.create_window():
+                webview.start()
+        except Exception as e:
+            logging.error(f"WebView 시작 실패: {e}")
+    
+    def on_closed(self):
+        """창 닫힘 이벤트"""
+        logging.info("WebView 창이 닫혔습니다.")
 
 # ===========================================================================
 # 🚀 메인 런처 클래스
@@ -177,341 +479,337 @@ class SystemChecker:
 class DOELauncher:
     """Universal DOE Platform 실행기"""
     
-    def __init__(self, debug: bool = False, port: Optional[int] = None):
+    def __init__(self, debug: bool = False, port: Optional[int] = None,
+                 config: Optional[Dict[str, Any]] = None):
         self.debug = debug
-        self.logger = setup_logging(debug)
-        self.streamlit_process: Optional[subprocess.Popen] = None
-        self.port = port or DEFAULT_PORT
-        self.app_url = None
-        self.is_running = False
-        self.start_time = None
+        self.config = config or LauncherConfig.load()
+        self.logger = setup_logging(debug or self.config.get('debug_mode', False))
         
-        # 시그널 핸들러 등록
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # 서버 설정
+        self.port = port or self.config.get('custom_port') or DEFAULT_PORT
+        self.app_url = f"http://localhost:{self.port}"
+        self.process: Optional[subprocess.Popen] = None
+        self.start_time: Optional[datetime] = None
+        
+        # 시스템 트레이
+        self.tray: Optional[SystemTray] = None
+        self.tray_thread: Optional[threading.Thread] = None
+        
+        # WebView
+        self.webview: Optional[WebViewManager] = None
+        
+        # 상태
+        self._running = False
+        self._shutting_down = False
+        self._restart_requested = False
+        
+        # 신호 핸들러 등록
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+        
+        # 종료 시 정리
         atexit.register(self.cleanup)
-        
-        self.logger.info(f"{'='*60}")
-        self.logger.info(f"{APP_NAME} v{APP_VERSION} 실행기 시작")
-        self.logger.info(f"{'='*60}")
     
-    def _signal_handler(self, signum, frame):
-        """시그널 핸들러"""
-        self.logger.info(f"시그널 {signum} 수신 - 종료 중...")
-        self.cleanup()
-        sys.exit(0)
-    
-    def check_single_instance(self) -> bool:
-        """단일 인스턴스 확인"""
-        if PID_FILE.exists():
-            try:
-                with open(PID_FILE, 'r') as f:
-                    old_pid = int(f.read().strip())
-                
-                # 프로세스 존재 확인
-                try:
-                    import psutil
-                    if psutil.pid_exists(old_pid):
-                        process = psutil.Process(old_pid)
-                        if 'python' in process.name().lower():
-                            self.logger.warning(f"이미 실행 중입니다 (PID: {old_pid})")
-                            return False
-                except ImportError:
-                    # psutil이 없으면 기본 방법 사용
-                    try:
-                        os.kill(old_pid, 0)
-                        self.logger.warning(f"이미 실행 중일 수 있습니다 (PID: {old_pid})")
-                        return False
-                    except OSError:
-                        pass
-                
-            except (ValueError, IOError):
-                pass
-            
-            # 오래된 PID 파일 제거
-            PID_FILE.unlink()
-        
-        # 새 PID 파일 생성
-        try:
-            with open(PID_FILE, 'w') as f:
-                f.write(str(os.getpid()))
-            self.logger.info(f"PID 파일 생성: {os.getpid()}")
-            return True
-        except Exception as e:
-            self.logger.error(f"PID 파일 생성 실패: {e}")
-            return True  # 실패해도 계속 진행
-    
-    def find_free_port(self) -> int:
-        """사용 가능한 포트 찾기"""
-        # 지정된 포트 먼저 확인
-        if self.port and self._is_port_free(self.port):
-            return self.port
-        
-        # 포트 범위에서 검색
-        for port in range(PORT_RANGE[0], PORT_RANGE[1] + 1):
-            if self._is_port_free(port):
-                self.logger.info(f"사용 가능한 포트 발견: {port}")
-                return port
-        
-        raise RuntimeError(f"포트 {PORT_RANGE[0]}-{PORT_RANGE[1]} 범위에서 사용 가능한 포트를 찾을 수 없습니다")
-    
-    def _is_port_free(self, port: int) -> bool:
-        """포트 사용 가능 여부 확인"""
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-            try:
-                sock.bind(('', port))
-                return True
-            except socket.error:
-                return False
+    def signal_handler(self, signum, frame):
+        """신호 핸들러"""
+        self.logger.info(f"신호 수신: {signum}")
+        self.shutdown()
     
     def create_data_directories(self):
-        """필요한 데이터 디렉토리 생성"""
+        """데이터 디렉토리 생성"""
         directories = [
-            DATA_DIR / 'db',
-            DATA_DIR / 'cache', 
+            DATA_DIR,
+            DATA_DIR / 'cache',
             DATA_DIR / 'logs',
-            DATA_DIR / 'temp',
+            DATA_DIR / 'exports',
             DATA_DIR / 'backups',
-            BASE_DIR / 'modules' / 'user_modules'
+            DATA_DIR / 'modules',
+            DATA_DIR / 'templates'
         ]
         
         for directory in directories:
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-                self.logger.debug(f"디렉토리 생성/확인: {directory}")
-            except Exception as e:
-                self.logger.error(f"디렉토리 생성 실패 {directory}: {e}")
+            directory.mkdir(parents=True, exist_ok=True)
+            self.logger.debug(f"디렉토리 생성: {directory}")
     
     def initialize_database(self):
         """데이터베이스 초기화"""
         try:
-            # 여기서는 최소한의 DB 체크만 수행
-            # 실제 초기화는 앱 시작 시 수행
-            db_path = DATA_DIR / 'db' / 'app.db'
+            from utils.database_manager import DatabaseManager
+            
+            db_path = DATA_DIR / 'app.db'
+            db_manager = DatabaseManager(str(db_path))
+            
+            # 테이블 생성
             if not db_path.exists():
-                self.logger.info("데이터베이스 파일이 없습니다. 앱 시작 시 생성됩니다.")
+                self.logger.info("데이터베이스 초기화 중...")
+                db_manager.create_tables()
+                self.logger.info("데이터베이스 초기화 완료")
             else:
-                self.logger.info(f"기존 데이터베이스 발견: {db_path}")
+                self.logger.info("기존 데이터베이스 발견")
+                
         except Exception as e:
-            self.logger.error(f"데이터베이스 초기화 오류: {e}")
+            self.logger.error(f"데이터베이스 초기화 실패: {e}")
+    
+    def find_available_port(self) -> int:
+        """사용 가능한 포트 찾기"""
+        # 설정된 포트 확인
+        if self.port and not check_port_in_use(self.port):
+            return self.port
+        
+        # 포트 범위에서 찾기
+        port = find_free_port()
+        if port:
+            self.logger.info(f"사용 가능한 포트 발견: {port}")
+            return port
+        
+        raise RuntimeError("사용 가능한 포트를 찾을 수 없습니다.")
     
     def start_streamlit(self):
         """Streamlit 서버 시작"""
-        self.port = self.find_free_port()
-        self.app_url = f"http://localhost:{self.port}"
-        
-        # Streamlit 명령어 구성
-        cmd = [
-            sys.executable,
-            "-m", "streamlit", "run",
-            str(BASE_DIR / "polymer_platform.py"),
-            "--server.port", str(self.port),
-            "--server.address", "localhost",
-            "--server.headless", "true",
-            "--browser.serverAddress", "localhost",
-            "--browser.gatherUsageStats", "false",
-            "--server.fileWatcherType", "none",  # 파일 감시 비활성화
-            "--logger.level", "error" if not self.debug else "info"
-        ]
-        
-        # 테마 설정 (있으면)
-        if (BASE_DIR / ".streamlit" / "config.toml").exists():
-            cmd.extend(["--config", str(BASE_DIR / ".streamlit" / "config.toml")])
-        
-        self.logger.info(f"Streamlit 서버 시작 중... (포트: {self.port})")
-        self.logger.debug(f"명령어: {' '.join(cmd)}")
-        
-        # 환경 변수 설정
-        env = os.environ.copy()
-        env['STREAMLIT_BROWSER_GATHER_USAGE_STATS'] = 'false'
-        env['PYTHONUNBUFFERED'] = '1'  # 실시간 출력
-        
         try:
+            # 포트 확인
+            self.port = self.find_available_port()
+            self.app_url = f"http://localhost:{self.port}"
+            
+            # Streamlit 명령어 구성
+            cmd = [
+                sys.executable, '-m', 'streamlit', 'run',
+                str(BASE_DIR / 'polymer_platform.py'),
+                '--server.port', str(self.port),
+                '--server.address', 'localhost',
+                '--server.headless', 'true',
+                '--browser.gatherUsageStats', 'false'
+            ]
+            
+            if self.debug:
+                cmd.extend(['--logger.level', 'debug'])
+            
+            # 환경 변수 설정
+            env = os.environ.copy()
+            env['STREAMLIT_BROWSER_GATHER_USAGE_STATS'] = 'false'
+            
             # 프로세스 시작
-            if sys.platform == "win32":
-                # Windows: 새 콘솔 창 숨기기
+            self.logger.info(f"Streamlit 서버 시작: {' '.join(cmd)}")
+            
+            if platform.system() == 'Windows':
+                # Windows: 콘솔 창 숨기기
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                
-                self.streamlit_process = subprocess.Popen(
-                    cmd,
-                    env=env,
+                self.process = subprocess.Popen(
+                    cmd, env=env,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     startupinfo=startupinfo,
-                    creationflags=subprocess.CREATE_NO_WINDOW
+                    universal_newlines=True,
+                    bufsize=1
                 )
             else:
-                # Unix 계열
-                self.streamlit_process = subprocess.Popen(
-                    cmd,
-                    env=env,
+                # Unix-like
+                self.process = subprocess.Popen(
+                    cmd, env=env,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.STDOUT,
+                    universal_newlines=True,
+                    bufsize=1
                 )
             
-            self.logger.info(f"Streamlit 프로세스 시작됨 (PID: {self.streamlit_process.pid})")
+            # PID 저장
+            save_pid(self.process.pid)
             
-            # 출력 모니터링 스레드 시작
-            if self.debug:
-                threading.Thread(target=self._monitor_output, daemon=True).start()
+            # 로그 스레드 시작
+            log_thread = threading.Thread(
+                target=self.read_process_output,
+                daemon=True
+            )
+            log_thread.start()
             
         except Exception as e:
-            self.logger.error(f"Streamlit 시작 실패: {e}")
+            self.logger.error(f"Streamlit 서버 시작 실패: {e}")
             raise
     
-    def _monitor_output(self):
-        """Streamlit 출력 모니터링 (디버그용)"""
+    def read_process_output(self):
+        """프로세스 출력 읽기"""
+        if not self.process:
+            return
+        
         try:
-            for line in iter(self.streamlit_process.stdout.readline, b''):
+            for line in iter(self.process.stdout.readline, ''):
                 if line:
-                    self.logger.debug(f"[Streamlit] {line.decode().strip()}")
+                    line = line.strip()
+                    if self.debug:
+                        print(f"[Streamlit] {line}")
+                    self.logger.debug(f"Streamlit: {line}")
         except Exception as e:
-            self.logger.error(f"출력 모니터링 오류: {e}")
+            self.logger.error(f"출력 읽기 오류: {e}")
     
     def wait_for_server(self) -> bool:
         """서버 시작 대기"""
-        self.logger.info("서버가 준비될 때까지 대기 중...")
         start_time = time.time()
         
         while time.time() - start_time < STARTUP_TIMEOUT:
+            if check_port_in_use(self.port):
+                # 서버 응답 확인
+                try:
+                    import requests
+                    response = requests.get(self.app_url, timeout=1)
+                    if response.status_code == 200:
+                        self.logger.info("서버가 성공적으로 시작되었습니다.")
+                        return True
+                except Exception:
+                    pass
+            
             # 프로세스 상태 확인
-            if self.streamlit_process and self.streamlit_process.poll() is not None:
-                self.logger.error(f"Streamlit 프로세스가 예기치 않게 종료됨 (코드: {self.streamlit_process.returncode})")
+            if self.process and self.process.poll() is not None:
+                self.logger.error(f"프로세스가 예기치 않게 종료됨: {self.process.returncode}")
                 return False
             
-            # 서버 응답 확인
-            try:
-                with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-                    sock.settimeout(1)
-                    result = sock.connect_ex(('localhost', self.port))
-                    if result == 0:
-                        self.logger.info("✅ 서버가 준비되었습니다!")
-                        self.is_running = True
-                        return True
-            except Exception:
-                pass
-            
-            # 진행 표시
-            elapsed = int(time.time() - start_time)
-            print(f"\r⏳ 서버 시작 중... ({elapsed}/{STARTUP_TIMEOUT}초)", end='', flush=True)
             time.sleep(CHECK_INTERVAL)
         
-        print()  # 줄바꿈
-        self.logger.error("서버 시작 시간 초과")
         return False
     
     def open_browser(self):
         """브라우저 열기"""
-        if not self.app_url:
+        if not self.config.get('auto_open_browser', True):
             return
         
-        self.logger.info(f"브라우저 열기: {self.app_url}")
-        
-        try:
-            # 플랫폼별 최적화
-            if sys.platform == "win32":
-                # Windows
-                os.startfile(self.app_url)
-            elif sys.platform == "darwin":
-                # macOS
-                subprocess.run(["open", self.app_url])
-            else:
-                # Linux/Unix
-                subprocess.run(["xdg-open", self.app_url])
-        except Exception:
-            # 실패 시 기본 방법 사용
-            try:
-                webbrowser.open(self.app_url)
-            except Exception as e:
-                self.logger.error(f"브라우저 열기 실패: {e}")
-                self.logger.info(f"수동으로 브라우저를 열고 다음 주소로 접속하세요: {self.app_url}")
+        if self.config.get('webview_mode', False):
+            # WebView 모드
+            self.webview = WebViewManager(self.app_url, self.config)
+            webview_thread = threading.Thread(
+                target=self.webview.start,
+                daemon=True
+            )
+            webview_thread.start()
+        else:
+            # 시스템 브라우저
+            time.sleep(1)  # 서버 안정화 대기
+            webbrowser.open(self.app_url)
     
     def monitor_process(self):
         """프로세스 모니터링"""
-        self.logger.info("프로세스 모니터링 시작...")
+        self._running = True
+        last_health_check = time.time()
+        
+        while self._running and not self._shutting_down:
+            try:
+                # 프로세스 확인
+                if self.process and self.process.poll() is not None:
+                    if not self._shutting_down:
+                        self.logger.error("프로세스가 예기치 않게 종료되었습니다.")
+                        if self.config.get('auto_restart', True):
+                            self.logger.info("자동 재시작 시도...")
+                            self.restart()
+                        else:
+                            break
+                
+                # 헬스 체크
+                current_time = time.time()
+                if current_time - last_health_check >= HEALTH_CHECK_INTERVAL:
+                    if not check_port_in_use(self.port):
+                        self.logger.warning("서버가 응답하지 않습니다.")
+                    last_health_check = current_time
+                
+                time.sleep(1)
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                self.logger.error(f"모니터링 오류: {e}")
+                time.sleep(5)
+    
+    def start_system_tray(self):
+        """시스템 트레이 시작"""
+        if not self.config.get('use_system_tray', True):
+            return
         
         try:
-            while self.is_running:
-                # 프로세스 상태 확인
-                if self.streamlit_process and self.streamlit_process.poll() is not None:
-                    self.logger.warning(f"Streamlit 프로세스가 종료됨 (코드: {self.streamlit_process.returncode})")
-                    self.is_running = False
-                    break
-                
-                # CPU/메모리 사용량 모니터링 (옵션)
-                if self.debug:
-                    try:
-                        import psutil
-                        process = psutil.Process(self.streamlit_process.pid)
-                        cpu_percent = process.cpu_percent(interval=1)
-                        memory_mb = process.memory_info().rss / (1024 * 1024)
-                        self.logger.debug(f"리소스 사용: CPU {cpu_percent:.1f}%, 메모리 {memory_mb:.1f}MB")
-                    except:
-                        pass
-                
-                time.sleep(5)  # 5초마다 확인
-                
-        except KeyboardInterrupt:
-            self.logger.info("사용자에 의해 중단됨")
+            self.tray = SystemTray(self)
+            self.tray_thread = threading.Thread(
+                target=self.tray.run,
+                daemon=True
+            )
+            self.tray_thread.start()
+            self.logger.info("시스템 트레이 시작됨")
         except Exception as e:
-            self.logger.error(f"모니터링 오류: {e}")
+            self.logger.warning(f"시스템 트레이 시작 실패: {e}")
     
     def cleanup(self):
         """정리 작업"""
-        self.logger.info("정리 작업 시작...")
+        if self._shutting_down:
+            return
         
-        # Streamlit 프로세스 종료
-        if self.streamlit_process:
+        self._shutting_down = True
+        self._running = False
+        
+        # 트레이 아이콘 제거
+        if self.tray:
+            self.tray.stop()
+        
+        # 프로세스 종료
+        if self.process:
             try:
-                self.logger.info("Streamlit 프로세스 종료 중...")
-                self.streamlit_process.terminate()
-                
-                # 종료 대기 (최대 5초)
-                try:
-                    self.streamlit_process.wait(timeout=5)
-                    self.logger.info("Streamlit 프로세스가 정상 종료되었습니다")
-                except subprocess.TimeoutExpired:
-                    self.logger.warning("강제 종료 중...")
-                    self.streamlit_process.kill()
-                    self.streamlit_process.wait()
-                    
-            except Exception as e:
-                self.logger.error(f"프로세스 종료 오류: {e}")
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            except Exception:
+                pass
         
         # PID 파일 제거
-        try:
-            if PID_FILE.exists():
-                PID_FILE.unlink()
-                self.logger.info("PID 파일 제거됨")
-        except Exception as e:
-            self.logger.error(f"PID 파일 제거 실패: {e}")
-        
-        # 임시 파일 정리
-        try:
-            temp_dir = DATA_DIR / 'temp'
-            if temp_dir.exists():
-                import shutil
-                for item in temp_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        shutil.rmtree(item)
-                self.logger.info("임시 파일 정리 완료")
-        except Exception as e:
-            self.logger.error(f"임시 파일 정리 오류: {e}")
+        remove_pid()
         
         self.logger.info("정리 작업 완료")
     
-    def run(self):
-        """메인 실행 함수"""
+    def shutdown(self):
+        """앱 종료"""
+        self.logger.info("앱 종료 중...")
+        self._shutting_down = True
+        self._running = False
+        self.cleanup()
+        sys.exit(0)
+    
+    def restart(self):
+        """앱 재시작"""
+        self.logger.info("앱 재시작 중...")
+        self._restart_requested = True
+        
+        # 현재 프로세스 종료
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except Exception:
+                if self.process.poll() is None:
+                    self.process.kill()
+        
+        # 새 프로세스 시작
+        time.sleep(2)
+        self.start_streamlit()
+        
+        if self.wait_for_server():
+            self.logger.info("재시작 완료")
+            self._restart_requested = False
+        else:
+            self.logger.error("재시작 실패")
+    
+    def run(self) -> int:
+        """런처 실행"""
         try:
+            print(f"\n{'='*60}")
+            print(f"🚀 {APP_NAME} v{APP_VERSION}")
+            print(f"{'='*60}\n")
+            
             # 단일 인스턴스 확인
-            if not self.check_single_instance():
-                print(f"\n❌ {APP_NAME}이(가) 이미 실행 중입니다.")
-                print("기존 앱을 종료하거나 브라우저에서 http://localhost:8501 을 열어보세요.\n")
-                return 1
+            old_pid = load_pid()
+            if old_pid:
+                try:
+                    old_process = psutil.Process(old_pid)
+                    if 'streamlit' in ' '.join(old_process.cmdline()).lower():
+                        print(f"\n⚠️  이미 실행 중인 인스턴스가 있습니다. (PID: {old_pid})")
+                        print("기존 앱을 종료하거나 브라우저에서 http://localhost:8501 을 열어보세요.\n")
+                        return 1
+                except psutil.NoSuchProcess:
+                    remove_pid()
             
             # 시스템 요구사항 확인
             print(f"\n🔍 시스템 요구사항 확인 중...")
@@ -547,9 +845,14 @@ class DOELauncher:
                 print("\n❌ 서버 시작 실패")
                 return 1
             
+            # 시스템 트레이 시작
+            if self.config.get('use_system_tray', True):
+                self.start_system_tray()
+            
             # 브라우저 열기
-            print("\n🌐 브라우저 열기...")
-            self.open_browser()
+            if not self.config.get('start_minimized', False):
+                print("\n🌐 브라우저 열기...")
+                self.open_browser()
             
             # 실행 정보 출력
             print(f"\n{'='*60}")
@@ -557,6 +860,10 @@ class DOELauncher:
             print(f"{'='*60}")
             print(f"🔗 주소: {self.app_url}")
             print(f"📝 로그: {LOG_FILE}")
+            
+            if self.tray:
+                print(f"🔔 시스템 트레이에서 제어 가능")
+            
             print(f"\n종료하려면 Ctrl+C를 누르세요...")
             print(f"{'='*60}\n")
             
@@ -600,6 +907,8 @@ def main():
   python launcher.py --debug           # 디버그 모드
   python launcher.py --port 8502       # 특정 포트 지정
   python launcher.py --no-browser      # 브라우저 자동 열기 비활성화
+  python launcher.py --webview         # WebView 모드로 실행
+  python launcher.py --tray            # 시스템 트레이 최소화 시작
         """
     )
     
@@ -623,6 +932,36 @@ def main():
     )
     
     parser.add_argument(
+        '--webview', '-w',
+        action='store_true',
+        help='WebView 모드로 실행'
+    )
+    
+    parser.add_argument(
+        '--no-tray',
+        action='store_true',
+        help='시스템 트레이 비활성화'
+    )
+    
+    parser.add_argument(
+        '--tray', '-t',
+        action='store_true',
+        help='시스템 트레이로 최소화 시작'
+    )
+    
+    parser.add_argument(
+        '--kiosk', '-k',
+        action='store_true',
+        help='키오스크 모드 (전체화면)'
+    )
+    
+    parser.add_argument(
+        '--reset-config',
+        action='store_true',
+        help='설정 초기화'
+    )
+    
+    parser.add_argument(
         '--version', '-v',
         action='version',
         version=f'{APP_NAME} v{APP_VERSION}'
@@ -630,14 +969,37 @@ def main():
     
     args = parser.parse_args()
     
+    # 설정 로드 및 적용
+    if args.reset_config:
+        CONFIG_FILE.unlink(missing_ok=True)
+        print("설정이 초기화되었습니다.")
+    
+    config = LauncherConfig.load()
+    
+    # 명령줄 옵션 적용
+    if args.no_browser:
+        config['auto_open_browser'] = False
+    if args.webview:
+        config['webview_mode'] = True
+    if args.no_tray:
+        config['use_system_tray'] = False
+    if args.tray:
+        config['start_minimized'] = True
+    if args.kiosk:
+        config['kiosk_mode'] = True
+        config['webview_mode'] = True
+    
+    # 설정 저장
+    LauncherConfig.save(config)
+    
     # 런처 실행
     try:
-        launcher = DOELauncher(debug=args.debug, port=args.port)
+        launcher = DOELauncher(
+            debug=args.debug, 
+            port=args.port,
+            config=config
+        )
         
-        # no-browser 옵션 처리
-        if args.no_browser:
-            launcher.open_browser = lambda: None
-            
         return launcher.run()
         
     except Exception as e:
