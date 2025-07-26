@@ -1,9 +1,9 @@
 """
-🎨 Universal DOE Platform - 공통 UI 컴포넌트
-================================================================================
+utils/common_ui.py
 재사용 가능한 UI 컴포넌트 라이브러리
-일관된 디자인 시스템, 테마 지원, 접근성, AI 투명성 원칙 구현
-================================================================================
+
+Universal DOE Platform의 시각적 일관성과 코드 재사용성을 담당합니다.
+모든 페이지에서 사용되는 공통 UI 컴포넌트들을 제공합니다.
 """
 
 import streamlit as st
@@ -24,47 +24,57 @@ import re
 
 # 로컬 설정 임포트
 try:
-    from config.theme_config import COLORS, FONTS, LAYOUT, CUSTOM_CSS, apply_theme
-    from config.app_config import (
-        APP_INFO, UI_CONFIG, AI_EXPLANATION_CONFIG,
-        FEATURE_FLAGS, get_config
-    )
+    from config.theme_config import COLORS, FONTS, LAYOUT, COMPONENTS
 except ImportError:
     # 기본값 설정
     COLORS = {
-        'primary': '#1E88E5',
-        'secondary': '#43A047',
-        'accent': '#E53935',
-        'warning': '#FB8C00',
-        'info': '#00ACC1',
-        'success': '#43A047',
-        'error': '#E53935',
-        'background': '#FAFAFA',
-        'surface': '#FFFFFF',
-        'text_primary': '#212121',
-        'text_secondary': '#757575'
+        'primary': '#7C3AED',
+        'secondary': '#F59E0B', 
+        'success': '#10B981',
+        'danger': '#EF4444',
+        'warning': '#F59E0B',
+        'info': '#3B82F6',
+        'dark': '#1F2937',
+        'light': '#F3F4F6',
+        'muted': '#6B7280'
     }
+
+try:
+    from config.app_config import APP_NAME, APP_DESCRIPTION, UI_CONFIG, AI_EXPLANATION_CONFIG
+except ImportError:
+    APP_NAME = "Universal DOE Platform"
+    APP_DESCRIPTION = "AI 기반 고분자 실험 설계 플랫폼"
     UI_CONFIG = {'theme': {'default': 'light'}}
     AI_EXPLANATION_CONFIG = {
         'default_mode': 'auto',
-        'detail_sections': {
-            'reasoning': True,
-            'alternatives': True,
-            'background': True,
-            'confidence': True,
-            'limitations': True
+        'auto_mode_rules': {
+            'beginner': 'detailed',
+            'intermediate': 'balanced',
+            'expert': 'concise'
         }
     }
 
-# ===========================================================================
-# 🔧 로깅 설정
-# ===========================================================================
+# error_handler는 아직 구현되지 않았으므로 조건부 처리
+try:
+    from utils.error_handler import handle_ui_error
+except ImportError:
+    def handle_ui_error(func):
+        """에러 핸들러 데코레이터 (임시)"""
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                st.error(f"오류가 발생했습니다: {str(e)}")
+                return None
+        return wrapper
 
+# 로깅 설정
 logger = logging.getLogger(__name__)
 
-# ===========================================================================
-# 📌 상수 정의
-# ===========================================================================
+# ============================================================================
+# 상수 정의
+# ============================================================================
 
 # 아이콘 매핑
 ICONS = {
@@ -102,183 +112,197 @@ ICONS = {
     'save': '💾',
     'download': '⬇️',
     'upload': '⬆️',
-    'share': '📤',
-    'copy': '📋',
     'refresh': '🔄',
-    'sync': '🔄',
+    'share': '🔗',
+    'copy': '📋',
     
     # AI
     'ai': '🤖',
-    'detail': '🔍',
-    'simple': '📝',
-    'reasoning': '🧠',
-    'alternative': '🔀',
-    'confidence': '📊',
-    'limitation': '⚠️',
-    
-    # 상태
-    'online': '🟢',
-    'offline': '🔴',
-    'syncing': '🔄',
-    'local': '💾',
-    'cloud': '☁️'
+    'brain': '🧠',
+    'magic': '✨',
+    'thinking': '🤔'
 }
 
 # 애니메이션 CSS
 ANIMATIONS_CSS = """
 <style>
-/* 페이드 인 애니메이션 */
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* 펄스 애니메이션 */
 @keyframes pulse {
-    0% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.05); opacity: 0.8; }
-    100% { transform: scale(1); opacity: 1; }
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
 }
 
-/* 슬라이드 인 애니메이션 */
 @keyframes slideIn {
-    from { transform: translateX(-100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
 }
 
-/* 회전 애니메이션 */
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+.animate-fadeIn {
+    animation: fadeIn 0.5s ease-out;
 }
 
-/* 애니메이션 클래스 */
-.animate-fadeIn { animation: fadeIn 0.5s ease-out; }
-.animate-pulse { animation: pulse 2s infinite; }
-.animate-slideIn { animation: slideIn 0.3s ease-out; }
-.animate-spin { animation: spin 1s linear infinite; }
-
-/* 호버 효과 */
-.hover-scale { transition: transform 0.2s; cursor: pointer; }
-.hover-scale:hover { transform: scale(1.05); }
-
-/* 그림자 효과 */
-.shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
-.shadow-md { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-.shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
-
-/* 카드 스타일 */
-.custom-card {
-    background: white;
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-    border: 1px solid #e5e7eb;
-    transition: all 0.3s ease;
+.animate-pulse {
+    animation: pulse 2s infinite;
 }
 
-.custom-card:hover {
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-    transform: translateY(-2px);
+.animate-slideIn {
+    animation: slideIn 0.3s ease-out;
 }
 
-/* AI 응답 스타일 */
+/* AI 응답 컨테이너 스타일 */
 .ai-response-container {
-    background: linear-gradient(135deg, #f3e7ff 0%, #e7f3ff 100%);
-    border-radius: 12px;
-    padding: 1.5rem;
+    background: linear-gradient(to right, #f3f4f6, #ffffff);
+    border-left: 4px solid #7C3AED;
+    padding: 1rem;
+    border-radius: 0.5rem;
     margin: 1rem 0;
 }
 
 .ai-detail-section {
-    background: rgba(255, 255, 255, 0.8);
-    border-radius: 8px;
-    padding: 1rem;
-    margin: 0.5rem 0;
-    border-left: 3px solid #7c3aed;
+    background: #f9fafb;
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    margin-top: 0.5rem;
 }
 
-/* 토글 버튼 스타일 */
-.toggle-button {
-    background: #f3f4f6;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 0.5rem 1rem;
-    cursor: pointer;
-    transition: all 0.2s;
+/* 메트릭 카드 스타일 */
+.metric-card {
+    background: white;
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
 }
 
-.toggle-button:hover {
+.metric-card:hover {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+}
+
+/* 데이터 테이블 스타일 */
+.dataframe {
+    font-size: 0.875rem !important;
+}
+
+.dataframe th {
+    background-color: #f3f4f6 !important;
+    font-weight: 600 !important;
+}
+
+.dataframe tr:hover {
+    background-color: #f9fafb !important;
+}
+
+/* 프로그레스 바 스타일 */
+.progress-container {
     background: #e5e7eb;
-    transform: translateY(-1px);
+    border-radius: 9999px;
+    height: 0.5rem;
+    overflow: hidden;
 }
 
-/* 오프라인 배지 */
-.offline-badge {
+.progress-bar {
+    background: linear-gradient(to right, #7C3AED, #a78bfa);
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+/* 빈 상태 스타일 */
+.empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: #6b7280;
+}
+
+.empty-state-icon {
+    font-size: 3rem;
+    opacity: 0.5;
+    margin-bottom: 1rem;
+}
+
+/* 오프라인 인디케이터 */
+.offline-indicator {
     position: fixed;
-    top: 10px;
-    right: 10px;
-    background: #ef4444;
-    color: white;
+    top: 1rem;
+    right: 1rem;
+    background: #fef3c7;
+    color: #92400e;
     padding: 0.5rem 1rem;
-    border-radius: 20px;
-    font-size: 0.875rem;
+    border-radius: 0.375rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     z-index: 1000;
-    animation: pulse 2s infinite;
 }
 </style>
 """
 
-# ===========================================================================
-# 🎨 페이지 설정 함수
-# ===========================================================================
+# ============================================================================
+# 페이지 설정
+# ============================================================================
 
 def setup_page_config(
     page_title: Optional[str] = None,
-    page_icon: str = "🧬",
+    page_icon: Optional[str] = None,
     layout: Literal["centered", "wide"] = "wide",
     initial_sidebar_state: Literal["auto", "expanded", "collapsed"] = "expanded"
 ):
     """
-    Streamlit 페이지 설정
+    Streamlit 페이지 기본 설정
     
     Args:
         page_title: 페이지 제목
         page_icon: 페이지 아이콘
-        layout: 레이아웃 (centered/wide)
+        layout: 레이아웃
         initial_sidebar_state: 사이드바 초기 상태
     """
     st.set_page_config(
-        page_title=page_title or APP_INFO['name'],
-        page_icon=page_icon,
+        page_title=page_title or APP_NAME,
+        page_icon=page_icon or "🧬",
         layout=layout,
         initial_sidebar_state=initial_sidebar_state,
         menu_items={
-            'Get Help': APP_INFO.get('github', '#'),
-            'Report a bug': f"{APP_INFO.get('github', '#')}/issues",
-            'About': APP_INFO.get('description', '')
+            'Get Help': 'https://github.com/your-repo/polymer-doe/wiki',
+            'Report a bug': 'https://github.com/your-repo/polymer-doe/issues',
+            'About': APP_DESCRIPTION
         }
     )
     
-    # 커스텀 CSS 적용
+    # CSS 적용
     st.markdown(ANIMATIONS_CSS, unsafe_allow_html=True)
-    if 'CUSTOM_CSS' in globals():
-        st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     
-    # 테마 적용
-    if 'apply_theme' in globals():
-        apply_theme()
+    # 세션 상태 초기화
+    _initialize_session_state()
 
-# ===========================================================================
-# 🎯 헤더 컴포넌트
-# ===========================================================================
+
+def _initialize_session_state():
+    """세션 상태 초기화"""
+    defaults = {
+        'show_ai_details': 'auto',  # AI 상세 설명 표시 모드
+        'ui_animations': True,      # 애니메이션 활성화
+        'compact_mode': False,      # 컴팩트 모드
+        'help_tooltips': True,      # 도움말 툴팁 표시
+        'theme': 'light',          # 테마
+        'last_interaction': datetime.now()  # 마지막 상호작용 시간
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+# ============================================================================
+# 헤더/레이아웃 컴포넌트
+# ============================================================================
 
 def render_header(
     title: str,
     subtitle: Optional[str] = None,
-    breadcrumb: Optional[List[Tuple[str, str]]] = None,
-    show_user_info: bool = True,
-    show_notifications: bool = True,
+    icon: Optional[str] = None,
+    breadcrumb: Optional[List[str]] = None,
     actions: Optional[List[Dict[str, Any]]] = None
 ):
     """
@@ -287,252 +311,475 @@ def render_header(
     Args:
         title: 페이지 제목
         subtitle: 부제목
-        breadcrumb: 브레드크럼 [(label, page), ...]
-        show_user_info: 사용자 정보 표시 여부
-        show_notifications: 알림 아이콘 표시 여부
-        actions: 추가 액션 버튼 리스트
+        icon: 아이콘
+        breadcrumb: 경로 표시
+        actions: 우측 액션 버튼들
     """
     # 브레드크럼
     if breadcrumb:
-        breadcrumb_html = " › ".join([
-            f'<a href="#" onclick="return false;" style="color: {COLORS["primary"]};">{label}</a>'
-            for label, _ in breadcrumb[:-1]
-        ])
-        if breadcrumb:
-            breadcrumb_html += f' › <span style="color: {COLORS["text_secondary"]};">{breadcrumb[-1][0]}</span>'
-        st.markdown(breadcrumb_html, unsafe_allow_html=True)
+        breadcrumb_html = " › ".join(breadcrumb)
+        st.markdown(
+            f'<div style="color: {COLORS.get("muted", "#6B7280")}; '
+            f'font-size: 0.875rem; margin-bottom: 0.5rem;">'
+            f'{breadcrumb_html}</div>',
+            unsafe_allow_html=True
+        )
     
     # 헤더 컨테이너
-    col1, col2, col3 = st.columns([6, 2, 2])
+    col1, col2 = st.columns([4, 1])
     
     with col1:
-        if subtitle:
-            st.markdown(f"# {title}\n{subtitle}")
+        # 제목
+        if icon:
+            st.markdown(f"# {icon} {title}")
         else:
             st.markdown(f"# {title}")
+        
+        # 부제목
+        if subtitle:
+            st.markdown(f"_{subtitle}_")
     
     with col2:
-        if show_user_info and st.session_state.get('authenticated', False):
-            user = st.session_state.get('user', {})
-            render_user_badge(user)
-    
-    with col3:
-        action_cols = st.columns(len(actions) + (1 if show_notifications else 0))
-        
-        # 알림 버튼
-        if show_notifications:
-            with action_cols[0]:
-                notification_count = st.session_state.get('unread_notifications', 0)
-                if st.button(
-                    f"{ICONS['notification']} {notification_count if notification_count > 0 else ''}",
-                    key="header_notifications",
-                    help="알림"
-                ):
-                    st.session_state.show_notifications = True
-        
-        # 추가 액션 버튼
+        # 액션 버튼
         if actions:
-            for i, action in enumerate(actions):
-                with action_cols[i + (1 if show_notifications else 0)]:
-                    if st.button(
-                        action.get('label', ''),
-                        key=f"header_action_{i}",
-                        help=action.get('help', '')
-                    ):
-                        if 'callback' in action:
-                            action['callback']()
+            for action in actions:
+                if st.button(
+                    action.get('label', ''),
+                    key=action.get('key'),
+                    type=action.get('type', 'secondary'),
+                    disabled=action.get('disabled', False),
+                    use_container_width=True
+                ):
+                    if 'callback' in action:
+                        action['callback']()
     
     st.divider()
 
-# ===========================================================================
-# 📊 메트릭 카드
-# ===========================================================================
+
+def render_sidebar_menu(menu_items: List[Dict[str, Any]], active_key: Optional[str] = None):
+    """
+    사이드바 메뉴 렌더링
+    
+    Args:
+        menu_items: 메뉴 아이템 리스트
+        active_key: 활성 메뉴 키
+    """
+    with st.sidebar:
+        st.markdown("### 🧬 Universal DOE")
+        st.divider()
+        
+        for item in menu_items:
+            is_active = item.get('key') == active_key
+            
+            # 메뉴 아이템 스타일
+            if is_active:
+                st.markdown(
+                    f"**{item.get('icon', '')} {item.get('label', '')}**",
+                    help=item.get('help', '')
+                )
+            else:
+                if st.button(
+                    f"{item.get('icon', '')} {item.get('label', '')}",
+                    key=f"menu_{item.get('key')}",
+                    use_container_width=True,
+                    help=item.get('help', '')
+                ):
+                    if 'callback' in item:
+                        item['callback']()
+
+
+def render_offline_indicator():
+    """오프라인 인디케이터 표시"""
+    if st.session_state.get('offline_mode', False):
+        st.markdown(
+            '<div class="offline-indicator animate-pulse">'
+            '🔌 오프라인 모드'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+
+# ============================================================================
+# AI 응답 컴포넌트 (프로젝트 핵심 기능)
+# ============================================================================
+
+def render_ai_response(
+    response: Dict[str, Any],
+    response_type: str = "general",
+    show_confidence: bool = True,
+    allow_feedback: bool = True,
+    key: Optional[str] = None
+):
+    """
+    AI 응답 표시 (상세 설명 토글 기능 포함)
+    
+    이 함수는 프로젝트의 핵심 요구사항인 AI 투명성 원칙을 구현합니다.
+    사용자 레벨과 무관하게 누구나 AI의 추론 과정을 볼 수 있습니다.
+    
+    Args:
+        response: AI 응답 딕셔너리
+            - main: 핵심 답변 (필수)
+            - details: 상세 설명 딕셔너리 (선택)
+                - reasoning: 추론 과정
+                - alternatives: 대안
+                - background: 이론적 배경
+                - confidence: 신뢰도
+                - limitations: 한계점
+        response_type: 응답 유형
+        show_confidence: 신뢰도 표시 여부
+        allow_feedback: 피드백 허용 여부
+        key: 고유 키
+    """
+    # 응답 유효성 검사
+    if not response or 'main' not in response:
+        st.error("AI 응답이 올바르지 않습니다.")
+        return
+    
+    # 상세 설명 토글 상태 관리
+    detail_key = f"ai_details_{key}" if key else "ai_details_global"
+    
+    # 기본 표시 모드 결정
+    if detail_key not in st.session_state:
+        user_level = st.session_state.get('user', {}).get('level', 'beginner')
+        auto_mode = AI_EXPLANATION_CONFIG.get('auto_mode_rules', {}).get(
+            user_level,
+            AI_EXPLANATION_CONFIG.get('default_mode', 'balanced')
+        )
+        st.session_state[detail_key] = auto_mode == 'detailed'
+    
+    # AI 응답 컨테이너
+    with st.container():
+        st.markdown('<div class="ai-response-container">', unsafe_allow_html=True)
+        
+        # 헤더
+        col1, col2 = st.columns([5, 1])
+        
+        with col1:
+            st.markdown(f"### {ICONS['ai']} AI 응답")
+        
+        with col2:
+            # 상세 설명 토글 버튼
+            if st.button(
+                "🔍 상세" if not st.session_state[detail_key] else "📌 간단",
+                key=f"toggle_{detail_key}",
+                help="AI의 추론 과정과 상세 설명을 확인하세요"
+            ):
+                st.session_state[detail_key] = not st.session_state[detail_key]
+        
+        # 메인 응답
+        st.markdown(f"**{response['main']}**")
+        
+        # 신뢰도 표시
+        if show_confidence and 'details' in response and 'confidence' in response['details']:
+            confidence = response['details']['confidence']
+            if isinstance(confidence, (int, float)):
+                confidence_pct = int(confidence * 100) if confidence <= 1 else int(confidence)
+                confidence_color = (
+                    'green' if confidence_pct >= 80 
+                    else 'orange' if confidence_pct >= 60 
+                    else 'red'
+                )
+                st.markdown(
+                    f"<div style='margin-top: 0.5rem;'>"
+                    f"신뢰도: <span style='color: {confidence_color}; font-weight: bold;'>"
+                    f"{confidence_pct}%</span></div>",
+                    unsafe_allow_html=True
+                )
+        
+        # 상세 설명 (토글 상태에 따라)
+        if st.session_state[detail_key] and 'details' in response:
+            st.markdown("---")
+            details = response['details']
+            
+            # 추론 과정
+            if 'reasoning' in details:
+                with st.expander("🧠 추론 과정", expanded=True):
+                    st.markdown(details['reasoning'])
+            
+            # 대안
+            if 'alternatives' in details:
+                with st.expander("💡 다른 옵션", expanded=False):
+                    st.markdown(details['alternatives'])
+            
+            # 이론적 배경
+            if 'background' in details:
+                with st.expander("📚 이론적 배경", expanded=False):
+                    st.markdown(details['background'])
+            
+            # 한계점
+            if 'limitations' in details:
+                with st.expander("⚠️ 주의사항 및 한계", expanded=False):
+                    st.markdown(details['limitations'])
+        
+        # 피드백 섹션
+        if allow_feedback:
+            st.markdown("---")
+            col1, col2, col3 = st.columns([1, 1, 3])
+            
+            with col1:
+                if st.button("👍", key=f"like_{key}", help="도움이 되었어요"):
+                    _record_feedback(key, 'like')
+                    st.success("피드백 감사합니다!")
+            
+            with col2:
+                if st.button("👎", key=f"dislike_{key}", help="개선이 필요해요"):
+                    _record_feedback(key, 'dislike')
+                    st.info("피드백을 반영하여 개선하겠습니다.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _record_feedback(response_key: str, feedback_type: str):
+    """AI 응답 피드백 기록"""
+    feedback_data = {
+        'response_key': response_key,
+        'feedback_type': feedback_type,
+        'timestamp': datetime.now().isoformat(),
+        'user': st.session_state.get('user', {}).get('id', 'anonymous')
+    }
+    
+    # 피드백 저장 (추후 구현)
+    logger.info(f"AI feedback recorded: {feedback_data}")
+
+
+# ============================================================================
+# 메트릭/데이터 표시 컴포넌트
+# ============================================================================
 
 def render_metric_card(
     label: str,
     value: Union[str, int, float],
     delta: Optional[Union[str, int, float]] = None,
     delta_color: Literal["normal", "inverse", "off"] = "normal",
-    help: Optional[str] = None,
     icon: Optional[str] = None,
-    background: Optional[str] = None,
-    animate: bool = True
+    help: Optional[str] = None,
+    background_color: Optional[str] = None
 ):
     """
-    메트릭 카드 표시
+    메트릭 카드 렌더링
     
     Args:
-        label: 메트릭 레이블
-        value: 메트릭 값
+        label: 레이블
+        value: 값
         delta: 변화량
         delta_color: 델타 색상 모드
-        help: 도움말 텍스트
         icon: 아이콘
-        background: 배경색
-        animate: 애니메이션 여부
+        help: 도움말
+        background_color: 배경색
     """
-    animation_class = "animate-fadeIn" if animate else ""
-    bg_style = f"background: {background};" if background else ""
+    # 배경 스타일
+    bg_style = f"background-color: {background_color};" if background_color else ""
     
-    # 델타 색상 결정
+    # 델타 색상 매핑
     delta_colors = {
-        'normal': COLORS['success'] if str(delta).startswith('+') else COLORS['error'],
-        'inverse': COLORS['error'] if str(delta).startswith('+') else COLORS['success'],
-        'off': COLORS['text_secondary']
+        "normal": COLORS.get('success', '#10B981') if delta and str(delta).startswith('+') else COLORS.get('danger', '#EF4444'),
+        "inverse": COLORS.get('danger', '#EF4444') if delta and str(delta).startswith('+') else COLORS.get('success', '#10B981'),
+        "off": COLORS.get('muted', '#6B7280')
     }
     
+    # HTML 렌더링
     html = f"""
-    <div class="custom-card {animation_class}" style="{bg_style}">
+    <div class="metric-card" style="{bg_style}">
         <div style="display: flex; align-items: center; justify-content: space-between;">
             <div style="flex: 1;">
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                     {f'<span style="font-size: 1.5rem;">{icon}</span>' if icon else ''}
-                    <p style="color: {COLORS['text_secondary']}; margin: 0; font-size: 0.875rem;">
+                    <p style="color: {COLORS.get('muted', '#6B7280')}; margin: 0; font-size: 0.875rem;">
                         {label}
                     </p>
                 </div>
-                <h2 style="margin: 0.5rem 0; color: {COLORS['text_primary']};">
+                <h2 style="margin: 0.5rem 0; color: {COLORS.get('dark', '#1F2937')};">
                     {value}
                 </h2>
-                {f'<p style="color: {delta_colors.get(delta_color, COLORS["text_secondary"])}; margin: 0; font-size: 0.875rem;">{delta}</p>' if delta else ''}
+                {f'<p style="color: {delta_colors.get(delta_color, COLORS.get("muted", "#6B7280"))}; margin: 0; font-size: 0.875rem;">{delta}</p>' if delta else ''}
             </div>
-            {f'<span title="{help}" style="cursor: help; color: {COLORS["text_secondary"]};">{ICONS["help"]}</span>' if help else ''}
+            {f'<span title="{help}" style="cursor: help; color: {COLORS.get("muted", "#6B7280")};">{ICONS["help"]}</span>' if help else ''}
         </div>
     </div>
     """
     
     st.markdown(html, unsafe_allow_html=True)
 
-# ===========================================================================
-# 🤖 AI 응답 컴포넌트 (AI 투명성 원칙 구현)
-# ===========================================================================
 
-def render_ai_response(
-    response: Dict[str, Any],
-    response_type: str = "general",
-    show_details_default: Optional[bool] = None,
+def render_data_table(
+    data: pd.DataFrame,
+    title: Optional[str] = None,
+    show_index: bool = False,
+    enable_search: bool = True,
+    enable_download: bool = True,
+    height: Optional[int] = None,
     key: Optional[str] = None
 ):
     """
-    AI 응답 표시 (상세 설명 토글 기능 포함)
+    데이터 테이블 렌더링
     
     Args:
-        response: AI 응답 딕셔너리
-            - main: 핵심 답변 (필수)
-            - reasoning: 추론 과정
-            - alternatives: 대안
-            - background: 이론적 배경
-            - confidence: 신뢰도
-            - limitations: 한계점
-        response_type: 응답 유형
-        show_details_default: 기본 상세 표시 여부
+        data: 데이터프레임
+        title: 제목
+        show_index: 인덱스 표시 여부
+        enable_search: 검색 기능
+        enable_download: 다운로드 기능
+        height: 높이
         key: 고유 키
     """
-    # 세션 상태 초기화
-    detail_key = f"ai_details_{key}" if key else "ai_details_global"
-    if detail_key not in st.session_state:
-        if show_details_default is not None:
-            st.session_state[detail_key] = show_details_default
-        else:
-            # 사용자 레벨에 따른 기본값
-            user_level = st.session_state.get('user', {}).get('level', 'beginner')
-            default_mode = AI_EXPLANATION_CONFIG['auto_mode_rules'].get(
-                user_level, 
-                AI_EXPLANATION_CONFIG['default_mode']
-            )
-            st.session_state[detail_key] = default_mode in ['detailed', 'balanced']
+    # 제목
+    if title:
+        st.markdown(f"### {title}")
     
-    # AI 응답 컨테이너
-    with st.container():
-        st.markdown('<div class="ai-response-container">', unsafe_allow_html=True)
+    # 검색 기능
+    if enable_search and len(data) > 10:
+        search_key = f"search_{key}" if key else "search_table"
+        search_term = st.text_input(
+            "🔍 검색",
+            key=search_key,
+            placeholder="검색어를 입력하세요..."
+        )
         
-        # 헤더와 토글 버튼
-        col1, col2 = st.columns([10, 2])
-        
-        with col1:
-            st.markdown(f"### {ICONS['ai']} {response_type} AI 응답")
-        
-        with col2:
-            # 상세 설명 토글 버튼
-            button_label = f"{ICONS['simple']} 간단히" if st.session_state[detail_key] else f"{ICONS['detail']} 자세히"
-            if st.button(
-                button_label,
-                key=f"{detail_key}_toggle",
-                help=f"단축키: {AI_EXPLANATION_CONFIG.get('keyboard_shortcut', 'Ctrl+D')}"
-            ):
-                st.session_state[detail_key] = not st.session_state[detail_key]
-                st.rerun()
-        
-        # 핵심 답변 (항상 표시)
-        st.markdown("#### 💡 핵심 답변")
-        st.write(response.get('main', ''))
-        
-        # 상세 설명 (토글 가능)
-        if st.session_state[detail_key]:
-            st.markdown("---")
-            
-            # 탭으로 구성된 상세 정보
-            detail_tabs = []
-            detail_contents = []
-            
-            if response.get('reasoning') and AI_EXPLANATION_CONFIG['detail_sections']['reasoning']:
-                detail_tabs.append(f"{ICONS['reasoning']} 추론 과정")
-                detail_contents.append(response['reasoning'])
-            
-            if response.get('alternatives') and AI_EXPLANATION_CONFIG['detail_sections']['alternatives']:
-                detail_tabs.append(f"{ICONS['alternative']} 대안 검토")
-                detail_contents.append(response['alternatives'])
-            
-            if response.get('background') and AI_EXPLANATION_CONFIG['detail_sections']['background']:
-                detail_tabs.append(f"{ICONS['info']} 배경 지식")
-                detail_contents.append(response['background'])
-            
-            if response.get('confidence') and AI_EXPLANATION_CONFIG['detail_sections']['confidence']:
-                detail_tabs.append(f"{ICONS['confidence']} 신뢰도")
-                detail_contents.append(response['confidence'])
-            
-            if response.get('limitations') and AI_EXPLANATION_CONFIG['detail_sections']['limitations']:
-                detail_tabs.append(f"{ICONS['limitation']} 한계점")
-                detail_contents.append(response['limitations'])
-            
-            if detail_tabs:
-                tabs = st.tabs(detail_tabs)
-                for i, (tab, content) in enumerate(zip(tabs, detail_contents)):
-                    with tab:
-                        st.markdown(f'<div class="ai-detail-section">{content}</div>', unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+        if search_term:
+            # 모든 컬럼에서 검색
+            mask = data.astype(str).apply(
+                lambda x: x.str.contains(search_term, case=False, na=False)
+            ).any(axis=1)
+            filtered_data = data[mask]
+        else:
+            filtered_data = data
+    else:
+        filtered_data = data
+    
+    # 테이블 표시
+    st.dataframe(
+        filtered_data,
+        hide_index=not show_index,
+        height=height,
+        use_container_width=True
+    )
+    
+    # 다운로드 버튼
+    if enable_download:
+        csv = filtered_data.to_csv(index=show_index, encoding='utf-8-sig')
+        st.download_button(
+            label=f"📥 CSV 다운로드 ({len(filtered_data)}행)",
+            data=csv,
+            file_name=f"{title or 'data'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime='text/csv',
+            key=f"download_{key}" if key else "download_table"
+        )
 
-# ===========================================================================
-# 📢 알림 메시지
-# ===========================================================================
+
+def render_progress(
+    current: Union[int, float],
+    total: Union[int, float],
+    label: Optional[str] = None,
+    show_percentage: bool = True,
+    color: Optional[str] = None
+):
+    """
+    진행률 바 렌더링
+    
+    Args:
+        current: 현재 값
+        total: 전체 값
+        label: 레이블
+        show_percentage: 백분율 표시
+        color: 색상
+    """
+    # 백분율 계산
+    percentage = min(100, max(0, (current / total * 100) if total > 0 else 0))
+    
+    # 레이블
+    if label:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(label)
+        with col2:
+            if show_percentage:
+                st.markdown(f"**{percentage:.0f}%**", unsafe_allow_html=True)
+    
+    # 진행률 바
+    progress_color = color or COLORS.get('primary', '#7C3AED')
+    st.markdown(
+        f"""
+        <div class="progress-container">
+            <div class="progress-bar" style="width: {percentage}%; background: {progress_color};"></div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+def render_circular_progress(
+    value: float,
+    max_value: float = 100,
+    title: str = "",
+    size: int = 120,
+    color: Optional[str] = None
+):
+    """
+    원형 진행률 표시
+    
+    Args:
+        value: 현재 값
+        max_value: 최대 값
+        title: 제목
+        size: 크기
+        color: 색상
+    """
+    percentage = min(100, max(0, (value / max_value * 100)))
+    color = color or COLORS.get('primary', '#7C3AED')
+    
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=percentage,
+        title={'text': title},
+        domain={'x': [0, 1], 'y': [0, 1]},
+        gauge={
+            'axis': {'range': [None, 100]},
+            'bar': {'color': color},
+            'steps': [
+                {'range': [0, 100], 'color': COLORS.get('light', '#F3F4F6')}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 90
+            }
+        }
+    ))
+    
+    fig.update_layout(
+        height=size,
+        margin=dict(l=20, r=20, t=40, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ============================================================================
+# 알림/메시지 컴포넌트
+# ============================================================================
 
 def show_notification(
     message: str,
     type: Literal["success", "error", "warning", "info"] = "info",
     icon: Optional[str] = None,
-    duration: Optional[int] = 5,
-    position: Literal["top-right", "top-center", "bottom-right"] = "top-right"
+    duration: Optional[int] = None
 ):
     """
-    토스트 알림 표시
+    알림 메시지 표시
     
     Args:
-        message: 알림 메시지
+        message: 메시지
         type: 알림 유형
         icon: 커스텀 아이콘
         duration: 표시 시간 (초)
-        position: 표시 위치
     """
-    icon = icon or ICONS.get(type, ICONS['info'])
-    colors = {
-        'success': COLORS['success'],
-        'error': COLORS['error'],
-        'warning': COLORS['warning'],
-        'info': COLORS['info']
-    }
+    # 아이콘 설정
+    if not icon:
+        icon = ICONS.get(type, ICONS['info'])
     
-    # Streamlit 기본 알림 사용
+    # Streamlit 네이티브 알림 사용
     if type == "success":
         st.success(f"{icon} {message}")
     elif type == "error":
@@ -542,340 +789,44 @@ def show_notification(
     else:
         st.info(f"{icon} {message}")
     
-    # 자동 숨김 (선택적)
+    # 자동 숨김 (duration이 설정된 경우)
     if duration:
         time.sleep(duration)
         st.empty()
 
-# 헬퍼 함수들
-def show_success(message: str, **kwargs):
-    """성공 메시지 표시"""
-    show_notification(message, "success", **kwargs)
 
-def show_error(message: str, **kwargs):
-    """에러 메시지 표시"""
-    show_notification(message, "error", **kwargs)
+def show_success(message: str, icon: str = None):
+    """성공 메시지"""
+    show_notification(message, "success", icon)
 
-def show_warning(message: str, **kwargs):
-    """경고 메시지 표시"""
-    show_notification(message, "warning", **kwargs)
 
-def show_info(message: str, **kwargs):
-    """정보 메시지 표시"""
-    show_notification(message, "info", **kwargs)
+def show_error(message: str, icon: str = None):
+    """에러 메시지"""
+    show_notification(message, "error", icon)
 
-# ===========================================================================
-# 📊 데이터 테이블
-# ===========================================================================
 
-def render_data_table(
-    data: pd.DataFrame,
-    key: Optional[str] = None,
-    editable: bool = False,
-    use_checkbox: bool = False,
-    hide_index: bool = True,
-    column_config: Optional[Dict[str, Any]] = None,
-    disabled: Optional[List[str]] = None,
-    on_change: Optional[Callable] = None,
-    **kwargs
-):
-    """
-    향상된 데이터 테이블
-    
-    Args:
-        data: 표시할 데이터프레임
-        key: 고유 키
-        editable: 편집 가능 여부
-        use_checkbox: 체크박스 사용 여부
-        hide_index: 인덱스 숨김 여부
-        column_config: 컬럼 설정
-        disabled: 비활성화할 컬럼 리스트
-        on_change: 변경 시 콜백
-        **kwargs: 추가 파라미터
-    """
-    # 빈 데이터 처리
-    if data.empty:
-        render_empty_state(
-            icon=ICONS['data'],
-            title="데이터가 없습니다",
-            description="표시할 데이터가 없습니다."
-        )
-        return None
-    
-    # 데이터 에디터 렌더링
-    edited_data = st.data_editor(
-        data,
-        key=key,
-        use_container_width=True,
-        hide_index=hide_index,
-        num_rows="dynamic" if editable else "fixed",
-        disabled=False if editable else True,
-        column_config=column_config,
-        on_change=on_change,
-        **kwargs
-    )
-    
-    return edited_data
+def show_warning(message: str, icon: str = None):
+    """경고 메시지"""
+    show_notification(message, "warning", icon)
 
-# ===========================================================================
-# 🚀 진행률 표시
-# ===========================================================================
 
-def render_progress(
-    value: float,
-    max_value: float = 100.0,
-    label: Optional[str] = None,
-    format_str: str = "{value}/{max_value} ({percentage}%)",
-    show_eta: bool = False,
-    color: Optional[str] = None
-):
-    """
-    진행률 바 표시
-    
-    Args:
-        value: 현재 값
-        max_value: 최대 값
-        label: 레이블
-        format_str: 표시 형식
-        show_eta: 예상 시간 표시
-        color: 진행률 바 색상
-    """
-    percentage = min(value / max_value, 1.0) if max_value > 0 else 0
-    
-    # 진행률 바
-    progress_bar = st.progress(percentage)
-    
-    # 텍스트 표시
-    if label:
-        display_text = format_str.format(
-            value=value,
-            max_value=max_value,
-            percentage=int(percentage * 100)
-        )
-        st.caption(f"{label}: {display_text}")
-    
-    return progress_bar
+def show_info(message: str, icon: str = None):
+    """정보 메시지"""
+    show_notification(message, "info", icon)
 
-def render_circular_progress(
-    value: float,
-    max_value: float = 100.0,
-    size: int = 120,
-    thickness: int = 10,
-    color: Optional[str] = None,
-    label: Optional[str] = None
-):
-    """
-    원형 진행률 표시
-    
-    Args:
-        value: 현재 값
-        max_value: 최대 값
-        size: 크기 (픽셀)
-        thickness: 두께
-        color: 색상
-        label: 레이블
-    """
-    percentage = min(value / max_value * 100, 100) if max_value > 0 else 0
-    color = color or COLORS['primary']
-    
-    # SVG 원형 진행률
-    radius = (size - thickness) / 2
-    circumference = 2 * 3.14159 * radius
-    stroke_dashoffset = circumference - (percentage / 100) * circumference
-    
-    svg = f"""
-    <svg width="{size}" height="{size}" style="transform: rotate(-90deg);">
-        <circle
-            cx="{size/2}"
-            cy="{size/2}"
-            r="{radius}"
-            stroke="{COLORS['background']}"
-            stroke-width="{thickness}"
-            fill="none"
-        />
-        <circle
-            cx="{size/2}"
-            cy="{size/2}"
-            r="{radius}"
-            stroke="{color}"
-            stroke-width="{thickness}"
-            fill="none"
-            stroke-dasharray="{circumference}"
-            stroke-dashoffset="{stroke_dashoffset}"
-            style="transition: stroke-dashoffset 0.5s ease;"
-        />
-    </svg>
-    <div style="
-        position: relative;
-        top: -{size}px;
-        text-align: center;
-        line-height: {size}px;
-        font-size: 1.5rem;
-        font-weight: bold;
-    ">
-        {int(percentage)}%
-    </div>
-    """
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown(
-            f'<div style="text-align: center;">{svg}{f"<p>{label}</p>" if label else ""}</div>',
-            unsafe_allow_html=True
-        )
 
-# ===========================================================================
-# 🗂️ 탭 컴포넌트
-# ===========================================================================
-
-def render_tabs(
-    tabs: Dict[str, Callable],
-    default_tab: Optional[str] = None,
-    key: Optional[str] = None
-):
-    """
-    탭 인터페이스 렌더링
-    
-    Args:
-        tabs: {탭이름: 렌더링함수} 딕셔너리
-        default_tab: 기본 선택 탭
-        key: 고유 키
-    """
-    tab_names = list(tabs.keys())
-    tab_objects = st.tabs(tab_names)
-    
-    for tab_obj, (tab_name, render_func) in zip(tab_objects, tabs.items()):
-        with tab_obj:
-            render_func()
-
-# ===========================================================================
-# 📁 파일 업로드
-# ===========================================================================
-
-def create_file_uploader(
-    label: str = "파일 선택",
-    accept: Optional[List[str]] = None,
-    multiple: bool = False,
-    max_size_mb: Optional[int] = None,
-    show_preview: bool = True,
-    key: Optional[str] = None
-) -> Optional[Union[Any, List[Any]]]:
-    """
-    향상된 파일 업로더
-    
-    Args:
-        label: 업로더 레이블
-        accept: 허용 파일 확장자 리스트
-        multiple: 다중 파일 허용
-        max_size_mb: 최대 파일 크기 (MB)
-        show_preview: 미리보기 표시
-        key: 고유 키
-        
-    Returns:
-        업로드된 파일 또는 파일 리스트
-    """
-    # 파일 타입 설명
-    if accept:
-        type_desc = {
-            'csv': 'CSV 스프레드시트',
-            'xlsx': 'Excel 파일',
-            'json': 'JSON 데이터',
-            'pdf': 'PDF 문서',
-            'png': 'PNG 이미지',
-            'jpg': 'JPEG 이미지',
-            'jpeg': 'JPEG 이미지',
-            'txt': '텍스트 파일',
-            'py': 'Python 코드'
-        }
-        
-        accepted_desc = ", ".join([
-            type_desc.get(ext.replace('.', ''), ext.upper())
-            for ext in accept
-        ])
-        help_text = f"지원 형식: {accepted_desc}"
-        if max_size_mb:
-            help_text += f" (최대 {max_size_mb}MB)"
-    else:
-        help_text = None
-    
-    # 파일 업로더
-    uploaded = st.file_uploader(
-        label,
-        type=accept,
-        accept_multiple_files=multiple,
-        help=help_text,
-        key=key
-    )
-    
-    if uploaded:
-        files = uploaded if multiple else [uploaded]
-        
-        for file in files:
-            # 파일 크기 확인
-            if max_size_mb:
-                file_size_mb = file.size / (1024 * 1024)
-                if file_size_mb > max_size_mb:
-                    show_error(f"{file.name}: 파일 크기가 {max_size_mb}MB를 초과합니다. ({file_size_mb:.1f}MB)")
-                    continue
-            
-            # 파일 정보 표시
-            with st.expander(f"📎 {file.name}", expanded=show_preview):
-                col1, col2, col3 = st.columns([2, 1, 1])
-                
-                with col1:
-                    st.caption(f"타입: {file.type}")
-                with col2:
-                    st.caption(f"크기: {file.size / 1024:.1f} KB")
-                with col3:
-                    if st.button(f"{ICONS['delete']}", key=f"del_{file.name}", help="삭제"):
-                        # 삭제 로직은 부모 컴포넌트에서 처리
-                        pass
-                
-                # 미리보기
-                if show_preview:
-                    render_file_preview(file)
-    
-    return uploaded
-
-def render_file_preview(file):
-    """파일 미리보기 렌더링"""
-    file_ext = Path(file.name).suffix.lower()
-    
-    try:
-        if file_ext in ['.png', '.jpg', '.jpeg', '.gif']:
-            st.image(file)
-        elif file_ext == '.csv':
-            df = pd.read_csv(file)
-            st.dataframe(df.head(10))
-            st.caption(f"총 {len(df)} 행")
-        elif file_ext in ['.xlsx', '.xls']:
-            df = pd.read_excel(file)
-            st.dataframe(df.head(10))
-            st.caption(f"총 {len(df)} 행")
-        elif file_ext == '.json':
-            data = json.load(file)
-            st.json(data)
-        elif file_ext in ['.txt', '.md']:
-            content = file.read().decode('utf-8')
-            st.text_area("내용", content, height=200, disabled=True)
-        else:
-            st.info("미리보기를 지원하지 않는 파일 형식입니다.")
-    except Exception as e:
-        st.error(f"파일 미리보기 중 오류 발생: {str(e)}")
-
-# ===========================================================================
-# 🔤 입력 검증
-# ===========================================================================
+# ============================================================================
+# 입력 컴포넌트
+# ============================================================================
 
 def create_validated_input(
     label: str,
-    value: Any = "",
-    type: Literal["text", "number", "email", "password", "url"] = "text",
-    required: bool = False,
-    validation_pattern: Optional[str] = None,
-    validation_func: Optional[Callable] = None,
-    error_message: str = "올바른 값을 입력하세요",
+    input_type: Literal["text", "number", "email", "password"] = "text",
+    placeholder: Optional[str] = None,
     help: Optional[str] = None,
+    required: bool = False,
+    validation_func: Optional[Callable] = None,
+    error_message: str = "입력값이 올바르지 않습니다.",
     key: Optional[str] = None,
     **kwargs
 ) -> Optional[Any]:
@@ -883,167 +834,208 @@ def create_validated_input(
     검증 기능이 있는 입력 필드
     
     Args:
-        label: 입력 필드 레이블
-        value: 기본값
-        type: 입력 타입
-        required: 필수 여부
-        validation_pattern: 정규식 패턴
-        validation_func: 커스텀 검증 함수
-        error_message: 검증 실패 메시지
+        label: 레이블
+        input_type: 입력 유형
+        placeholder: 플레이스홀더
         help: 도움말
+        required: 필수 여부
+        validation_func: 검증 함수
+        error_message: 에러 메시지
         key: 고유 키
-        **kwargs: 추가 파라미터
+        **kwargs: 추가 인자
         
     Returns:
         검증된 입력값 또는 None
     """
     # 필수 표시
-    display_label = f"{label} *" if required else label
+    if required:
+        label = f"{label} *"
     
-    # 입력 컴포넌트
-    if type == "text":
-        input_value = st.text_input(display_label, value, help=help, key=key, **kwargs)
-    elif type == "number":
-        input_value = st.number_input(display_label, value=value, help=help, key=key, **kwargs)
-    elif type == "email":
-        input_value = st.text_input(display_label, value, help=help, key=key, **kwargs)
-        # 이메일 패턴
-        validation_pattern = validation_pattern or r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    elif type == "password":
-        input_value = st.text_input(display_label, value, type="password", help=help, key=key, **kwargs)
-    elif type == "url":
-        input_value = st.text_input(display_label, value, help=help, key=key, **kwargs)
-        # URL 패턴
-        validation_pattern = validation_pattern or r'^https?://[^\s]+$'
+    # 입력 필드 생성
+    if input_type == "text":
+        value = st.text_input(
+            label,
+            placeholder=placeholder,
+            help=help,
+            key=key,
+            **kwargs
+        )
+    elif input_type == "number":
+        value = st.number_input(
+            label,
+            help=help,
+            key=key,
+            **kwargs
+        )
+    elif input_type == "email":
+        value = st.text_input(
+            label,
+            placeholder=placeholder or "user@example.com",
+            help=help,
+            key=key,
+            **kwargs
+        )
+    elif input_type == "password":
+        value = st.text_input(
+            label,
+            type="password",
+            placeholder=placeholder,
+            help=help,
+            key=key,
+            **kwargs
+        )
     else:
-        input_value = st.text_input(display_label, value, help=help, key=key, **kwargs)
+        value = None
     
     # 검증
-    is_valid = True
-    
-    # 필수 필드 검증
-    if required and not input_value:
-        st.error(f"{label}은(는) 필수 입력 항목입니다.")
-        is_valid = False
-    
-    # 패턴 검증
-    elif validation_pattern and input_value:
-        if not re.match(validation_pattern, str(input_value)):
+    if value:
+        # 기본 검증
+        if input_type == "email" and "@" not in value:
+            st.error("올바른 이메일 주소를 입력하세요.")
+            return None
+        
+        # 커스텀 검증
+        if validation_func and not validation_func(value):
             st.error(error_message)
-            is_valid = False
+            return None
     
-    # 커스텀 검증
-    elif validation_func and input_value:
-        validation_result = validation_func(input_value)
-        if validation_result is not True:
-            st.error(validation_result if isinstance(validation_result, str) else error_message)
-            is_valid = False
+    # 필수 입력 체크
+    if required and not value:
+        st.error(f"{label.replace(' *', '')}은(는) 필수 입력 항목입니다.")
+        return None
     
-    return input_value if is_valid else None
+    return value
 
-# ===========================================================================
-# 📅 날짜/시간 선택
-# ===========================================================================
+
+def create_file_uploader(
+    label: str,
+    file_types: List[str],
+    accept_multiple: bool = False,
+    help: Optional[str] = None,
+    max_size_mb: int = 200,
+    key: Optional[str] = None
+) -> Optional[Union[Any, List[Any]]]:
+    """
+    파일 업로더 컴포넌트
+    
+    Args:
+        label: 레이블
+        file_types: 허용 파일 타입
+        accept_multiple: 다중 파일 허용
+        help: 도움말
+        max_size_mb: 최대 파일 크기 (MB)
+        key: 고유 키
+        
+    Returns:
+        업로드된 파일
+    """
+    # 도움말 텍스트 생성
+    if not help:
+        help = f"허용 파일: {', '.join(file_types)} (최대 {max_size_mb}MB)"
+    
+    # 파일 업로더
+    uploaded_files = st.file_uploader(
+        label,
+        type=file_types,
+        accept_multiple_files=accept_multiple,
+        help=help,
+        key=key
+    )
+    
+    # 파일 크기 검증
+    if uploaded_files:
+        if accept_multiple:
+            valid_files = []
+            for file in uploaded_files:
+                if file.size > max_size_mb * 1024 * 1024:
+                    st.error(f"{file.name}: 파일 크기가 {max_size_mb}MB를 초과합니다.")
+                else:
+                    valid_files.append(file)
+            return valid_files if valid_files else None
+        else:
+            if uploaded_files.size > max_size_mb * 1024 * 1024:
+                st.error(f"파일 크기가 {max_size_mb}MB를 초과합니다.")
+                return None
+            return uploaded_files
+    
+    return None
+
 
 def create_date_range_picker(
-    label: str = "기간 선택",
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
-    max_days: Optional[int] = None,
+    label: str = "날짜 범위",
+    default_days: int = 7,
+    help: Optional[str] = None,
     key: Optional[str] = None
-) -> Optional[Tuple[datetime, datetime]]:
+) -> Tuple[datetime, datetime]:
     """
     날짜 범위 선택기
     
     Args:
         label: 레이블
-        start_date: 시작일 기본값
-        end_date: 종료일 기본값
-        max_days: 최대 선택 가능 일수
+        default_days: 기본 일수
+        help: 도움말
         key: 고유 키
         
     Returns:
-        (시작일, 종료일) 튜플 또는 None
+        (시작일, 종료일) 튜플
     """
     col1, col2 = st.columns(2)
     
     with col1:
-        selected_start = st.date_input(
-            "시작일",
-            value=start_date or datetime.now().date(),
-            key=f"{key}_start" if key else None
+        start_date = st.date_input(
+            f"{label} - 시작",
+            value=datetime.now() - timedelta(days=default_days),
+            help=help,
+            key=f"{key}_start" if key else "date_start"
         )
     
     with col2:
-        selected_end = st.date_input(
-            "종료일",
-            value=end_date or datetime.now().date(),
-            key=f"{key}_end" if key else None
+        end_date = st.date_input(
+            f"{label} - 종료",
+            value=datetime.now(),
+            help=help,
+            key=f"{key}_end" if key else "date_end"
         )
     
-    # 검증
-    if selected_start > selected_end:
+    # 날짜 유효성 검사
+    if start_date > end_date:
         st.error("시작일이 종료일보다 늦을 수 없습니다.")
-        return None
+        return None, None
     
-    if max_days:
-        delta = (selected_end - selected_start).days
-        if delta > max_days:
-            st.error(f"최대 {max_days}일까지만 선택 가능합니다.")
-            return None
-    
-    return (selected_start, selected_end)
+    return start_date, end_date
 
-# ===========================================================================
-# 🏷️ 빈 상태
-# ===========================================================================
+
+# ============================================================================
+# 상태 표시 컴포넌트
+# ============================================================================
 
 def render_empty_state(
+    message: str = "데이터가 없습니다",
     icon: str = "📭",
-    title: str = "데이터가 없습니다",
-    description: Optional[str] = None,
-    action_label: Optional[str] = None,
-    action_callback: Optional[Callable] = None
+    suggestion: Optional[str] = None
 ):
     """
-    빈 상태 UI 렌더링
+    빈 상태 표시
     
     Args:
+        message: 메시지
         icon: 아이콘
-        title: 제목
-        description: 설명
-        action_label: 액션 버튼 레이블
-        action_callback: 액션 콜백
+        suggestion: 제안 사항
     """
     st.markdown(
         f"""
-        <div style="
-            text-align: center;
-            padding: 3rem;
-            color: {COLORS['text_secondary']};
-        ">
-            <div style="font-size: 4rem; margin-bottom: 1rem;">{icon}</div>
-            <h3 style="color: {COLORS['text_primary']}; margin-bottom: 0.5rem;">{title}</h3>
-            {f'<p style="margin-bottom: 1.5rem;">{description}</p>' if description else ''}
+        <div class="empty-state">
+            <div class="empty-state-icon">{icon}</div>
+            <h3>{message}</h3>
+            {f'<p style="color: #6b7280;">{suggestion}</p>' if suggestion else ''}
         </div>
         """,
         unsafe_allow_html=True
     )
-    
-    if action_label and action_callback:
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            if st.button(action_label, type="primary", use_container_width=True):
-                action_callback()
 
-# ===========================================================================
-# 🔄 로딩 상태
-# ===========================================================================
 
-def show_loading(
-    message: str = "처리 중...",
-    spinner: bool = True
-):
+@handle_ui_error
+def show_loading(message: str = "로딩 중...", spinner: bool = True):
     """
     로딩 상태 표시
     
@@ -1053,135 +1045,17 @@ def show_loading(
     """
     if spinner:
         with st.spinner(message):
-            placeholder = st.empty()
+            yield
     else:
-        st.info(f"{ICONS['loading']} {message}")
         placeholder = st.empty()
-    
-    return placeholder
+        placeholder.info(f"{ICONS['loading']} {message}")
+        yield
+        placeholder.empty()
 
-# ===========================================================================
-# 👤 사용자 컴포넌트
-# ===========================================================================
 
-def render_user_badge(user: Dict[str, Any]):
-    """사용자 배지 표시"""
-    if not user:
-        return
-    
-    level_colors = {
-        'beginner': COLORS['info'],
-        'intermediate': COLORS['success'],
-        'advanced': COLORS['warning'],
-        'expert': COLORS['accent']
-    }
-    
-    st.markdown(
-        f"""
-        <div style="
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem;
-            background: {COLORS['surface']};
-            border-radius: 20px;
-            border: 1px solid {COLORS['background']};
-        ">
-            <span style="font-size: 1.5rem;">{ICONS['user']}</span>
-            <div>
-                <div style="font-weight: 500;">{user.get('name', 'User')}</div>
-                <div style="
-                    font-size: 0.75rem;
-                    color: {level_colors.get(user.get('level', 'beginner'), COLORS['text_secondary'])};
-                ">
-                    {user.get('level', 'beginner').title()}
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-# ===========================================================================
-# 📱 사이드바
-# ===========================================================================
-
-def render_sidebar_menu(
-    menu_items: List[Dict[str, Any]],
-    current_page: Optional[str] = None
-) -> Optional[str]:
-    """
-    사이드바 메뉴 렌더링
-    
-    Args:
-        menu_items: 메뉴 아이템 리스트
-            - name: 메뉴명
-            - icon: 아이콘
-            - page: 페이지 ID
-            - badge: 배지 (선택)
-        current_page: 현재 페이지
-        
-    Returns:
-        선택된 페이지 ID
-    """
-    selected_page = None
-    
-    for item in menu_items:
-        # 배지 처리
-        label = f"{item.get('icon', '')} {item['name']}"
-        if 'badge' in item and item['badge']:
-            label += f" ({item['badge']})"
-        
-        # 현재 페이지 강조
-        if current_page == item.get('page'):
-            st.markdown(
-                f"""
-                <div style="
-                    background: {COLORS['primary']}20;
-                    padding: 0.5rem 1rem;
-                    border-radius: 8px;
-                    margin: 0.25rem 0;
-                    border-left: 3px solid {COLORS['primary']};
-                ">
-                    {label}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        else:
-            if st.button(
-                label,
-                key=f"menu_{item.get('page', item['name'])}",
-                use_container_width=True
-            ):
-                selected_page = item.get('page')
-    
-    return selected_page
-
-# ===========================================================================
-# 🎯 오프라인 모드 표시
-# ===========================================================================
-
-def render_offline_indicator(is_online: bool = True):
-    """
-    온/오프라인 상태 표시
-    
-    Args:
-        is_online: 온라인 상태
-    """
-    if not is_online:
-        st.markdown(
-            f"""
-            <div class="offline-badge">
-                {ICONS['offline']} 오프라인 모드
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-# ===========================================================================
-# 🔧 유틸리티 함수
-# ===========================================================================
+# ============================================================================
+# 유틸리티 함수
+# ============================================================================
 
 def format_datetime(
     dt: datetime,
@@ -1200,27 +1074,31 @@ def format_datetime(
     if format == "full":
         return dt.strftime("%Y년 %m월 %d일 %H:%M")
     elif format == "date":
-        return dt.strftime("%Y-%m-%d")
+        return dt.strftime("%Y년 %m월 %d일")
     elif format == "time":
         return dt.strftime("%H:%M:%S")
     elif format == "relative":
-        delta = datetime.now() - dt
-        if delta.days > 365:
-            return f"{delta.days // 365}년 전"
-        elif delta.days > 30:
-            return f"{delta.days // 30}개월 전"
-        elif delta.days > 0:
-            return f"{delta.days}일 전"
-        elif delta.seconds > 3600:
-            return f"{delta.seconds // 3600}시간 전"
-        elif delta.seconds > 60:
-            return f"{delta.seconds // 60}분 전"
+        # 상대 시간 계산
+        now = datetime.now()
+        diff = now - dt
+        
+        if diff.days > 7:
+            return dt.strftime("%Y-%m-%d")
+        elif diff.days > 0:
+            return f"{diff.days}일 전"
+        elif diff.seconds > 3600:
+            return f"{diff.seconds // 3600}시간 전"
+        elif diff.seconds > 60:
+            return f"{diff.seconds // 60}분 전"
         else:
             return "방금 전"
+    
+    return str(dt)
+
 
 def format_number(
     number: Union[int, float],
-    decimals: int = 0,
+    decimals: int = 2,
     use_comma: bool = True
 ) -> str:
     """
@@ -1238,6 +1116,7 @@ def format_number(
         return f"{number:,.{decimals}f}"
     else:
         return f"{number:.{decimals}f}"
+
 
 def truncate_text(
     text: str,
@@ -1259,9 +1138,6 @@ def truncate_text(
         return text
     return text[:max_length - len(suffix)] + suffix
 
-# ===========================================================================
-# 🎨 색상 팔레트 함수
-# ===========================================================================
 
 def get_color_palette(name: str = "default") -> List[str]:
     """
@@ -1275,11 +1151,18 @@ def get_color_palette(name: str = "default") -> List[str]:
     """
     palettes = {
         'default': [
-            COLORS['primary'], COLORS['secondary'], COLORS['accent'],
-            COLORS['warning'], COLORS['info'], COLORS['success']
+            COLORS.get('primary', '#7C3AED'),
+            COLORS.get('secondary', '#F59E0B'),
+            COLORS.get('success', '#10B981'),
+            COLORS.get('danger', '#EF4444'),
+            COLORS.get('warning', '#F59E0B'),
+            COLORS.get('info', '#3B82F6')
         ],
         'gradient': [
             '#1E88E5', '#1976D2', '#1565C0', '#0D47A1', '#01579B'
+        ],
+        'polymer': [
+            '#E91E63', '#9C27B0', '#673AB7', '#3F51B5', '#2196F3'
         ],
         'category': px.colors.qualitative.Set3,
         'sequential': px.colors.sequential.Blues,
@@ -1288,9 +1171,10 @@ def get_color_palette(name: str = "default") -> List[str]:
     
     return palettes.get(name, palettes['default'])
 
-# ===========================================================================
-# 📤 Export
-# ===========================================================================
+
+# ============================================================================
+# Export
+# ============================================================================
 
 __all__ = [
     # 페이지 설정
@@ -1301,14 +1185,14 @@ __all__ = [
     'render_sidebar_menu',
     'render_offline_indicator',
     
+    # AI 컴포넌트
+    'render_ai_response',
+    
     # 메트릭/데이터
     'render_metric_card',
     'render_data_table',
     'render_progress',
     'render_circular_progress',
-    
-    # AI 컴포넌트
-    'render_ai_response',
     
     # 알림
     'show_notification',
