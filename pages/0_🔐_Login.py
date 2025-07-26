@@ -855,6 +855,9 @@ def main():
     # 세션 상태 초기화
     initialize_session_state()
     
+    # OAuth 콜백 처리 (URL에 code 파라미터가 있는 경우)
+    handle_oauth_callback()
+    
     # 이미 로그인된 경우 대시보드로 리다이렉트
     if st.session_state.get('authenticated', False):
         st.switch_page("pages/1_📊_Dashboard.py")
