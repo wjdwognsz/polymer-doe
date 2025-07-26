@@ -1,57 +1,57 @@
 """
 ⚙️ Universal DOE Platform - 앱 전역 설정
 ================================================================================
-데스크톱 애플리케이션에 최적화된 중앙 설정 관리 시스템
-오프라인 우선 설계, 확장 가능한 구조, 타입 안정성 보장
+모든 설정을 중앙에서 관리하는 핵심 설정 파일
+환경별 설정, AI 엔진, 보안, 기능 플래그 등 통합 관리
 ================================================================================
 """
 
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import timedelta
-from enum import Enum
+from typing import Dict, Any, Optional, List, Tuple
 import platform
 import json
 
 # ============================================================================
-# 🔧 환경 설정
+# 🌍 환경 설정
 # ============================================================================
 
-# PyInstaller 빌드 대응 경로 처리
-if getattr(sys, 'frozen', False):
-    # PyInstaller로 패키징된 경우
-    PROJECT_ROOT = Path(sys._MEIPASS)
-    DATA_DIR = Path(sys.executable).parent / 'data'
-else:
-    # 개발 환경
-    PROJECT_ROOT = Path(__file__).parent.parent
-    DATA_DIR = PROJECT_ROOT / 'data'
+# 프로젝트 루트 경로
+PROJECT_ROOT = Path(__file__).parent.parent
 
-# 주요 디렉토리 설정
-CONFIG_DIR = PROJECT_ROOT / "config"
-LOGS_DIR = DATA_DIR / "logs"
-TEMP_DIR = DATA_DIR / "temp"
-CACHE_DIR = DATA_DIR / "cache"
-DB_DIR = DATA_DIR / "db"
-MODULES_DIR = DATA_DIR / "modules"
-BACKUP_DIR = DATA_DIR / "backups"
+# 데이터 디렉토리
+DATA_DIR = PROJECT_ROOT / 'data'
+LOGS_DIR = DATA_DIR / 'logs'
+TEMP_DIR = DATA_DIR / 'temp'
+CACHE_DIR = DATA_DIR / 'cache'
+DB_DIR = DATA_DIR / 'db'
+MODULES_DIR = DATA_DIR / 'modules'
+BACKUP_DIR = DATA_DIR / 'backups'
 
 # 환경 변수
-ENV = os.getenv('APP_ENV', 'development')
+ENV = os.getenv('STREAMLIT_ENV', 'development')
 IS_PRODUCTION = ENV == 'production'
+IS_STAGING = ENV == 'staging'
 IS_DEVELOPMENT = ENV == 'development'
+IS_TEST = ENV == 'test'
+
+# 디버그 모드
+DEBUG = os.getenv('DEBUG', str(not IS_PRODUCTION)).lower() in ('true', '1', 'yes')
+
+# 빌드 환경 감지
 IS_FROZEN = getattr(sys, 'frozen', False)
-DEBUG = os.getenv('DEBUG_MODE', 'false').lower() == 'true' and not IS_PRODUCTION
+IS_DESKTOP = IS_FROZEN or os.getenv('DESKTOP_MODE', 'false').lower() == 'true'
 
 # 시스템 정보
 SYSTEM_INFO = {
-    'platform': platform.system(),  # Windows, Darwin, Linux
+    'platform': platform.system(),
     'platform_version': platform.version(),
     'python_version': sys.version,
-    'is_64bit': sys.maxsize > 2**32,
-    'cpu_count': os.cpu_count() or 1
+    'is_windows': platform.system() == 'Windows',
+    'is_macos': platform.system() == 'Darwin',
+    'is_linux': platform.system() == 'Linux'
 }
 
 # ============================================================================
@@ -60,136 +60,272 @@ SYSTEM_INFO = {
 
 APP_INFO = {
     'name': 'Universal DOE Platform',
+    'short_name': 'UniversalDOE',
     'version': '2.0.0',
-    'description': '모든 연구자를 위한 AI 기반 실험 설계 데스크톱 플랫폼',
+    'description': '모든 연구자를 위한 AI 기반 실험 설계 플랫폼',
     'author': 'DOE Team',
     'email': 'support@universaldoe.com',
     'website': 'https://universaldoe.com',
     'github': 'https://github.com/universaldoe/platform',
     'license': 'MIT',
-    'copyright': '© 2024 DOE Team. All rights reserved.'
+    'copyright': '© 2024 DOE Team. All rights reserved.',
+    'build_date': '2024-12-01',
+    'python_required': '>=3.8'
 }
 
 # ============================================================================
-# 🤖 AI 엔진 설정
+# 🤖 AI 엔진 설정 (6개 통합)
 # ============================================================================
 
-class AIProvider(Enum):
-    """AI 제공자 열거형"""
-    GOOGLE_GEMINI = "google_gemini"
-    XAI_GROK = "xai_grok"
-    GROQ = "groq"
-    DEEPSEEK = "deepseek"
-    SAMBANOVA = "sambanova"
-    HUGGINGFACE = "huggingface"
-
 AI_ENGINES = {
-    AIProvider.GOOGLE_GEMINI: {
-        'name': 'Google Gemini',
-        'models': ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-        'default_model': 'gemini-2.0-flash-exp',
-        'max_tokens': 8192,
-        'temperature': 0.7,
-        'top_p': 0.95,
-        'api_base': 'https://generativelanguage.googleapis.com/v1beta',
-        'features': ['text', 'code', 'vision', 'function_calling'],
+    'google_gemini': {
+        'name': 'Google Gemini 2.0 Flash',
+        'provider': 'Google',
+        'model': 'gemini-2.0-flash-exp',
+        'api_key_env': 'GOOGLE_GEMINI_API_KEY',
+        'api_key_secret': 'google_gemini_key',
+        'required': True,
+        'free_tier': True,
         'rate_limit': 60,  # requests per minute
-        'free_tier': True,
-        'required': True,  # 최소 하나는 필수
-        'description': '빠르고 정확한 범용 AI, 무료 티어 제공'
-    },
-    AIProvider.XAI_GROK: {
-        'name': 'xAI Grok',
-        'models': ['grok-2-latest', 'grok-2-mini'],
-        'default_model': 'grok-2-latest',
-        'max_tokens': 131072,
-        'temperature': 0.7,
-        'api_base': 'https://api.x.ai/v1',
-        'features': ['text', 'code', 'real_time_info'],
-        'rate_limit': 60,
-        'free_tier': False,
-        'required': False,
-        'description': '실시간 정보 접근, 대용량 컨텍스트'
-    },
-    AIProvider.GROQ: {
-        'name': 'Groq',
-        'models': ['llama-3.1-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
-        'default_model': 'llama-3.1-70b-versatile',
         'max_tokens': 8192,
         'temperature': 0.7,
-        'api_base': 'https://api.groq.com/openai/v1',
-        'features': ['text', 'code', 'ultra_fast'],
-        'rate_limit': 30,
-        'free_tier': True,
-        'required': False,
-        'description': '초고속 추론, 무료 티어 제공'
+        'capabilities': ['text', 'code', 'analysis', 'vision'],
+        'best_for': ['general', 'multimodal', 'reasoning'],
+        'docs_url': 'https://makersuite.google.com/app/apikey'
     },
-    AIProvider.DEEPSEEK: {
-        'name': 'DeepSeek',
-        'models': ['deepseek-chat', 'deepseek-coder'],
-        'default_model': 'deepseek-chat',
-        'max_tokens': 16384,
-        'temperature': 0.7,
-        'api_base': 'https://api.deepseek.com/v1',
-        'features': ['text', 'code', 'math', 'reasoning'],
-        'rate_limit': 60,
+    'xai_grok': {
+        'name': 'xAI Grok',
+        'provider': 'xAI',
+        'model': 'grok-beta',
+        'api_key_env': 'XAI_API_KEY',
+        'api_key_secret': 'xai_api_key',
+        'base_url': 'https://api.x.ai/v1',
+        'required': False,
         'free_tier': False,
-        'required': False,
-        'description': '코드와 수학에 특화, 추론 능력 우수'
-    },
-    AIProvider.SAMBANOVA: {
-        'name': 'SambaNova',
-        'models': ['Meta-Llama-3.1-405B-Instruct', 'Meta-Llama-3.1-70B-Instruct'],
-        'default_model': 'Meta-Llama-3.1-70B-Instruct',
+        'rate_limit': 30,
         'max_tokens': 4096,
         'temperature': 0.7,
-        'api_base': 'https://api.sambanova.ai/v1',
-        'features': ['text', 'code', 'enterprise'],
-        'rate_limit': 100,
-        'free_tier': True,
-        'required': False,
-        'description': '엔터프라이즈급 성능, 무료 클라우드'
+        'capabilities': ['text', 'code', 'humor'],
+        'best_for': ['creative', 'unconventional'],
+        'docs_url': 'https://x.ai/api'
     },
-    AIProvider.HUGGINGFACE: {
-        'name': 'HuggingFace',
-        'models': ['microsoft/Phi-3-mini-4k-instruct', 'google/flan-t5-xxl', 'bigscience/bloom'],
-        'default_model': 'microsoft/Phi-3-mini-4k-instruct',
+    'groq': {
+        'name': 'Groq LPU',
+        'provider': 'Groq',
+        'model': 'mixtral-8x7b-32768',
+        'api_key_env': 'GROQ_API_KEY',
+        'api_key_secret': 'groq_api_key',
+        'base_url': 'https://api.groq.com/openai/v1',
+        'required': False,
+        'free_tier': True,
+        'rate_limit': 100,
+        'max_tokens': 32768,
+        'temperature': 0.7,
+        'capabilities': ['text', 'code', 'speed'],
+        'best_for': ['fast_inference', 'real_time'],
+        'docs_url': 'https://console.groq.com'
+    },
+    'deepseek': {
+        'name': 'DeepSeek Coder',
+        'provider': 'DeepSeek',
+        'model': 'deepseek-coder',
+        'api_key_env': 'DEEPSEEK_API_KEY',
+        'api_key_secret': 'deepseek_api_key',
+        'base_url': 'https://api.deepseek.com/v1',
+        'required': False,
+        'free_tier': False,
+        'rate_limit': 60,
+        'max_tokens': 16384,
+        'temperature': 0.3,
+        'capabilities': ['code', 'math', 'technical'],
+        'best_for': ['code_generation', 'algorithms', 'formulas'],
+        'docs_url': 'https://platform.deepseek.com'
+    },
+    'sambanova': {
+        'name': 'SambaNova',
+        'provider': 'SambaNova',
+        'model': 'llama-3.1-405b',
+        'api_key_env': 'SAMBANOVA_API_KEY',
+        'api_key_secret': 'sambanova_api_key',
+        'base_url': 'https://api.sambanova.ai/v1',
+        'required': False,
+        'free_tier': True,
+        'rate_limit': 10,
+        'max_tokens': 4096,
+        'temperature': 0.7,
+        'capabilities': ['text', 'reasoning', 'large_context'],
+        'best_for': ['complex_analysis', 'research'],
+        'docs_url': 'https://cloud.sambanova.ai'
+    },
+    'huggingface': {
+        'name': 'HuggingFace Hub',
+        'provider': 'HuggingFace',
+        'models': {
+            'general': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+            'chemistry': 'laituan245/ChemLLM-7B-Chat',
+            'materials': 'm3rg-iitd/MatSciBERT',
+            'bio': 'microsoft/BioGPT-Large'
+        },
+        'api_key_env': 'HUGGINGFACE_TOKEN',
+        'api_key_secret': 'huggingface_token',
+        'required': False,
+        'free_tier': True,
+        'rate_limit': 100,
         'max_tokens': 2048,
         'temperature': 0.7,
-        'api_base': 'https://api-inference.huggingface.co/models',
-        'features': ['text', 'specialized_models', 'fine_tuning'],
-        'rate_limit': 100,
-        'free_tier': True,
-        'required': False,
-        'description': '다양한 특화 모델, 커스터마이징 가능'
+        'capabilities': ['specialized', 'domain_specific'],
+        'best_for': ['chemistry', 'materials', 'biology'],
+        'docs_url': 'https://huggingface.co/settings/tokens'
     }
 }
 
-# AI 설명 상세도 설정
-AI_EXPLANATION_LEVELS = {
-    'beginner': {
-        'detail': 'simple',
-        'technical_terms': False,
-        'examples': True,
-        'length': 'short'
+# ============================================================================
+# 🧠 AI 설명 상세도 제어 (필수 구현)
+# ============================================================================
+
+AI_EXPLANATION_CONFIG = {
+    'modes': {
+        'auto': '사용자 레벨에 따라 자동 조정',
+        'always_detailed': '항상 상세 설명 표시',
+        'always_simple': '항상 간단한 설명만',
+        'custom': '사용자 맞춤 설정'
     },
-    'intermediate': {
-        'detail': 'moderate',
-        'technical_terms': True,
-        'examples': True,
-        'length': 'medium'
+    'default_mode': 'auto',
+    'components': {
+        'reasoning': {
+            'label': '추론 과정',
+            'default': True,
+            'description': 'AI가 왜 이런 결론에 도달했는지'
+        },
+        'alternatives': {
+            'label': '대안 검토',
+            'default': True,
+            'description': '다른 가능한 옵션들과 장단점'
+        },
+        'theory': {
+            'label': '이론적 배경',
+            'default': True,
+            'description': '과학적 원리와 근거'
+        },
+        'confidence': {
+            'label': '신뢰도',
+            'default': True,
+            'description': '추천의 확실성 정도와 한계점'
+        },
+        'limitations': {
+            'label': '주의사항',
+            'default': True,
+            'description': '제약사항과 주의해야 할 점'
+        }
     },
-    'advanced': {
-        'detail': 'comprehensive',
-        'technical_terms': True,
-        'examples': False,
-        'length': 'detailed'
+    'toggle_shortcut': 'Ctrl+D',
+    'session_persistent': True,
+    'ui_position': 'top_right',  # 토글 버튼 위치
+    'animation': True,
+    'auto_level_detection': {
+        'beginner_indicators': ['처음', '초보', '기초', '쉽게'],
+        'expert_indicators': ['전문', '고급', '상세', '깊이']
+    }
+}
+
+# ============================================================================
+# 📂 파일 처리 설정 (다중 형식 지원)
+# ============================================================================
+
+FILE_CONFIG = {
+    'upload': {
+        'max_size_mb': 50,
+        'max_files': 10,
+        'chunk_size': 1024 * 1024,  # 1MB chunks
+        'timeout': 300  # 5분
     },
-    'expert': {
-        'detail': 'technical',
-        'technical_terms': True,
-        'examples': False,
-        'length': 'concise'
+    'supported_formats': {
+        'documents': {
+            'pdf': {'mime': 'application/pdf', 'priority': 1},
+            'docx': {'mime': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'priority': 2},
+            'doc': {'mime': 'application/msword', 'priority': 3},
+            'txt': {'mime': 'text/plain', 'priority': 4},
+            'rtf': {'mime': 'application/rtf', 'priority': 5},
+            'odt': {'mime': 'application/vnd.oasis.opendocument.text', 'priority': 6}
+        },
+        'markup': {
+            'html': {'mime': 'text/html', 'priority': 1},
+            'htm': {'mime': 'text/html', 'priority': 1},
+            'md': {'mime': 'text/markdown', 'priority': 2},
+            'xml': {'mime': 'application/xml', 'priority': 3}
+        },
+        'data': {
+            'csv': {'mime': 'text/csv', 'priority': 1},
+            'xlsx': {'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'priority': 2},
+            'xls': {'mime': 'application/vnd.ms-excel', 'priority': 3},
+            'json': {'mime': 'application/json', 'priority': 4},
+            'parquet': {'mime': 'application/octet-stream', 'priority': 5}
+        },
+        'images': {
+            'png': {'mime': 'image/png', 'priority': 1},
+            'jpg': {'mime': 'image/jpeg', 'priority': 2},
+            'jpeg': {'mime': 'image/jpeg', 'priority': 2},
+            'gif': {'mime': 'image/gif', 'priority': 3},
+            'webp': {'mime': 'image/webp', 'priority': 4},
+            'svg': {'mime': 'image/svg+xml', 'priority': 5}
+        }
+    },
+    'encoding': {
+        'auto_detect': True,
+        'fallback': 'utf-8',
+        'supported': ['utf-8', 'utf-16', 'latin-1', 'cp1252', 'gb2312', 'shift-jis', 'euc-kr'],
+        'bom_handling': 'remove'
+    },
+    'processing': {
+        'parallel': True,
+        'max_workers': 4,
+        'batch_size': 5,
+        'memory_limit_mb': 500
+    }
+}
+
+# ============================================================================
+# 🔍 프로토콜 추출 설정
+# ============================================================================
+
+PROTOCOL_EXTRACTION_CONFIG = {
+    'methods': {
+        'rule_based': {
+            'enabled': True,
+            'patterns': ['methods', 'experimental', 'procedure', 'protocol'],
+            'confidence_weight': 0.3
+        },
+        'ml_based': {
+            'enabled': True,
+            'model': 'spacy',
+            'confidence_weight': 0.4
+        },
+        'ai_based': {
+            'enabled': True,
+            'engine': 'google_gemini',
+            'confidence_weight': 0.3
+        }
+    },
+    'extraction': {
+        'min_confidence': 0.7,
+        'max_length': 500000,  # 문자 수
+        'timeout': 60,  # 초
+        'languages': ['en', 'ko', 'zh', 'ja'],
+        'cache_results': True,
+        'cache_ttl': timedelta(days=30)
+    },
+    'output_formats': {
+        'json': {'structured': True, 'schema_version': '2.0'},
+        'yaml': {'human_readable': True},
+        'csv': {'tabular': True},
+        'template': {'fillable': True}
+    },
+    'ocr': {
+        'enabled': True,
+        'engine': 'tesseract',
+        'languages': ['eng', 'kor', 'chi_sim', 'jpn'],
+        'dpi': 300,
+        'preprocessing': ['deskew', 'denoise', 'contrast']
     }
 }
 
@@ -197,82 +333,119 @@ AI_EXPLANATION_LEVELS = {
 # 💾 데이터베이스 설정
 # ============================================================================
 
-# SQLite 설정
+# SQLite (로컬/데스크톱)
 SQLITE_CONFIG = {
-    'database_path': DB_DIR / 'universaldoe.db',
-    'backup_path': BACKUP_DIR / 'db_backups',
-    'backup_interval_hours': 24,
-    'max_backups': 7,
-    'pool_size': 5,
-    'max_overflow': 10,
-    'pool_timeout': 30,
-    'echo': DEBUG,
-    'foreign_keys': True,
-    'journal_mode': 'WAL',  # Write-Ahead Logging for better concurrency
-    'cache_size': -64000,  # 64MB cache
-    'temp_store': 'MEMORY'
+    'database_path': DB_DIR / 'app.db',
+    'backup_path': BACKUP_DIR / 'db',
+    'connection': {
+        'check_same_thread': False,
+        'timeout': 30,
+        'isolation_level': 'DEFERRED',
+        'journal_mode': 'WAL'  # Write-Ahead Logging
+    },
+    'pool': {
+        'size': 5,
+        'max_overflow': 10,
+        'timeout': 30,
+        'recycle': 3600
+    },
+    'backup': {
+        'enabled': True,
+        'interval': timedelta(hours=6),
+        'keep_last': 5,
+        'compress': True
+    }
 }
 
-# Google Sheets 설정 (선택적 동기화)
+# Google Sheets (온라인/협업)
 GOOGLE_SHEETS_CONFIG = {
-    'scopes': [
+    'enabled': not IS_DESKTOP or os.getenv('ENABLE_CLOUD_SYNC', 'false').lower() == 'true',
+    'scope': [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive.file'
     ],
-    'api_version': 'v4',
-    'batch_size': 1000,
-    'rate_limit': 100,  # requests per minute
-    'retry_count': 3,
-    'retry_delay': 1.0,
-    'cache_ttl': 300,  # 5 minutes
-    'sync_enabled': False,  # 기본적으로 비활성화
-    'sync_interval_minutes': 30,
-    'conflict_resolution': 'local_first'  # local_first, remote_first, newest
+    'credentials': {
+        'type': 'service_account',  # or 'oauth2'
+        'file': PROJECT_ROOT / '.streamlit' / 'google_credentials.json',
+        'env_var': 'GOOGLE_APPLICATION_CREDENTIALS'
+    },
+    'spreadsheets': {
+        'users': {
+            'name': 'UniversalDOE_Users',
+            'key_env': 'GOOGLE_SHEETS_USERS_KEY',
+            'key_secret': 'google_sheets_users_key'
+        },
+        'projects': {
+            'name': 'UniversalDOE_Projects',
+            'key_env': 'GOOGLE_SHEETS_PROJECTS_KEY',
+            'key_secret': 'google_sheets_projects_key'
+        },
+        'shared': {
+            'name': 'UniversalDOE_SharedData',
+            'key_env': 'GOOGLE_SHEETS_SHARED_KEY',
+            'key_secret': 'google_sheets_shared_key'
+        }
+    },
+    'sync': {
+        'interval': timedelta(minutes=5),
+        'batch_size': 100,
+        'conflict_resolution': 'latest_wins'
+    }
 }
 
 # ============================================================================
-# 🔐 보안 설정
+# 🔒 보안 설정
 # ============================================================================
 
 SECURITY_CONFIG = {
-    'session': {
-        'secret_key': os.getenv('SESSION_SECRET_KEY', 'dev-secret-key-change-in-production'),
-        'timeout_minutes': 30,
-        'remember_me_days': 30,
-        'max_sessions_per_user': 3,
-        'secure_cookie': IS_PRODUCTION,
-        'http_only': True,
-        'same_site': 'Lax'
-    },
     'password': {
         'min_length': 8,
         'require_uppercase': True,
         'require_lowercase': True,
         'require_numbers': True,
         'require_special': True,
+        'special_chars': '!@#$%^&*()_+-=[]{}|;:,.<>?',
         'bcrypt_rounds': 12,
-        'reset_token_hours': 24,
-        'max_attempts': 5,
-        'lockout_minutes': 30
+        'history_check': 3  # 최근 3개 비밀번호 재사용 금지
     },
-    'api': {
-        'rate_limit_per_minute': 60,
-        'rate_limit_per_hour': 1000,
-        'api_key_length': 32,
-        'api_key_prefix': 'udoe_',
-        'token_expiry_days': 90
+    'session': {
+        'timeout': timedelta(hours=24),
+        'remember_me_duration': timedelta(days=30),
+        'max_concurrent': 3,
+        'secret_key': os.getenv('SESSION_SECRET_KEY', 'dev-secret-key-change-in-production'),
+        'cookie_name': 'universaldoe_session',
+        'secure': IS_PRODUCTION,
+        'httponly': True,
+        'samesite': 'Lax'
+    },
+    'jwt': {
+        'secret_key': os.getenv('JWT_SECRET_KEY', 'dev-jwt-secret'),
+        'algorithm': 'HS256',
+        'access_token_expire': timedelta(hours=1),
+        'refresh_token_expire': timedelta(days=7)
+    },
+    'auth': {
+        'max_login_attempts': 5,
+        'lockout_duration': timedelta(minutes=30),
+        'enable_2fa': False,  # 향후 구현
+        'oauth_providers': ['google'],  # 향후 확장
+        'api_key_length': 32
     },
     'encryption': {
         'algorithm': 'AES-256-GCM',
         'key_derivation': 'PBKDF2',
-        'iterations': 100000,
-        'salt_length': 32
+        'iterations': 100000
     },
-    'jwt': {
-        'secret_key': os.getenv('JWT_SECRET_KEY', 'dev-jwt-secret-change-in-production'),
-        'algorithm': 'HS256',
-        'access_token_expire_minutes': 60,
-        'refresh_token_expire_days': 30
+    'api': {
+        'rate_limit': {
+            'enabled': True,
+            'requests_per_minute': 60,
+            'requests_per_hour': 1000
+        },
+        'cors': {
+            'enabled': False,
+            'origins': ['http://localhost:8501']
+        }
     }
 }
 
@@ -283,153 +456,129 @@ SECURITY_CONFIG = {
 UI_CONFIG = {
     'theme': {
         'default': 'light',
-        'available': ['light', 'dark', 'auto'],
-        'primary_color': '#a880ed',  # 보라색
-        'font_family': 'Inter, system-ui, sans-serif'
+        'allow_switching': True,
+        'auto_detect': True
     },
     'layout': {
-        'max_width': '1200px',
-        'sidebar_width': '300px',
-        'mobile_breakpoint': '768px',
-        'default_page': 'dashboard'
+        'sidebar_default': 'expanded',
+        'max_width': 1200,
+        'padding': 20,
+        'animation_speed': 300  # ms
     },
-    'animations': {
-        'enabled': True,
-        'duration': '0.3s',
-        'easing': 'ease-out'
+    'components': {
+        'data_editor': {
+            'num_rows': 'dynamic',
+            'column_config': 'auto',
+            'hide_index': True
+        },
+        'charts': {
+            'default_renderer': 'plotly',
+            'interactive': True,
+            'export_formats': ['png', 'svg', 'pdf']
+        },
+        'tables': {
+            'pagination': True,
+            'page_size': 25,
+            'sortable': True,
+            'filterable': True
+        }
+    },
+    'accessibility': {
+        'high_contrast': False,
+        'keyboard_navigation': True,
+        'screen_reader_support': True,
+        'font_size_adjustment': True
     },
     'notifications': {
         'position': 'top-right',
-        'duration': 5000,
+        'duration': 5000,  # ms
         'max_stack': 3
     }
 }
 
 # ============================================================================
-# 🧪 실험 설정
+# 🧪 실험 설계 설정
 # ============================================================================
 
 EXPERIMENT_CONFIG = {
     'design_types': {
-        'factorial': '완전요인설계',
-        'fractional': '부분요인설계',
-        'rsm': '반응표면설계',
-        'mixture': '혼합물설계',
-        'custom': '사용자정의설계'
+        'factorial': {
+            'name': '완전/부분 요인설계',
+            'min_factors': 2,
+            'max_factors': 10,
+            'levels': [2, 3, 4, 5]
+        },
+        'response_surface': {
+            'name': '반응표면설계',
+            'types': ['ccd', 'box-behnken', 'face-centered'],
+            'min_factors': 2,
+            'max_factors': 6
+        },
+        'mixture': {
+            'name': '혼합물 설계',
+            'types': ['simplex-lattice', 'simplex-centroid', 'extreme-vertices'],
+            'min_components': 3,
+            'max_components': 10
+        },
+        'optimal': {
+            'name': '최적 설계',
+            'criteria': ['D-optimal', 'I-optimal', 'A-optimal', 'G-optimal'],
+            'custom_allowed': True
+        },
+        'screening': {
+            'name': '스크리닝 설계',
+            'types': ['plackett-burman', 'definitive-screening'],
+            'min_factors': 3
+        }
     },
-    'max_factors': 20,
-    'max_levels': 10,
-    'max_runs': 10000,
-    'confidence_levels': [0.90, 0.95, 0.99],
-    'default_replicates': 3,
-    'randomization': True,
-    'blocking_enabled': True,
-    'center_points': {
-        'default': 3,
-        'max': 10
-    }
-}
-
-# 실험 프로젝트 타입
-PROJECT_TYPES = {
-    'polymer_synthesis': '고분자 합성',
-    'polymer_processing': '고분자 가공',
-    'polymer_characterization': '고분자 특성분석',
-    'formulation': '배합 최적화',
-    'material_testing': '재료 시험',
-    'custom': '사용자 정의'
-}
-
-# 실험 기본값
-EXPERIMENT_DEFAULTS = {
-    'temperature_range': [20, 200],  # °C
-    'time_range': [0.1, 24],  # hours
-    'pressure_range': [0.1, 10],  # MPa
-    'concentration_range': [0, 100],  # %
-    'ph_range': [0, 14],
-    'rpm_range': [0, 5000]
-}
-
-# ============================================================================
-# 📦 파일 처리 설정
-# ============================================================================
-
-FILE_CONFIG = {
-    'upload': {
-        'max_size_mb': 200,
-        'allowed_extensions': [
-            # 데이터 파일
-            '.csv', '.xlsx', '.xls', '.json', '.txt', '.tsv',
-            # 이미지 파일
-            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg',
-            # 문서 파일
-            '.pdf', '.doc', '.docx', '.ppt', '.pptx',
-            # 과학 데이터
-            '.cif', '.mol', '.sdf', '.pdb', '.xyz',
-            # 압축 파일
-            '.zip', '.rar', '.7z', '.tar', '.gz'
-        ],
-        'temp_path': TEMP_DIR / 'uploads',
-        'scan_viruses': IS_PRODUCTION
+    'constraints': {
+        'min_runs': 3,
+        'max_runs': 1000,
+        'max_center_points': 20,
+        'replication_allowed': True,
+        'blocking_allowed': True
     },
-    'export': {
-        'formats': ['excel', 'csv', 'json', 'pdf', 'html'],
-        'include_metadata': True,
-        'compression': 'zip',
-        'temp_path': TEMP_DIR / 'exports'
+    'analysis': {
+        'confidence_level': 0.95,
+        'power': 0.8,
+        'alpha': 0.05,
+        'multiple_comparison': 'bonferroni'
     },
-    'templates': {
-        'path': PROJECT_ROOT / 'templates',
-        'categories': ['polymer', 'general', 'custom']
+    'optimization': {
+        'methods': ['desirability', 'pareto', 'genetic_algorithm'],
+        'multi_objective': True,
+        'constraints_allowed': True
     }
 }
 
 # ============================================================================
-# ⚡ 성능 설정
-# ============================================================================
-
-PERFORMANCE_CONFIG = {
-    'max_workers': min(4, SYSTEM_INFO['cpu_count']),
-    'chunk_size': 1000,
-    'batch_size': 100,
-    'timeout_seconds': 30,
-    'memory_limit_mb': 2048,
-    'gc_threshold': 1000,
-    'profiling_enabled': DEBUG
-}
-
-# 캐시 설정
-CACHE_CONFIG = {
-    'enabled': True,
-    'backend': 'disk',  # memory, disk, redis
-    'max_size_mb': 500,
-    'ttl_default': 3600,  # 1 hour
-    'ttl_ai_response': 86400,  # 24 hours
-    'ttl_api_call': 300,  # 5 minutes
-    'ttl_computation': 7200,  # 2 hours
-    'cleanup_interval': 3600,
-    'redis_url': os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
-    'redis_enabled': False  # 기본적으로 로컬 캐시 사용
-}
-
-# ============================================================================
-# 🔧 모듈 시스템 설정
+# 📦 모듈 시스템 설정
 # ============================================================================
 
 MODULE_CONFIG = {
-    'core_modules': [
-        'general_experiment',
-        'polymer_experiment',
-        'mixture_design',
-        'optimization',
-        'screening'
-    ],
-    'user_modules_path': MODULES_DIR / 'user',
-    'marketplace_url': 'https://marketplace.universaldoe.com/api/v1',
-    'auto_update': True,
-    'validation_strict': True,
-    'sandbox_enabled': True,
-    'max_module_size_mb': 10
+    'paths': {
+        'core_modules': PROJECT_ROOT / 'modules' / 'core',
+        'user_modules': MODULES_DIR / 'user_modules',
+        'marketplace': MODULES_DIR / 'marketplace',
+        'templates': PROJECT_ROOT / 'modules' / 'templates'
+    },
+    'validation': {
+        'required_methods': ['get_info', 'validate', 'generate_design', 'analyze'],
+        'max_size_mb': 10,
+        'sandbox_execution': True,
+        'timeout': 30
+    },
+    'marketplace': {
+        'enabled': True,
+        'api_endpoint': 'https://api.universaldoe.com/modules',
+        'cache_duration': timedelta(hours=24),
+        'featured_refresh': timedelta(hours=6)
+    },
+    'development': {
+        'hot_reload': IS_DEVELOPMENT,
+        'debug_mode': DEBUG,
+        'template_available': True
+    }
 }
 
 # ============================================================================
@@ -437,79 +586,32 @@ MODULE_CONFIG = {
 # ============================================================================
 
 SYNC_CONFIG = {
-    'enabled': False,  # 기본적으로 비활성화
-    'providers': ['google_drive', 'dropbox', 'onedrive', 'github'],
-    'interval_minutes': 15,
-    'conflict_strategy': 'manual',  # manual, local_wins, remote_wins
-    'excluded_files': ['*.tmp', '*.log', '.DS_Store', 'Thumbs.db'],
-    'bandwidth_limit_mbps': 10,
-    'compress_before_sync': True
-}
-
-# ============================================================================
-# 🔔 알림 설정
-# ============================================================================
-
-NOTIFICATION_CONFIG = {
-    'channels': ['in_app', 'email', 'desktop'],
-    'default_channel': 'in_app',
-    'email': {
-        'smtp_host': os.getenv('SMTP_HOST', 'smtp.gmail.com'),
-        'smtp_port': int(os.getenv('SMTP_PORT', '587')),
-        'use_tls': True,
-        'username': os.getenv('SMTP_USERNAME', ''),
-        'from_address': 'noreply@universaldoe.com',
-        'from_name': 'Universal DOE Platform'
+    'enabled': not IS_DESKTOP,
+    'mode': 'manual',  # 'manual', 'auto', 'scheduled'
+    'providers': {
+        'google_drive': {
+            'enabled': True,
+            'folder': 'UniversalDOE_Sync',
+            'file_types': ['projects', 'data', 'reports']
+        },
+        'dropbox': {
+            'enabled': False,
+            'folder': 'UniversalDOE'
+        },
+        'onedrive': {
+            'enabled': False,
+            'folder': 'UniversalDOE'
+        }
     },
-    'desktop': {
-        'enabled': SYSTEM_INFO['platform'] in ['Windows', 'Darwin'],
-        'duration': 5000,
-        'sound': True
+    'conflict_resolution': {
+        'strategy': 'latest_wins',  # 'latest_wins', 'manual', 'merge'
+        'backup_conflicts': True
     },
-    'retention_days': 30,
-    'batch_size': 100
-}
-
-# ============================================================================
-# 🌍 지역화 설정
-# ============================================================================
-
-LOCALIZATION_CONFIG = {
-    'default_language': 'ko',
-    'supported_languages': {
-        'ko': '한국어',
-        'en': 'English',
-        'ja': '日本語',
-        'zh': '中文'
-    },
-    'date_format': '%Y-%m-%d',
-    'time_format': '%H:%M:%S',
-    'timezone': 'Asia/Seoul',
-    'number_format': {
-        'decimal_separator': '.',
-        'thousands_separator': ',',
-        'decimal_places': 2
+    'scheduling': {
+        'interval': timedelta(hours=1),
+        'wifi_only': True,
+        'battery_threshold': 20  # %
     }
-}
-
-# ============================================================================
-# 📊 분석 설정
-# ============================================================================
-
-ANALYTICS_CONFIG = {
-    'enabled': not IS_PRODUCTION,  # 프로덕션에서는 프라이버시 보호
-    'track_usage': False,
-    'track_errors': True,
-    'anonymize_data': True,
-    'retention_days': 90,
-    'export_format': 'json',
-    'metrics': [
-        'active_users',
-        'experiments_created',
-        'ai_usage',
-        'module_usage',
-        'error_rate'
-    ]
 }
 
 # ============================================================================
@@ -517,14 +619,86 @@ ANALYTICS_CONFIG = {
 # ============================================================================
 
 UPDATE_CONFIG = {
-    'check_updates': True,
-    'auto_update': False,
-    'channel': 'stable',  # stable, beta, dev
-    'check_interval_hours': 24,
-    'update_url': 'https://api.universaldoe.com/updates',
-    'require_admin': SYSTEM_INFO['platform'] == 'Windows',
-    'backup_before_update': True,
-    'rollback_enabled': True
+    'enabled': True,
+    'check_on_startup': True,
+    'check_interval': timedelta(days=1),
+    'auto_download': False,
+    'auto_install': False,
+    'channels': {
+        'stable': 'https://api.universaldoe.com/updates/stable',
+        'beta': 'https://api.universaldoe.com/updates/beta',
+        'nightly': 'https://api.universaldoe.com/updates/nightly'
+    },
+    'current_channel': 'stable' if IS_PRODUCTION else 'beta',
+    'show_changelog': True,
+    'backup_before_update': True
+}
+
+# ============================================================================
+# 🌐 지역화 설정
+# ============================================================================
+
+LOCALIZATION_CONFIG = {
+    'default_language': 'ko_KR',
+    'supported_languages': {
+        'ko_KR': {'name': '한국어', 'flag': '🇰🇷', 'rtl': False},
+        'en_US': {'name': 'English', 'flag': '🇺🇸', 'rtl': False},
+        'zh_CN': {'name': '简体中文', 'flag': '🇨🇳', 'rtl': False},
+        'ja_JP': {'name': '日本語', 'flag': '🇯🇵', 'rtl': False}
+    },
+    'auto_detect': True,
+    'fallback_language': 'en_US',
+    'date_format': {
+        'ko_KR': 'YYYY년 MM월 DD일',
+        'en_US': 'MM/DD/YYYY',
+        'zh_CN': 'YYYY年MM月DD日',
+        'ja_JP': 'YYYY年MM月DD日'
+    },
+    'number_format': {
+        'decimal_separator': '.',
+        'thousands_separator': ',',
+        'decimal_places': 2
+    },
+    'currency': {
+        'ko_KR': 'KRW',
+        'en_US': 'USD',
+        'zh_CN': 'CNY',
+        'ja_JP': 'JPY'
+    }
+}
+
+# ============================================================================
+# 📊 성능 설정
+# ============================================================================
+
+PERFORMANCE_CONFIG = {
+    'caching': {
+        'enabled': True,
+        'ttl': {
+            'user_data': timedelta(minutes=5),
+            'project_data': timedelta(minutes=10),
+            'ai_responses': timedelta(hours=1),
+            'analysis_results': timedelta(hours=24),
+            'file_previews': timedelta(hours=12)
+        },
+        'max_size_mb': 500,
+        'eviction_policy': 'lru'
+    },
+    'threading': {
+        'max_workers': 8,
+        'queue_size': 100,
+        'timeout': 30
+    },
+    'resource_limits': {
+        'max_memory_mb': 2048,
+        'max_cpu_percent': 80,
+        'max_file_handles': 1000
+    },
+    'optimization': {
+        'lazy_loading': True,
+        'compression': True,
+        'minification': IS_PRODUCTION
+    }
 }
 
 # ============================================================================
@@ -532,19 +706,26 @@ UPDATE_CONFIG = {
 # ============================================================================
 
 DEVELOPER_CONFIG = {
-    'debug_mode': DEBUG,
-    'show_internal_errors': DEBUG,
-    'enable_profiler': DEBUG,
-    'log_level': 'DEBUG' if DEBUG else 'INFO',
-    'sql_echo': DEBUG,
-    'api_mock_enabled': IS_DEVELOPMENT,
-    'test_data_enabled': IS_DEVELOPMENT,
-    'hot_reload': IS_DEVELOPMENT and not IS_FROZEN,
-    'dev_tools': {
-        'memory_profiler': False,
-        'api_explorer': IS_DEVELOPMENT,
-        'db_browser': IS_DEVELOPMENT,
-        'log_viewer': True
+    'debug': {
+        'enabled': DEBUG,
+        'verbose': IS_DEVELOPMENT,
+        'show_errors': not IS_PRODUCTION,
+        'profiling': False,
+        'timing': True
+    },
+    'logging': {
+        'level': 'DEBUG' if DEBUG else 'INFO',
+        'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        'file': LOGS_DIR / f'app_{ENV}.log',
+        'max_size_mb': 10,
+        'backup_count': 5,
+        'console': True
+    },
+    'testing': {
+        'mock_data': IS_DEVELOPMENT,
+        'test_accounts': IS_DEVELOPMENT,
+        'bypass_auth': False,
+        'fixtures_dir': PROJECT_ROOT / 'tests' / 'fixtures'
     }
 }
 
@@ -554,32 +735,42 @@ DEVELOPER_CONFIG = {
 
 FEATURE_FLAGS = {
     # 핵심 기능
-    'offline_mode': True,
-    'ai_assistance': True,
+    'ai_chat': True,
+    'multi_ai_engines': True,
+    'protocol_extraction': True,
     'collaboration': True,
-    'cloud_sync': False,
-    
-    # 베타 기능
-    'beta_features': IS_DEVELOPMENT,
-    'new_ui': True,
+    'marketplace': True,
     'advanced_analytics': True,
-    'module_marketplace': True,
-    'voice_commands': False,
+    'custom_modules': True,
     
     # 실험적 기능
     'experimental': {
+        'voice_commands': False,
         'ar_visualization': False,
-        'ml_predictions': IS_DEVELOPMENT,
-        'auto_optimization': False,
+        'ai_autopilot': False,
         'blockchain_verification': False
     },
     
-    # 프리미엄 기능
-    'premium': {
-        'unlimited_projects': False,
-        'priority_support': False,
-        'custom_branding': False,
-        'api_access': False
+    # 베타 기능
+    'beta': {
+        'new_ui': IS_DEVELOPMENT or IS_STAGING,
+        'cloud_compute': False,
+        'mobile_sync': False,
+        'api_v2': IS_DEVELOPMENT
+    },
+    
+    # 플랫폼별 기능
+    'platform': {
+        'desktop': {
+            'system_tray': True,
+            'auto_update': True,
+            'offline_mode': True
+        },
+        'web': {
+            'pwa': True,
+            'push_notifications': False,
+            'webgl': True
+        }
     }
 }
 
@@ -589,16 +780,16 @@ FEATURE_FLAGS = {
 
 def get_config(key: str, default: Any = None) -> Any:
     """
-    설정값 가져오기 (환경변수 우선)
+    점 표기법으로 중첩된 설정값 가져오기
     
     Args:
-        key: 설정 키 (점 표기법 지원)
+        key: 설정 키 (예: 'ai_engines.google_gemini.model')
         default: 기본값
         
     Returns:
         설정값 또는 기본값
     """
-    # 환경변수 확인 (DOE_ 접두사 사용)
+    # 환경변수 우선 확인
     env_key = f"DOE_{key.upper().replace('.', '_')}"
     env_value = os.getenv(env_key)
     
@@ -619,119 +810,146 @@ def get_config(key: str, default: Any = None) -> Any:
         return env_value
     
     # 설정 딕셔너리에서 찾기
-    try:
-        keys = key.split('.')
-        value = globals()
-        for k in keys:
-            if isinstance(value, dict):
-                value = value.get(k, default)
-            else:
-                return default
-        return value
-    except:
-        return default
+    keys = key.split('.')
+    config = globals()
+    
+    for k in keys:
+        if isinstance(config, dict) and k in config:
+            config = config[k]
+        else:
+            return default
+    
+    return config
 
-def validate_config() -> Tuple[bool, List[str]]:
+def validate_config() -> List[Tuple[str, str]]:
     """
-    설정 유효성 검증
+    설정 검증 및 경고 메시지 반환
     
     Returns:
-        (성공 여부, 오류 메시지 리스트)
+        [(레벨, 메시지), ...] 형태의 경고 리스트
     """
-    errors = []
+    warnings = []
     
-    # 디렉토리 생성
+    # 필수 디렉토리 생성
     for dir_path in [DATA_DIR, LOGS_DIR, TEMP_DIR, CACHE_DIR, DB_DIR, MODULES_DIR, BACKUP_DIR]:
         try:
             dir_path.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            errors.append(f"디렉토리 생성 실패 {dir_path}: {e}")
+            warnings.append(('ERROR', f'{dir_path} 디렉토리 생성 실패: {e}'))
     
-    # 보안 키 검증 (프로덕션)
+    # 보안 키 확인
     if IS_PRODUCTION:
         if SECURITY_CONFIG['session']['secret_key'] == 'dev-secret-key-change-in-production':
-            errors.append("⚠️ 프로덕션 환경에서 기본 세션 키 사용 중!")
-        if SECURITY_CONFIG['jwt']['secret_key'] == 'dev-jwt-secret-change-in-production':
-            errors.append("⚠️ 프로덕션 환경에서 기본 JWT 키 사용 중!")
+            warnings.append(('CRITICAL', '프로덕션 환경에서 기본 세션 키 사용 중!'))
+        if SECURITY_CONFIG['jwt']['secret_key'] == 'dev-jwt-secret':
+            warnings.append(('CRITICAL', '프로덕션 환경에서 기본 JWT 키 사용 중!'))
     
     # 필수 AI 엔진 확인
     required_engines = [k for k, v in AI_ENGINES.items() if v.get('required')]
     if not required_engines:
-        errors.append("최소 하나의 AI 엔진이 필수로 설정되어야 합니다")
+        warnings.append(('WARNING', '필수 AI 엔진이 설정되지 않음'))
     
-    return len(errors) == 0, errors
+    # Python 버전 확인
+    current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    required_version = APP_INFO['python_required'].replace('>=', '')
+    if current_version < required_version:
+        warnings.append(('ERROR', f'Python {required_version} 이상 필요 (현재: {current_version})'))
+    
+    return warnings
 
-def save_config_snapshot(filepath: Optional[Path] = None) -> Path:
+def save_config_snapshot(filename: Optional[str] = None) -> Path:
     """
     현재 설정을 JSON 파일로 저장
     
     Args:
-        filepath: 저장 경로 (기본: backups/config_snapshot_TIMESTAMP.json)
+        filename: 파일명 (기본값: config_snapshot_TIMESTAMP.json)
         
     Returns:
         저장된 파일 경로
     """
-    if filepath is None:
-        timestamp = platform.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filepath = BACKUP_DIR / f'config_snapshot_{timestamp}.json'
+    from datetime import datetime
     
-    filepath.parent.mkdir(parents=True, exist_ok=True)
+    if filename is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'config_snapshot_{timestamp}.json'
     
-    # 직렬화 가능한 설정만 추출
+    snapshot_path = BACKUP_DIR / 'configs' / filename
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # 민감한 정보 제외하고 설정 수집
     config_data = {
-        'timestamp': platform.datetime.now().isoformat(),
-        'environment': ENV,
+        'timestamp': datetime.now().isoformat(),
         'version': APP_INFO['version'],
+        'environment': ENV,
         'system': SYSTEM_INFO,
         'settings': {
             'app_info': APP_INFO,
-            'ai_engines': {k.value: v for k, v in AI_ENGINES.items()},
-            'experiment': EXPERIMENT_CONFIG,
-            'ui': UI_CONFIG,
-            'features': FEATURE_FLAGS
+            'ai_engines': {k: {sk: sv for sk, sv in v.items() if 'key' not in sk} 
+                         for k, v in AI_ENGINES.items()},
+            'file_config': FILE_CONFIG,
+            'ui_config': UI_CONFIG,
+            'experiment_config': EXPERIMENT_CONFIG,
+            'feature_flags': FEATURE_FLAGS
         }
     }
     
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(config_data, f, indent=2, ensure_ascii=False)
+    with open(snapshot_path, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, indent=2, ensure_ascii=False, default=str)
     
-    return filepath
+    return snapshot_path
 
 # ============================================================================
-# 🚀 초기화
+# 🚀 초기화 검증
 # ============================================================================
 
-# 설정 검증
+# 앱 시작 시 자동 실행
 if __name__ != "__main__":
-    success, errors = validate_config()
+    # 설정 검증
+    config_warnings = validate_config()
     
-    if not success and errors:
+    # 경고 로깅
+    if config_warnings:
         import logging
         logger = logging.getLogger(__name__)
-        for error in errors:
-            logger.error(error)
+        
+        for level, message in config_warnings:
+            if level == 'CRITICAL':
+                logger.critical(message)
+            elif level == 'ERROR':
+                logger.error(message)
+            elif level == 'WARNING':
+                logger.warning(message)
+            else:
+                logger.info(message)
+    
+    # 개발 환경에서 설정 스냅샷 저장
+    if IS_DEVELOPMENT and not IS_FROZEN:
+        try:
+            snapshot_path = save_config_snapshot()
+            if DEBUG:
+                print(f"Config snapshot saved: {snapshot_path}")
+        except Exception as e:
+            if DEBUG:
+                print(f"Failed to save config snapshot: {e}")
 
 # ============================================================================
-# 📤 외부 노출 API
+# 📤 Public API
 # ============================================================================
 
 __all__ = [
     # 환경 정보
     'PROJECT_ROOT', 'DATA_DIR', 'ENV', 'IS_PRODUCTION', 'IS_DEVELOPMENT',
-    'DEBUG', 'SYSTEM_INFO',
+    'IS_DESKTOP', 'DEBUG', 'SYSTEM_INFO',
     
     # 앱 정보
     'APP_INFO',
     
     # 주요 설정
-    'AI_ENGINES', 'AI_EXPLANATION_LEVELS', 'SQLITE_CONFIG', 'GOOGLE_SHEETS_CONFIG',
-    'SECURITY_CONFIG', 'UI_CONFIG', 'EXPERIMENT_CONFIG', 'FILE_CONFIG',
-    'PERFORMANCE_CONFIG', 'CACHE_CONFIG', 'MODULE_CONFIG', 'SYNC_CONFIG',
-    'NOTIFICATION_CONFIG', 'LOCALIZATION_CONFIG', 'ANALYTICS_CONFIG',
-    'UPDATE_CONFIG', 'DEVELOPER_CONFIG', 'FEATURE_FLAGS',
-    
-    # 상수
-    'AIProvider', 'PROJECT_TYPES', 'EXPERIMENT_DEFAULTS',
+    'AI_ENGINES', 'AI_EXPLANATION_CONFIG', 'FILE_CONFIG', 
+    'PROTOCOL_EXTRACTION_CONFIG', 'SQLITE_CONFIG', 'GOOGLE_SHEETS_CONFIG',
+    'SECURITY_CONFIG', 'UI_CONFIG', 'EXPERIMENT_CONFIG', 'MODULE_CONFIG',
+    'SYNC_CONFIG', 'UPDATE_CONFIG', 'LOCALIZATION_CONFIG', 
+    'PERFORMANCE_CONFIG', 'DEVELOPER_CONFIG', 'FEATURE_FLAGS',
     
     # 유틸리티 함수
     'get_config', 'validate_config', 'save_config_snapshot'
