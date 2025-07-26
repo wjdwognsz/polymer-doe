@@ -1,823 +1,1007 @@
-# utils/error_handler.py
-
 """
-Universal DOE Platform - 중앙 집중식 에러 처리 관리자
-
-이 모듈은 애플리케이션 전체의 에러를 체계적으로 관리합니다.
-모든 예외는 이곳에서 분류, 로깅, 복구 시도됩니다.
+🚨 Universal DOE Platform - 에러 처리 설정
+================================================================================
+모든 에러 코드, 메시지, 복구 전략을 중앙에서 관리
+사용자 친화적이고 해결 지향적인 에러 처리 시스템
+================================================================================
 """
 
-import sys
-import json
-import logging
-import traceback
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Optional, Dict, Any, List, Callable, Type, Union
+from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
-from functools import wraps
+from enum import Enum
+from datetime import timedelta
+import traceback
+import logging
 from pathlib import Path
-import asyncio
-import streamlit as st
 
-from config.error_config import (
-    ErrorCategory, ErrorSeverity, ErrorCode,
-    USER_ERROR_MESSAGES, RECOVERY_STRATEGIES,
-    ERROR_DEFINITIONS, get_error_definition
-)
-from config.app_config import DEBUG_CONFIG, APP_NAME, IS_PRODUCTION
-from config.local_config import LOCAL_CONFIG
+# ============================================================================
+# 🎯 에러 분류 체계
+# ============================================================================
+
+class ErrorCategory(Enum):
+    """에러 카테고리 - 처리 방식 결정"""
+    SYSTEM = "system"              # 시스템 레벨 오류
+    USER_INPUT = "user_input"      # 사용자 입력 오류
+    DATA = "data"                  # 데이터 관련 오류
+    NETWORK = "network"            # 네트워크 오류
+    API = "api"                    # API 호출 오류
+    AUTH = "auth"                  # 인증/권한 오류
+    FILE = "file"                  # 파일 처리 오류
+    DATABASE = "database"          # 데이터베이스 오류
+    CALCULATION = "calculation"    # 계산/분석 오류
+    MODULE = "module"              # 모듈 관련 오류
+    PROTOCOL = "protocol"          # 프로토콜 추출 오류
+    UNKNOWN = "unknown"            # 알 수 없는 오류
 
 
-# ==================== 에러 컨텍스트 ====================
+class ErrorSeverity(Enum):
+    """에러 심각도 - 표시 방식과 로깅 레벨 결정"""
+    DEBUG = "debug"        # 디버그 정보 (개발자용)
+    INFO = "info"          # 정보성 메시지
+    WARNING = "warning"    # 경고 (계속 진행 가능)
+    ERROR = "error"        # 오류 (일부 기능 제한)
+    CRITICAL = "critical"  # 치명적 (프로그램 중단 위험)
+
+
+class RecoveryStrategy(Enum):
+    """복구 전략 - 에러 발생 시 대응 방법"""
+    RETRY = "retry"              # 재시도
+    FALLBACK = "fallback"        # 대체 방법 사용
+    CACHE = "cache"              # 캐시된 데이터 사용
+    DEFAULT = "default"          # 기본값 사용
+    USER_INTERVENTION = "user"   # 사용자 개입 필요
+    ABORT = "abort"              # 작업 중단
+    IGNORE = "ignore"            # 무시하고 계속
+    AUTO_FIX = "auto_fix"        # 자동 수정 시도
+
+
+# ============================================================================
+# 🏗️ 에러 정의 구조
+# ============================================================================
 
 @dataclass
-class ErrorContext:
-    """
-    에러 발생 시 수집되는 모든 컨텍스트 정보
-    
-    이 정보는 디버깅과 사용자 지원에 매우 중요합니다.
-    """
+class ErrorDefinition:
+    """에러 정의 - 각 에러의 모든 정보를 담는 컨테이너"""
     # 기본 정보
-    timestamp: datetime = field(default_factory=datetime.now)
-    error_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M%S%f"))
+    code: str                      # 에러 코드 (예: 1001)
+    name: str                      # 에러 이름
+    category: ErrorCategory        # 카테고리
+    severity: ErrorSeverity        # 심각도
     
-    # 에러 정보
-    error_type: Type[Exception] = Exception
-    error_message: str = ""
-    error_traceback: str = ""
+    # 메시지
+    user_message: str              # 사용자용 메시지 (친화적)
+    technical_message: str         # 개발자용 메시지 (상세)
     
-    # 분류 정보
-    severity: ErrorSeverity = ErrorSeverity.MEDIUM
-    category: ErrorCategory = ErrorCategory.SYSTEM
+    # 복구 정보
+    recovery_strategy: RecoveryStrategy     # 복구 전략
+    recovery_suggestions: List[str]         # 해결 제안사항
+    recovery_actions: List[Dict[str, Any]] = field(default_factory=list)  # 자동 복구 액션
+    
+    # 추가 정보
+    documentation_url: Optional[str] = None # 도움말 링크
+    can_continue: bool = True              # 계속 진행 가능 여부
+    auto_recoverable: bool = False         # 자동 복구 가능 여부
+    max_retries: int = 3                   # 최대 재시도 횟수
+    retry_delay: timedelta = timedelta(seconds=1)  # 재시도 간격
     
     # 컨텍스트 정보
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    page_name: Optional[str] = None
-    action: Optional[str] = None
+    preserve_context: bool = True          # 작업 컨텍스트 보존
+    log_full_trace: bool = True            # 전체 스택 트레이스 로깅
+    notify_user: bool = True               # 사용자 알림 여부
     
-    # 추가 데이터
-    additional_data: Dict[str, Any] = field(default_factory=dict)
+    # 커스텀 핸들러
+    custom_handler: Optional[Callable] = None
     
-    # 복구 시도 정보
-    recovery_attempted: bool = False
-    recovery_successful: bool = False
-    recovery_method: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """딕셔너리로 변환 (로깅용)"""
-        return {
-            'timestamp': self.timestamp.isoformat(),
-            'error_id': self.error_id,
-            'error_type': self.error_type.__name__,
-            'error_message': self.error_message,
-            'severity': self.severity.value,
-            'category': self.category.value,
-            'user_id': self.user_id,
-            'page_name': self.page_name,
-            'action': self.action,
-            'recovery_attempted': self.recovery_attempted,
-            'recovery_successful': self.recovery_successful
-        }
+    # 관련 에러 코드
+    related_errors: List[str] = field(default_factory=list)
 
 
-# ==================== 커스텀 예외 클래스 ====================
+# ============================================================================
+# 🔧 자동 복구 액션 정의
+# ============================================================================
 
-class DOEError(Exception):
-    """
-    Universal DOE Platform의 기본 예외 클래스
-    
-    모든 커스텀 예외의 부모 클래스입니다.
-    에러 카테고리와 심각도 정보를 포함합니다.
-    """
-    def __init__(
-        self, 
-        message: str,
-        category: ErrorCategory = ErrorCategory.SYSTEM,
-        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-        user_message: Optional[str] = None,
-        recovery_hint: Optional[str] = None
-    ):
-        super().__init__(message)
-        self.category = category
-        self.severity = severity
-        self.user_message = user_message or self._get_default_user_message()
-        self.recovery_hint = recovery_hint
-        self.context = None  # ErrorContext는 나중에 설정
-    
-    def _get_default_user_message(self) -> str:
-        """카테고리별 기본 사용자 메시지"""
-        return USER_ERROR_MESSAGES.get(
-            self.category,
-            "예기치 않은 오류가 발생했습니다."
-        )
-
-
-# 구체적인 예외 클래스들
-class NetworkError(DOEError):
-    """네트워크 관련 에러"""
-    def __init__(self, message: str, **kwargs):
-        super().__init__(
-            message,
-            category=ErrorCategory.NETWORK,
-            severity=ErrorSeverity.HIGH,
-            **kwargs
-        )
-
-
-class DatabaseError(DOEError):
-    """데이터베이스 관련 에러"""
-    def __init__(self, message: str, **kwargs):
-        super().__init__(
-            message,
-            category=ErrorCategory.DATABASE,
-            severity=ErrorSeverity.HIGH,
-            **kwargs
-        )
+RECOVERY_ACTIONS = {
+    'try_encodings': {
+        'function': 'utils.file_handler.try_multiple_encodings',
+        'params': ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'cp949', 'gbk'],
+        'description': '여러 인코딩으로 파일 읽기 시도'
+    },
+    'use_chardet': {
+        'function': 'utils.file_handler.detect_encoding',
+        'params': None,
+        'description': 'chardet 라이브러리로 인코딩 자동 감지'
+    },
+    'fallback_binary': {
+        'function': 'utils.file_handler.read_as_binary',
+        'params': None,
+        'description': '바이너리 모드로 읽기 시도'
+    },
+    'enhance_image': {
+        'function': 'utils.ocr_handler.enhance_image',
+        'params': ['contrast', 'sharpness', 'denoise'],
+        'description': '이미지 품질 개선'
+    },
+    'try_different_ocr': {
+        'function': 'utils.ocr_handler.try_multiple_engines',
+        'params': ['tesseract', 'easyocr', 'pytesseract'],
+        'description': '다른 OCR 엔진 시도'
+    },
+    'manual_input_prompt': {
+        'function': 'ui.dialogs.show_manual_input',
+        'params': None,
+        'description': '수동 입력 다이얼로그 표시'
+    },
+    'clear_cache': {
+        'function': 'utils.cache_manager.clear_cache',
+        'params': ['temp', 'api_responses'],
+        'description': '캐시 정리'
+    },
+    'switch_to_offline': {
+        'function': 'config.offline_config.enable_offline_mode',
+        'params': None,
+        'description': '오프라인 모드로 전환'
+    }
+}
 
 
-class ValidationError(DOEError):
-    """입력값 검증 에러"""
-    def __init__(self, message: str, field_name: Optional[str] = None, **kwargs):
-        super().__init__(
-            message,
-            category=ErrorCategory.VALIDATION,
-            severity=ErrorSeverity.LOW,
-            **kwargs
-        )
-        self.field_name = field_name
+# ============================================================================
+# 1️⃣ 시스템 에러 (1000-1999)
+# ============================================================================
+
+SYSTEM_ERRORS = {
+    '1001': ErrorDefinition(
+        code='1001',
+        name='메모리 부족',
+        category=ErrorCategory.SYSTEM,
+        severity=ErrorSeverity.CRITICAL,
+        user_message="😰 시스템 메모리가 부족합니다. 일부 프로그램을 종료 후 다시 시도해주세요.",
+        technical_message="System memory exhausted: Available {available_mb}MB < Required {required_mb}MB",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "다른 프로그램을 종료하세요",
+            "대용량 파일을 닫으세요",
+            "시스템을 재시작하세요",
+            "더 작은 데이터로 시도하세요"
+        ],
+        recovery_actions=[
+            {'action': 'clear_cache', 'params': None}
+        ],
+        can_continue=False,
+        auto_recoverable=False
+    ),
+    
+    '1002': ErrorDefinition(
+        code='1002',
+        name='디스크 공간 부족',
+        category=ErrorCategory.SYSTEM,
+        severity=ErrorSeverity.ERROR,
+        user_message="💾 저장 공간이 부족합니다. {required_mb}MB의 공간이 필요합니다.",
+        technical_message="Insufficient disk space: {available_mb}MB available, {required_mb}MB required",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "불필요한 파일을 삭제하세요",
+            "다른 드라이브를 선택하세요",
+            "임시 파일을 정리하세요",
+            "클라우드 저장소를 사용하세요"
+        ],
+        recovery_actions=[
+            {'action': 'clear_cache', 'params': ['temp', 'old_backups']}
+        ],
+        can_continue=False,
+        auto_recoverable=False
+    ),
+    
+    '1003': ErrorDefinition(
+        code='1003',
+        name='권한 없음',
+        category=ErrorCategory.SYSTEM,
+        severity=ErrorSeverity.ERROR,
+        user_message="🔒 이 작업을 수행할 권한이 없습니다.",
+        technical_message="Permission denied: {operation} requires {permission} permission",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "관리자 권한으로 실행하세요",
+            "파일/폴더 권한을 확인하세요",
+            "IT 관리자에게 문의하세요"
+        ],
+        can_continue=False
+    )
+}
+
+# ============================================================================
+# 2️⃣ 사용자 입력 에러 (2000-2999)
+# ============================================================================
+
+USER_INPUT_ERRORS = {
+    '2001': ErrorDefinition(
+        code='2001',
+        name='잘못된 입력값',
+        category=ErrorCategory.USER_INPUT,
+        severity=ErrorSeverity.WARNING,
+        user_message="📝 입력값이 올바르지 않습니다. {field_name}은(는) {constraint}이어야 합니다.",
+        technical_message="Invalid input for {field_name}: {value} does not meet constraint {constraint}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "입력값을 다시 확인하세요",
+            "예시: {example}",
+            "도움말을 참조하세요"
+        ],
+        can_continue=True,
+        auto_recoverable=False
+    ),
+    
+    '2002': ErrorDefinition(
+        code='2002',
+        name='필수 입력 누락',
+        category=ErrorCategory.USER_INPUT,
+        severity=ErrorSeverity.WARNING,
+        user_message="⚠️ 필수 항목이 입력되지 않았습니다: {field_names}",
+        technical_message="Required fields missing: {field_names}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "빨간색으로 표시된 필수 항목을 입력하세요",
+            "모든 필수 항목(*)을 확인하세요"
+        ],
+        can_continue=True
+    ),
+    
+    '2003': ErrorDefinition(
+        code='2003',
+        name='범위 초과',
+        category=ErrorCategory.USER_INPUT,
+        severity=ErrorSeverity.WARNING,
+        user_message="📏 입력값이 허용 범위를 벗어났습니다. {min_value}에서 {max_value} 사이의 값을 입력하세요.",
+        technical_message="Value out of range: {value} not in [{min_value}, {max_value}]",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "허용 범위 내의 값을 입력하세요",
+            "단위를 확인하세요",
+            "기본값을 사용하시겠습니까?"
+        ],
+        can_continue=True
+    )
+}
+
+# ============================================================================
+# 3️⃣ 네트워크 에러 (3000-3999)
+# ============================================================================
+
+NETWORK_ERRORS = {
+    '3001': ErrorDefinition(
+        code='3001',
+        name='인터넷 연결 없음',
+        category=ErrorCategory.NETWORK,
+        severity=ErrorSeverity.ERROR,
+        user_message="🌐 인터넷에 연결할 수 없습니다. 오프라인 모드로 전환합니다.",
+        technical_message="Network unreachable: Connection timeout after {timeout}s",
+        recovery_strategy=RecoveryStrategy.FALLBACK,
+        recovery_suggestions=[
+            "인터넷 연결을 확인하세요",
+            "방화벽 설정을 확인하세요",
+            "오프라인 모드에서 계속 작업하세요"
+        ],
+        recovery_actions=[
+            {'action': 'switch_to_offline', 'params': None}
+        ],
+        can_continue=True,
+        auto_recoverable=True
+    ),
+    
+    '3002': ErrorDefinition(
+        code='3002',
+        name='서버 응답 없음',
+        category=ErrorCategory.NETWORK,
+        severity=ErrorSeverity.ERROR,
+        user_message="⏱️ 서버가 응답하지 않습니다. 잠시 후 다시 시도해주세요.",
+        technical_message="Server timeout: No response from {server} after {timeout}s",
+        recovery_strategy=RecoveryStrategy.RETRY,
+        recovery_suggestions=[
+            "잠시 기다린 후 다시 시도하세요",
+            "서버 상태를 확인하세요",
+            "다른 서버를 선택하세요"
+        ],
+        can_continue=True,
+        auto_recoverable=True,
+        max_retries=3,
+        retry_delay=timedelta(seconds=5)
+    )
+}
+
+# ============================================================================
+# 4️⃣ 파일 처리 에러 (4000-4999)
+# ============================================================================
+
+FILE_ERRORS = {
+    '4001': ErrorDefinition(
+        code='4001',
+        name='파일을 찾을 수 없음',
+        category=ErrorCategory.FILE,
+        severity=ErrorSeverity.ERROR,
+        user_message="📁 파일을 찾을 수 없습니다: {filename}",
+        technical_message="File not found: {filepath}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "파일 경로를 확인하세요",
+            "파일이 이동되었는지 확인하세요",
+            "다른 파일을 선택하세요"
+        ],
+        can_continue=True
+    ),
+    
+    '4002': ErrorDefinition(
+        code='4002',
+        name='파일 읽기 실패',
+        category=ErrorCategory.FILE,
+        severity=ErrorSeverity.ERROR,
+        user_message="📖 파일을 읽을 수 없습니다. 파일이 손상되었거나 권한이 없을 수 있습니다.",
+        technical_message="File read error: {error_detail}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "파일 권한을 확인하세요",
+            "파일이 다른 프로그램에서 사용 중인지 확인하세요",
+            "파일을 다시 다운로드하세요"
+        ],
+        can_continue=True
+    ),
+    
+    # === 프로토콜 추출 관련 에러 (4200-4299) ===
+    '4200': ErrorDefinition(
+        code='4200',
+        name='지원하지 않는 파일 형식',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.WARNING,
+        user_message="😕 이 파일 형식은 아직 지원하지 않아요. PDF나 Word 파일로 변환해주세요!",
+        technical_message="Unsupported file format: {file_type}. Supported: PDF, TXT, DOCX, HTML, MD, RTF",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "지원 형식: PDF, TXT, DOCX, HTML, MD, RTF",
+            "파일을 다른 형식으로 변환 후 시도하세요",
+            "텍스트를 직접 복사-붙여넣기 하세요"
+        ],
+        can_continue=True,
+        related_errors=['4201', '4202']
+    ),
+    
+    '4201': ErrorDefinition(
+        code='4201',
+        name='파일 인코딩 감지 실패',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.ERROR,
+        user_message="🤔 파일의 텍스트를 읽을 수 없어요. 메모장에서 UTF-8로 저장 후 다시 시도해주세요.",
+        technical_message="Encoding detection failed for file: {filename}",
+        recovery_strategy=RecoveryStrategy.AUTO_FIX,
+        recovery_suggestions=[
+            "메모장에서 파일을 열고 'UTF-8'로 다시 저장하세요",
+            "다른 텍스트 에디터를 사용해보세요",
+            "파일 내용을 복사하여 직접 입력하세요"
+        ],
+        recovery_actions=[
+            {'action': 'try_encodings', 'params': None},
+            {'action': 'use_chardet', 'params': None},
+            {'action': 'fallback_binary', 'params': None}
+        ],
+        can_continue=True,
+        auto_recoverable=True,
+        max_retries=5
+    ),
+    
+    '4202': ErrorDefinition(
+        code='4202',
+        name='프로토콜 추출 실패',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.ERROR,
+        user_message="🔍 실험 방법을 찾을 수 없어요. Methods나 Experimental 섹션이 있는지 확인해주세요.",
+        technical_message="Protocol extraction failed: No methods section found in document",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "문서에 'Methods', 'Experimental', 'Procedure' 섹션이 있는지 확인하세요",
+            "해당 섹션만 선택하여 다시 시도하세요",
+            "프로토콜 템플릿을 사용해보세요",
+            "수동으로 프로토콜 정보를 입력하세요"
+        ],
+        can_continue=True,
+        documentation_url="https://docs.universaldoe.com/protocol-extraction"
+    ),
+    
+    '4203': ErrorDefinition(
+        code='4203',
+        name='텍스트가 너무 김',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.WARNING,
+        user_message="📏 텍스트가 너무 길어요. 중요한 부분만 선택해서 다시 시도해주세요.",
+        technical_message="Text too long: {length} characters exceeds maximum {max_length}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "Methods 섹션만 선택하세요",
+            "여러 부분으로 나누어 처리하세요",
+            "불필요한 부분을 제거하세요",
+            "요약된 버전을 사용하세요"
+        ],
+        can_continue=True
+    ),
+    
+    '4204': ErrorDefinition(
+        code='4204',
+        name='문서 구조 오류',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.ERROR,
+        user_message="📄 문서 구조가 올바르지 않습니다. 파일이 손상되었을 수 있습니다.",
+        technical_message="Invalid document structure: {error_detail}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "파일을 다시 생성하거나 다운로드하세요",
+            "다른 프로그램에서 열어 다시 저장하세요",
+            "PDF를 텍스트로 변환 후 시도하세요",
+            "구조화된 템플릿을 사용하세요"
+        ],
+        can_continue=True
+    ),
+    
+    '4205': ErrorDefinition(
+        code='4205',
+        name='OCR 처리 오류',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.ERROR,
+        user_message="👁️ 스캔된 이미지에서 텍스트를 추출할 수 없습니다. 텍스트 파일을 사용해주세요.",
+        technical_message="OCR processing failed: {error_detail}",
+        recovery_strategy=RecoveryStrategy.AUTO_FIX,
+        recovery_suggestions=[
+            "이미지 품질을 개선하세요 (300DPI 이상)",
+            "텍스트가 선명한 페이지만 스캔하세요",
+            "텍스트를 직접 입력하세요",
+            "다른 OCR 소프트웨어를 사용하세요"
+        ],
+        recovery_actions=[
+            {'action': 'enhance_image', 'params': None},
+            {'action': 'try_different_ocr', 'params': None},
+            {'action': 'manual_input_prompt', 'params': None}
+        ],
+        can_continue=True,
+        auto_recoverable=True
+    ),
+    
+    '4206': ErrorDefinition(
+        code='4206',
+        name='다중 파일 처리 오류',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.WARNING,
+        user_message="📚 일부 파일 처리에 실패했습니다. 성공한 파일들로 계속 진행합니다.",
+        technical_message="Multi-file processing error: {failed_count} of {total_count} files failed",
+        recovery_strategy=RecoveryStrategy.FALLBACK,
+        recovery_suggestions=[
+            "실패한 파일을 개별적으로 처리하세요",
+            "파일 형식을 통일하세요",
+            "한 번에 처리하는 파일 수를 줄이세요"
+        ],
+        can_continue=True,
+        auto_recoverable=True,
+        preserve_context=True
+    ),
+    
+    '4207': ErrorDefinition(
+        code='4207',
+        name='URL 콘텐츠 가져오기 실패',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.ERROR,
+        user_message="🔗 웹페이지에 접근할 수 없습니다. URL을 확인하거나 파일로 다운로드하세요.",
+        technical_message="URL fetch failed: {url} - {status_code}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "URL이 정확한지 확인하세요",
+            "웹페이지를 PDF로 저장 후 업로드하세요",
+            "다른 브라우저에서 시도하세요",
+            "VPN이나 프록시 설정을 확인하세요"
+        ],
+        can_continue=True
+    ),
+    
+    '4208': ErrorDefinition(
+        code='4208',
+        name='프로토콜 분석 시간 초과',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.ERROR,
+        user_message="⏰ 프로토콜 분석이 너무 오래 걸립니다. 더 작은 문서로 시도해주세요.",
+        technical_message="Protocol parsing timeout: Exceeded {timeout}s limit",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "문서를 여러 부분으로 나누세요",
+            "Methods 섹션만 추출하세요",
+            "간단한 형식의 문서를 사용하세요",
+            "텍스트 형식으로 변환 후 시도하세요"
+        ],
+        can_continue=True
+    ),
+    
+    '4209': ErrorDefinition(
+        code='4209',
+        name='프로토콜 정보 부족',
+        category=ErrorCategory.PROTOCOL,
+        severity=ErrorSeverity.WARNING,
+        user_message="📋 프로토콜 정보가 부족해요. 최소한 재료와 실험 절차는 포함되어야 해요.",
+        technical_message="Insufficient protocol data: Missing required sections {missing_sections}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "재료(Materials) 섹션을 추가하세요",
+            "실험 절차(Procedure)를 상세히 작성하세요",
+            "템플릿을 참고하여 작성하세요",
+            "예제 프로토콜을 참조하세요"
+        ],
+        can_continue=True,
+        documentation_url="https://docs.universaldoe.com/protocol-template"
+    )
+}
+
+# ============================================================================
+# 5️⃣ API 에러 (5000-5999)
+# ============================================================================
+
+API_ERRORS = {
+    '5001': ErrorDefinition(
+        code='5001',
+        name='API 키 없음',
+        category=ErrorCategory.API,
+        severity=ErrorSeverity.ERROR,
+        user_message="🔑 API 키가 설정되지 않았습니다. 설정에서 API 키를 입력해주세요.",
+        technical_message="API key not found for service: {service}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "설정 > API 키 관리에서 키를 입력하세요",
+            "{service} 웹사이트에서 API 키를 발급받으세요",
+            "무료 API 키 발급 가이드를 참조하세요"
+        ],
+        can_continue=False,
+        documentation_url="https://docs.universaldoe.com/api-keys"
+    ),
+    
+    '5002': ErrorDefinition(
+        code='5002',
+        name='API 한도 초과',
+        category=ErrorCategory.API,
+        severity=ErrorSeverity.WARNING,
+        user_message="⚡ API 사용 한도를 초과했습니다. {reset_time}에 초기화됩니다.",
+        technical_message="API rate limit exceeded: {current}/{limit} requests",
+        recovery_strategy=RecoveryStrategy.FALLBACK,
+        recovery_suggestions=[
+            "다른 AI 엔진을 사용하세요",
+            "잠시 기다린 후 다시 시도하세요",
+            "API 플랜을 업그레이드하세요"
+        ],
+        can_continue=True,
+        auto_recoverable=True
+    )
+}
+
+# ============================================================================
+# 6️⃣ 데이터베이스 에러 (6000-6999)
+# ============================================================================
+
+DATABASE_ERRORS = {
+    '6001': ErrorDefinition(
+        code='6001',
+        name='데이터베이스 연결 실패',
+        category=ErrorCategory.DATABASE,
+        severity=ErrorSeverity.ERROR,
+        user_message="🗄️ 데이터베이스에 연결할 수 없습니다. 로컬 모드로 전환합니다.",
+        technical_message="Database connection failed: {error_detail}",
+        recovery_strategy=RecoveryStrategy.FALLBACK,
+        recovery_suggestions=[
+            "인터넷 연결을 확인하세요",
+            "로컬 데이터베이스를 사용합니다",
+            "잠시 후 다시 시도하세요"
+        ],
+        recovery_actions=[
+            {'action': 'switch_to_offline', 'params': None}
+        ],
+        can_continue=True,
+        auto_recoverable=True
+    ),
+    
+    '6002': ErrorDefinition(
+        code='6002',
+        name='데이터 저장 실패',
+        category=ErrorCategory.DATABASE,
+        severity=ErrorSeverity.ERROR,
+        user_message="💾 데이터를 저장할 수 없습니다. 임시 저장소에 보관됩니다.",
+        technical_message="Data save failed: {table} - {error_detail}",
+        recovery_strategy=RecoveryStrategy.CACHE,
+        recovery_suggestions=[
+            "나중에 자동으로 동기화됩니다",
+            "수동으로 백업을 생성하세요",
+            "저장 공간을 확인하세요"
+        ],
+        can_continue=True,
+        auto_recoverable=True,
+        preserve_context=True
+    )
+}
+
+# ============================================================================
+# 7️⃣ 계산/분석 에러 (7000-7999)
+# ============================================================================
+
+CALCULATION_ERRORS = {
+    '7001': ErrorDefinition(
+        code='7001',
+        name='계산 오류',
+        category=ErrorCategory.CALCULATION,
+        severity=ErrorSeverity.ERROR,
+        user_message="🧮 계산 중 오류가 발생했습니다. 입력 데이터를 확인해주세요.",
+        technical_message="Calculation error in {function}: {error_detail}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "입력값에 0이나 음수가 있는지 확인하세요",
+            "데이터 범위가 적절한지 확인하세요",
+            "다른 계산 방법을 시도하세요"
+        ],
+        can_continue=True,
+        preserve_context=True
+    ),
+    
+    '7002': ErrorDefinition(
+        code='7002',
+        name='통계 분석 실패',
+        category=ErrorCategory.CALCULATION,
+        severity=ErrorSeverity.ERROR,
+        user_message="📊 통계 분석을 수행할 수 없습니다. 데이터가 부족하거나 형식이 맞지 않습니다.",
+        technical_message="Statistical analysis failed: {method} requires {requirement}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "최소 {min_samples}개 이상의 데이터가 필요합니다",
+            "결측값을 처리해주세요",
+            "데이터 형식을 확인하세요"
+        ],
+        can_continue=False
+    )
+}
+
+# ============================================================================
+# 8️⃣ 인증/권한 에러 (8000-8999)
+# ============================================================================
+
+AUTH_ERRORS = {
+    '8001': ErrorDefinition(
+        code='8001',
+        name='인증 실패',
+        category=ErrorCategory.AUTH,
+        severity=ErrorSeverity.ERROR,
+        user_message="🔐 로그인 정보가 올바르지 않습니다.",
+        technical_message="Authentication failed: Invalid credentials",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "이메일과 비밀번호를 확인하세요",
+            "Caps Lock이 켜져있는지 확인하세요",
+            "비밀번호를 재설정하세요"
+        ],
+        can_continue=False
+    ),
+    
+    '8002': ErrorDefinition(
+        code='8002',
+        name='세션 만료',
+        category=ErrorCategory.AUTH,
+        severity=ErrorSeverity.WARNING,
+        user_message="⏰ 세션이 만료되었습니다. 다시 로그인해주세요.",
+        technical_message="Session expired after {duration}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "다시 로그인하세요",
+            "작업 내용은 자동 저장되었습니다"
+        ],
+        can_continue=False,
+        preserve_context=True
+    )
+}
+
+# ============================================================================
+# 9️⃣ 모듈 에러 (9000-9999)
+# ============================================================================
+
+MODULE_ERRORS = {
+    '9001': ErrorDefinition(
+        code='9001',
+        name='모듈 로드 실패',
+        category=ErrorCategory.MODULE,
+        severity=ErrorSeverity.ERROR,
+        user_message="🧩 모듈을 불러올 수 없습니다: {module_name}",
+        technical_message="Module load failed: {module_path} - {error_detail}",
+        recovery_strategy=RecoveryStrategy.USER_INTERVENTION,
+        recovery_suggestions=[
+            "모듈이 올바르게 설치되었는지 확인하세요",
+            "모듈 의존성을 확인하세요",
+            "모듈을 다시 설치하세요"
+        ],
+        can_continue=True
+    )
+}
+
+# ============================================================================
+# 🔧 에러 처리 설정
+# ============================================================================
+
+# 모든 에러 통합
+ERROR_CODES = {
+    **SYSTEM_ERRORS,
+    **USER_INPUT_ERRORS,
+    **NETWORK_ERRORS,
+    **FILE_ERRORS,
+    **API_ERRORS,
+    **DATABASE_ERRORS,
+    **CALCULATION_ERRORS,
+    **AUTH_ERRORS,
+    **MODULE_ERRORS
+}
+
+# 카테고리별 에러 분류
+ERROR_BY_CATEGORY = {
+    ErrorCategory.SYSTEM: SYSTEM_ERRORS,
+    ErrorCategory.USER_INPUT: USER_INPUT_ERRORS,
+    ErrorCategory.NETWORK: NETWORK_ERRORS,
+    ErrorCategory.FILE: FILE_ERRORS,
+    ErrorCategory.API: API_ERRORS,
+    ErrorCategory.DATABASE: DATABASE_ERRORS,
+    ErrorCategory.CALCULATION: CALCULATION_ERRORS,
+    ErrorCategory.AUTH: AUTH_ERRORS,
+    ErrorCategory.MODULE: MODULE_ERRORS,
+    ErrorCategory.PROTOCOL: {k: v for k, v in FILE_ERRORS.items() if k.startswith('42')}
+}
+
+# 심각도별 설정
+ERROR_SEVERITY_CONFIG = {
+    ErrorSeverity.DEBUG: {
+        'color': '#6B7280',  # 회색
+        'icon': '🐛',
+        'log_level': 'DEBUG',
+        'notify_user': False
+    },
+    ErrorSeverity.INFO: {
+        'color': '#3B82F6',  # 파란색
+        'icon': 'ℹ️',
+        'log_level': 'INFO',
+        'notify_user': True
+    },
+    ErrorSeverity.WARNING: {
+        'color': '#F59E0B',  # 주황색
+        'icon': '⚠️',
+        'log_level': 'WARNING',
+        'notify_user': True
+    },
+    ErrorSeverity.ERROR: {
+        'color': '#EF4444',  # 빨간색
+        'icon': '❌',
+        'log_level': 'ERROR',
+        'notify_user': True
+    },
+    ErrorSeverity.CRITICAL: {
+        'color': '#991B1B',  # 진한 빨간색
+        'icon': '🚨',
+        'log_level': 'CRITICAL',
+        'notify_user': True
+    }
+}
+
+# 복구 전략별 설정
+RECOVERY_CONFIG = {
+    RecoveryStrategy.RETRY: {
+        'max_attempts': 3,
+        'delay': timedelta(seconds=1),
+        'backoff_factor': 2.0,
+        'auto_execute': True
+    },
+    RecoveryStrategy.FALLBACK: {
+        'auto_execute': True,
+        'notify_user': True
+    },
+    RecoveryStrategy.CACHE: {
+        'auto_execute': True,
+        'cache_duration': timedelta(hours=24)
+    },
+    RecoveryStrategy.DEFAULT: {
+        'auto_execute': True,
+        'notify_user': False
+    },
+    RecoveryStrategy.USER_INTERVENTION: {
+        'auto_execute': False,
+        'show_dialog': True
+    },
+    RecoveryStrategy.ABORT: {
+        'auto_execute': True,
+        'cleanup': True
+    },
+    RecoveryStrategy.IGNORE: {
+        'auto_execute': True,
+        'log_only': True
+    },
+    RecoveryStrategy.AUTO_FIX: {
+        'auto_execute': True,
+        'notify_user': True,
+        'log_attempts': True
+    }
+}
+
+# 에러 메시지 템플릿
+ERROR_MESSAGE_TEMPLATES = {
+    'user_friendly': "{icon} {message}\n\n💡 해결 방법:\n{suggestions}",
+    'technical': "[{code}] {category}.{name}: {technical_message}\nStack: {stack_trace}",
+    'log_format': "{timestamp} - {severity} - [{code}] {message} - Context: {context}",
+    'notification': "{icon} {name}\n{message}"
+}
+
+# 에러 그룹화 규칙
+ERROR_GROUPING_RULES = {
+    'similar_threshold': 0.8,  # 유사도 임계값
+    'time_window': timedelta(minutes=5),  # 그룹화 시간 창
+    'max_group_size': 10,  # 최대 그룹 크기
+    'grouping_enabled': True
+}
+
+# 형식별 에러 처리 가이드
+FORMAT_SPECIFIC_ERRORS = {
+    'pdf': ['4202', '4205', '4208'],
+    'docx': ['4204', '4201'],
+    'html': ['4207', '4204'],
+    'txt': ['4201', '4203'],
+    'multi': ['4206', '4209']
+}
+
+# 자동 복구 전략 매핑
+ERROR_RECOVERY_STRATEGIES = {
+    '4201': [
+        {'action': 'try_encodings', 'params': ['utf-8', 'latin-1', 'cp1252']},
+        {'action': 'use_chardet', 'params': None},
+        {'action': 'fallback_binary', 'params': None}
+    ],
+    '4205': [
+        {'action': 'enhance_image', 'params': ['contrast', 'sharpness']},
+        {'action': 'try_different_ocr', 'params': ['tesseract', 'easyocr']},
+        {'action': 'manual_input_prompt', 'params': None}
+    ],
+    '3001': [
+        {'action': 'switch_to_offline', 'params': None}
+    ],
+    '6001': [
+        {'action': 'switch_to_offline', 'params': None}
+    ]
+}
+
+# ============================================================================
+# 🛠️ 유틸리티 함수
+# ============================================================================
+
+def get_error_definition(error_code: str) -> Optional[ErrorDefinition]:
+    """에러 코드로 에러 정의 조회"""
+    return ERROR_CODES.get(error_code)
 
 
-class APIError(DOEError):
-    """API 호출 관련 에러"""
-    def __init__(
-        self, 
-        message: str, 
-        api_name: Optional[str] = None,
-        status_code: Optional[int] = None,
-        **kwargs
-    ):
-        super().__init__(
-            message,
-            category=ErrorCategory.API,
-            severity=ErrorSeverity.MEDIUM,
-            **kwargs
-        )
-        self.api_name = api_name
-        self.status_code = status_code
+def get_errors_by_category(category: ErrorCategory) -> Dict[str, ErrorDefinition]:
+    """카테고리별 에러 목록 조회"""
+    return ERROR_BY_CATEGORY.get(category, {})
 
 
-class ConfigurationError(DOEError):
-    """설정 관련 에러"""
-    def __init__(self, message: str, config_key: Optional[str] = None, **kwargs):
-        super().__init__(
-            message,
-            category=ErrorCategory.CONFIGURATION,
-            severity=ErrorSeverity.HIGH,
-            **kwargs
-        )
-        self.config_key = config_key
+def get_errors_by_severity(severity: ErrorSeverity) -> Dict[str, ErrorDefinition]:
+    """심각도별 에러 목록 조회"""
+    return {
+        code: error for code, error in ERROR_CODES.items()
+        if error.severity == severity
+    }
 
 
-# ==================== 에러 핸들러 ====================
-
-class ErrorHandler:
-    """
-    중앙 집중식 에러 처리 관리자
+def format_error_message(error_code: str, context: Dict[str, Any] = None) -> str:
+    """에러 메시지 포맷팅"""
+    error_def = get_error_definition(error_code)
+    if not error_def:
+        return f"Unknown error: {error_code}"
     
-    이 클래스는 애플리케이션 전체의 에러를 관리하는 중앙 통제실입니다.
-    모든 에러는 여기를 거쳐 적절히 분류되고 처리됩니다.
-    """
-    
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ErrorHandler, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-            
-        self._initialized = True
-        self._setup_logging()
-        self._recovery_strategies = self._load_recovery_strategies()
-        self._error_history = []  # 최근 에러 기록
-        self._error_stats = {}    # 에러 통계
-    
-    def _setup_logging(self):
-        """로깅 시스템 설정"""
-        log_path = LOCAL_CONFIG['logs']['path']
-        log_path.mkdir(parents=True, exist_ok=True)
-        
-        # 에러 전용 로거
-        self.error_logger = logging.getLogger('error_handler')
-        self.error_logger.setLevel(logging.DEBUG if DEBUG_CONFIG['show_debug_info'] else logging.INFO)
-        
-        # 파일 핸들러 (상세 로그)
-        file_handler = logging.FileHandler(
-            log_path / 'errors.log',
-            encoding='utf-8'
-        )
-        file_handler.setFormatter(
-            logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-        )
-        self.error_logger.addHandler(file_handler)
-        
-        # 심각한 에러용 별도 파일
-        critical_handler = logging.FileHandler(
-            log_path / 'critical_errors.log',
-            encoding='utf-8'
-        )
-        critical_handler.setLevel(logging.ERROR)
-        self.error_logger.addHandler(critical_handler)
-    
-    def _load_recovery_strategies(self) -> Dict[ErrorCategory, Callable]:
-        """복구 전략 로드"""
-        strategies = {}
-        
-        # 각 카테고리별 복구 전략 정의
-        strategies[ErrorCategory.NETWORK] = self._recover_from_network_error
-        strategies[ErrorCategory.DATABASE] = self._recover_from_database_error
-        strategies[ErrorCategory.API] = self._recover_from_api_error
-        strategies[ErrorCategory.FILE_SYSTEM] = self._recover_from_file_error
-        strategies[ErrorCategory.VALIDATION] = self._recover_from_validation_error
-        
-        return strategies
-    
-    # ==================== 메인 에러 처리 메서드 ====================
-    
-    def handle_error(
-        self,
-        error: Exception,
-        context: Optional[Dict[str, Any]] = None,
-        show_user_message: bool = True,
-        attempt_recovery: bool = True
-    ) -> Optional[Any]:
-        """
-        에러 처리의 중앙 진입점
-        
-        이 메서드가 모든 에러 처리의 시작점입니다.
-        에러를 받아서 분류하고, 로깅하고, 복구를 시도하고,
-        사용자에게 적절한 메시지를 표시합니다.
-        
-        Args:
-            error: 발생한 예외
-            context: 추가 컨텍스트 정보
-            show_user_message: 사용자에게 메시지 표시 여부
-            attempt_recovery: 자동 복구 시도 여부
-            
-        Returns:
-            복구된 값 (있는 경우) 또는 None
-        """
-        # 1. 에러 컨텍스트 생성
-        error_context = self._create_error_context(error, context)
-        
-        # 2. 에러 분류
-        error_context = self._classify_error(error, error_context)
-        
-        # 3. 에러 로깅
-        self._log_error(error_context)
-        
-        # 4. 에러 히스토리 기록
-        self._add_to_history(error_context)
-        
-        # 5. 통계 업데이트
-        self._update_statistics(error_context)
-        
-        # 6. 사용자 메시지 표시
-        if show_user_message:
-            self._show_user_message(error, error_context)
-        
-        # 7. 복구 시도
-        recovery_result = None
-        if attempt_recovery and error_context.severity != ErrorSeverity.CRITICAL:
-            recovery_result = self._attempt_recovery(error, error_context)
-        
-        # 8. 심각한 에러인 경우 추가 조치
-        if error_context.severity == ErrorSeverity.CRITICAL:
-            self._handle_critical_error(error_context)
-        
-        return recovery_result
-    
-    # ==================== 내부 메서드들 ====================
-    
-    def _create_error_context(self, error: Exception, context: Optional[Dict[str, Any]]) -> ErrorContext:
-        """에러 컨텍스트 생성"""
-        error_context = ErrorContext(
-            error_type=type(error),
-            error_message=str(error),
-            error_traceback=traceback.format_exc()
-        )
-        
-        # Streamlit 세션 정보 추가
-        if 'st' in sys.modules and hasattr(st, 'session_state'):
-            error_context.user_id = st.session_state.get('user_id')
-            error_context.session_id = st.session_state.get('session_id')
-            error_context.page_name = st.session_state.get('current_page')
-        
-        # 추가 컨텍스트 정보
-        if context:
-            error_context.additional_data.update(context)
-        
-        return error_context
-    
-    def _classify_error(self, error: Exception, context: ErrorContext) -> ErrorContext:
-        """에러 분류"""
-        if isinstance(error, DOEError):
-            context.category = error.category
-            context.severity = error.severity
-        else:
-            # 일반 예외 분류
-            error_name = type(error).__name__
-            
-            if error_name in ['ConnectionError', 'HTTPError', 'URLError']:
-                context.category = ErrorCategory.NETWORK
-                context.severity = ErrorSeverity.HIGH
-            elif error_name in ['OperationalError', 'IntegrityError']:
-                context.category = ErrorCategory.DATABASE
-                context.severity = ErrorSeverity.HIGH
-            elif error_name in ['FileNotFoundError', 'PermissionError']:
-                context.category = ErrorCategory.FILE_SYSTEM
-                context.severity = ErrorSeverity.MEDIUM
-            elif error_name in ['ValueError', 'TypeError']:
-                context.category = ErrorCategory.VALIDATION
-                context.severity = ErrorSeverity.LOW
-            elif error_name == 'MemoryError':
-                context.category = ErrorCategory.SYSTEM
-                context.severity = ErrorSeverity.CRITICAL
-            else:
-                context.category = ErrorCategory.SYSTEM
-                context.severity = ErrorSeverity.MEDIUM
-        
-        return context
-    
-    def _log_error(self, context: ErrorContext):
-        """에러 로깅"""
-        log_entry = {
-            'error_id': context.error_id,
-            'timestamp': context.timestamp.isoformat(),
-            'category': context.category.value,
-            'severity': context.severity.value,
-            'error_type': context.error_type.__name__,
-            'error_message': context.error_message,
-            'user_id': context.user_id,
-            'page_name': context.page_name,
-            'additional_data': context.additional_data,
-            'traceback': context.error_traceback if not IS_PRODUCTION else None
-        }
-        
-        # 심각도에 따른 로그 레벨
-        if context.severity == ErrorSeverity.CRITICAL:
-            self.error_logger.critical(json.dumps(log_entry, ensure_ascii=False))
-        elif context.severity == ErrorSeverity.HIGH:
-            self.error_logger.error(json.dumps(log_entry, ensure_ascii=False))
-        elif context.severity == ErrorSeverity.MEDIUM:
-            self.error_logger.warning(json.dumps(log_entry, ensure_ascii=False))
-        else:
-            self.error_logger.info(json.dumps(log_entry, ensure_ascii=False))
-    
-    def _add_to_history(self, context: ErrorContext):
-        """에러 히스토리에 추가"""
-        # 최대 100개까지만 유지
-        if len(self._error_history) >= 100:
-            self._error_history.pop(0)
-        
-        self._error_history.append(context)
-    
-    def _update_statistics(self, context: ErrorContext):
-        """에러 통계 업데이트"""
-        key = f"{context.category.value}_{context.severity.value}"
-        
-        if key not in self._error_stats:
-            self._error_stats[key] = {
-                'count': 0,
-                'first_occurred': context.timestamp,
-                'last_occurred': context.timestamp
-            }
-        
-        self._error_stats[key]['count'] += 1
-        self._error_stats[key]['last_occurred'] = context.timestamp
-    
-    def _show_user_message(self, error: Exception, context: ErrorContext):
-        """사용자에게 에러 메시지 표시"""
-        if isinstance(error, DOEError):
-            user_message = error.user_message
-            recovery_hint = error.recovery_hint
-        else:
-            user_message = USER_ERROR_MESSAGES.get(
-                context.category,
-                "예기치 않은 오류가 발생했습니다."
-            )
-            recovery_hint = None
-        
-        # Streamlit UI에 표시
-        if 'st' in sys.modules:
-            if context.severity == ErrorSeverity.CRITICAL:
-                st.error(f"🚨 {user_message}")
-            elif context.severity == ErrorSeverity.HIGH:
-                st.error(f"❌ {user_message}")
-            elif context.severity == ErrorSeverity.MEDIUM:
-                st.warning(f"⚠️ {user_message}")
-            else:
-                st.info(f"ℹ️ {user_message}")
-            
-            if recovery_hint:
-                st.caption(f"💡 {recovery_hint}")
-            
-            # 디버그 모드에서는 상세 정보 표시
-            if DEBUG_CONFIG['show_debug_info'] and not IS_PRODUCTION:
-                with st.expander("🔍 상세 정보"):
-                    st.code(context.error_traceback)
-                    st.json(context.to_dict())
-    
-    # ==================== 복구 전략 ====================
-    
-    def _attempt_recovery(self, error: Exception, context: ErrorContext) -> Optional[Any]:
-        """자동 복구 시도"""
-        strategy = self._recovery_strategies.get(context.category)
-        
-        if strategy:
-            try:
-                result = strategy(error, context)
-                context.recovery_attempted = True
-                context.recovery_successful = result is not None
-                context.recovery_method = strategy.__name__
-                return result
-            except Exception as recovery_error:
-                self.error_logger.error(f"복구 실패: {recovery_error}")
-                context.recovery_attempted = True
-                context.recovery_successful = False
-        
-        return None
-    
-    def _recover_from_network_error(self, error: Exception, context: ErrorContext) -> Optional[Any]:
-        """네트워크 에러 복구"""
-        # 오프라인 모드로 전환
-        if 'st' in sys.modules and hasattr(st, 'session_state'):
-            st.session_state['offline_mode'] = True
-            st.info("🔌 오프라인 모드로 전환되었습니다.")
-        
-        # 캐시된 데이터 반환
-        cache_key = context.additional_data.get('cache_key')
-        if cache_key and hasattr(st, 'cache_data'):
-            # 캐시에서 데이터 찾기
-            return None  # 실제 구현에서는 캐시 조회
-        
-        return None
-    
-    def _recover_from_database_error(self, error: Exception, context: ErrorContext) -> Optional[Any]:
-        """데이터베이스 에러 복구"""
-        # 백업 DB 사용
-        if 'st' in sys.modules:
-            st.warning("⚠️ 백업 데이터베이스를 사용합니다.")
-        
-        # 읽기 전용 모드로 전환
-        if hasattr(st, 'session_state'):
-            st.session_state['readonly_mode'] = True
-        
-        return None
-    
-    def _recover_from_api_error(self, error: Exception, context: ErrorContext) -> Optional[Any]:
-        """API 에러 복구"""
-        api_name = context.additional_data.get('api_name')
-        
-        # 대체 API 사용
-        if api_name == 'gemini':
-            if 'st' in sys.modules:
-                st.info("🔄 대체 AI 엔진을 사용합니다.")
-            return 'groq'  # 대체 API 이름 반환
-        
-        # 기본 템플릿 사용
-        return context.additional_data.get('default_template')
-    
-    def _recover_from_file_error(self, error: Exception, context: ErrorContext) -> Optional[Any]:
-        """파일 시스템 에러 복구"""
-        # 대체 경로 사용
-        file_path = context.additional_data.get('file_path')
-        if file_path:
-            # 임시 폴더 사용
-            temp_path = Path.home() / '.polymer_doe_temp' / Path(file_path).name
-            temp_path.parent.mkdir(parents=True, exist_ok=True)
-            return str(temp_path)
-        
-        return None
-    
-    def _recover_from_validation_error(self, error: Exception, context: ErrorContext) -> Optional[Any]:
-        """검증 에러 복구"""
-        # 기본값 사용
-        field_name = getattr(error, 'field_name', None)
-        if field_name:
-            defaults = {
-                'temperature': 25.0,
-                'pressure': 1.0,
-                'concentration': 1.0,
-                'time': 60.0
-            }
-            return defaults.get(field_name)
-        
-        return None
-    
-    def _handle_critical_error(self, context: ErrorContext):
-        """심각한 에러 처리"""
-        # 관리자에게 알림 (구현 필요)
-        self.error_logger.critical(f"CRITICAL ERROR: {context.error_id}")
-        
-        # 상태 저장
-        if 'st' in sys.modules and hasattr(st, 'session_state'):
-            # 현재 상태를 임시 파일로 저장
-            state_file = LOCAL_CONFIG['logs']['path'] / f"crash_state_{context.error_id}.json"
-            try:
-                with open(state_file, 'w', encoding='utf-8') as f:
-                    json.dump(dict(st.session_state), f, ensure_ascii=False, default=str)
-            except:
-                pass
-    
-    # ==================== 공개 메서드 ====================
-    
-    def get_error_history(self, limit: int = 10) -> List[ErrorContext]:
-        """최근 에러 히스토리 조회"""
-        return self._error_history[-limit:]
-    
-    def get_error_stats(self) -> Dict[str, Any]:
-        """에러 통계 조회"""
-        return self._error_stats.copy()
-    
-    def clear_error_history(self):
-        """에러 히스토리 초기화"""
-        self._error_history.clear()
-        self._error_stats.clear()
-    
-    def export_error_report(self, start_date: datetime, end_date: datetime) -> str:
-        """에러 리포트 생성 (지원팀용)"""
-        report_data = {
-            'period': {
-                'start': start_date.isoformat(),
-                'end': end_date.isoformat()
-            },
-            'summary': self.get_error_stats(),
-            'errors': [
-                error.to_dict() for error in self._error_history
-                if start_date <= error.timestamp <= end_date
-            ]
-        }
-        
-        return json.dumps(report_data, indent=2, ensure_ascii=False)
-
-
-# ==================== 데코레이터 ====================
-
-def handle_errors(
-    category: ErrorCategory = ErrorCategory.SYSTEM,
-    severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-    show_message: bool = True,
-    attempt_recovery: bool = True,
-    default_return: Any = None
-):
-    """
-    에러 처리 데코레이터
-    
-    함수를 감싸서 발생하는 모든 에러를 자동으로 처리합니다.
-    
-    사용 예:
-        @handle_errors(category=ErrorCategory.API, attempt_recovery=True)
-        def call_ai_api(prompt):
-            # API 호출 코드
-            pass
-    """
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                handler = get_error_handler()
-                
-                # 컨텍스트 정보 수집
-                context = {
-                    'function': func.__name__,
-                    'args': str(args)[:200],  # 긴 인자는 잘라냄
-                    'kwargs': str(kwargs)[:200]
-                }
-                
-                # 에러 처리
-                recovery_result = handler.handle_error(
-                    e,
-                    context=context,
-                    show_user_message=show_message,
-                    attempt_recovery=attempt_recovery
-                )
-                
-                # 복구 성공 시 복구된 값 반환
-                if recovery_result is not None:
-                    return recovery_result
-                
-                # 기본값 반환
-                return default_return
-        
-        # 비동기 함수 지원
-        @wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            try:
-                return await func(*args, **kwargs)
-            except Exception as e:
-                handler = get_error_handler()
-                
-                context = {
-                    'function': func.__name__,
-                    'args': str(args)[:200],
-                    'kwargs': str(kwargs)[:200],
-                    'is_async': True
-                }
-                
-                recovery_result = handler.handle_error(
-                    e,
-                    context=context,
-                    show_user_message=show_message,
-                    attempt_recovery=attempt_recovery
-                )
-                
-                if recovery_result is not None:
-                    return recovery_result
-                
-                return default_return
-        
-        # 함수 타입에 따라 적절한 래퍼 반환
-        if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        else:
-            return wrapper
-    
-    return decorator
-
-
-def handle_ui_error(func: Callable) -> Callable:
-    """
-    UI 관련 에러 처리 전용 데코레이터
-    
-    UI 렌더링 중 발생하는 에러를 우아하게 처리합니다.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            # UI 에러는 항상 사용자에게 표시
-            st.error(
-                "화면을 표시하는 중 문제가 발생했습니다. "
-                "페이지를 새로고침해주세요."
-            )
-            
-            # 디버그 모드에서만 상세 정보
-            if DEBUG_CONFIG['show_debug_info']:
-                st.exception(e)
-            
-            # 로깅
-            handler = get_error_handler()
-            handler.handle_error(
-                e,
-                context={'ui_function': func.__name__},
-                show_user_message=False  # 이미 표시했으므로
-            )
-            
-            return None
-    
-    return wrapper
-
-
-# ==================== 전역 함수 ====================
-
-def get_error_handler() -> ErrorHandler:
-    """ErrorHandler 싱글톤 인스턴스 반환"""
-    return ErrorHandler()
-
-
-def raise_error(
-    message: str,
-    category: ErrorCategory,
-    severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-    **kwargs
-) -> None:
-    """
-    DOEError를 발생시키는 헬퍼 함수
-    
-    사용 예:
-        raise_error(
-            "API 키가 설정되지 않았습니다",
-            ErrorCategory.CONFIGURATION,
-            severity=ErrorSeverity.HIGH,
-            user_message="API 키를 설정해주세요",
-            recovery_hint="설정 > API 키 관리에서 키를 입력하세요"
-        )
-    """
-    raise DOEError(message, category, severity, **kwargs)
-
-
-def safe_execute(
-    func: Callable,
-    args: tuple = (),
-    kwargs: dict = None,
-    fallback: Any = None,
-    error_message: str = "작업을 수행할 수 없습니다"
-) -> Any:
-    """
-    함수를 안전하게 실행하는 헬퍼
-    
-    에러 발생 시 fallback 값을 반환합니다.
-    """
-    if kwargs is None:
-        kwargs = {}
+    context = context or {}
+    severity_config = ERROR_SEVERITY_CONFIG[error_def.severity]
     
     try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        handler = get_error_handler()
-        handler.handle_error(
-            e,
-            context={'function': func.__name__},
-            show_user_message=True
-        )
-        return fallback
+        message = error_def.user_message.format(**context)
+    except KeyError:
+        message = error_def.user_message
+    
+    suggestions = "\n".join([f"• {s}" for s in error_def.recovery_suggestions])
+    
+    return ERROR_MESSAGE_TEMPLATES['user_friendly'].format(
+        icon=severity_config['icon'],
+        message=message,
+        suggestions=suggestions
+    )
 
 
-# ==================== 컨텍스트 매니저 ====================
-
-class error_context:
-    """
-    에러 처리 컨텍스트 매니저
-    
-    with 문과 함께 사용하여 특정 블록의 에러를 처리합니다.
-    
-    사용 예:
-        with error_context(category=ErrorCategory.DATABASE):
-            # 데이터베이스 작업
-            pass
-    """
-    def __init__(
-        self,
-        category: ErrorCategory = ErrorCategory.SYSTEM,
-        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-        suppress: bool = False,
-        fallback: Any = None
-    ):
-        self.category = category
-        self.severity = severity
-        self.suppress = suppress
-        self.fallback = fallback
-        self.handler = get_error_handler()
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            # 에러 처리
-            self.handler.handle_error(
-                exc_val,
-                context={'context_manager': True}
-            )
-            
-            # suppress=True면 예외를 억제
-            return self.suppress
+def should_auto_recover(error_code: str) -> bool:
+    """자동 복구 가능 여부 확인"""
+    error_def = get_error_definition(error_code)
+    return error_def.auto_recoverable if error_def else False
 
 
-# ==================== 초기화 ====================
-
-def initialize_error_handling():
-    """
-    에러 처리 시스템 초기화
-    
-    애플리케이션 시작 시 한 번 호출됩니다.
-    """
-    handler = get_error_handler()
-    
-    # 전역 예외 핸들러 설정
-    def global_exception_handler(exc_type, exc_value, exc_traceback):
-        # KeyboardInterrupt는 정상 종료
-        if issubclass(exc_type, KeyboardInterrupt):
-            sys.__excepthook__(exc_type, exc_value, exc_traceback)
-            return
-        
-        # 그 외 모든 예외 처리
-        handler.handle_error(
-            exc_value,
-            context={'global_handler': True},
-            show_user_message=True,
-            attempt_recovery=True
-        )
-    
-    sys.excepthook = global_exception_handler
-    
-    # 성공 메시지 (디버그 모드에서만)
-    if DEBUG_CONFIG['show_debug_info']:
-        logging.info("Error handling system initialized")
+def get_recovery_actions(error_code: str) -> List[Dict[str, Any]]:
+    """에러 코드에 대한 복구 액션 목록 반환"""
+    error_def = get_error_definition(error_code)
+    if error_def and error_def.recovery_actions:
+        return error_def.recovery_actions
+    return ERROR_RECOVERY_STRATEGIES.get(error_code, [])
 
 
-# 애플리케이션 시작 시 초기화
-if __name__ != "__main__":
-    initialize_error_handling()
+def log_error(error_code: str, context: Dict[str, Any] = None, exception: Exception = None):
+    """에러 로깅"""
+    error_def = get_error_definition(error_code)
+    if not error_def:
+        logging.error(f"Unknown error code: {error_code}")
+        return
+    
+    severity_config = ERROR_SEVERITY_CONFIG[error_def.severity]
+    log_level = getattr(logging, severity_config['log_level'])
+    
+    log_message = ERROR_MESSAGE_TEMPLATES['log_format'].format(
+        timestamp=datetime.now().isoformat(),
+        severity=error_def.severity.value,
+        code=error_code,
+        message=error_def.technical_message,
+        context=context or {}
+    )
+    
+    if exception and error_def.log_full_trace:
+        log_message += f"\nException: {str(exception)}\nTrace: {traceback.format_exc()}"
+    
+    log_level(log_message)
+
+
+def get_user_friendly_message(error_code: str) -> str:
+    """사용자 친화적 메시지만 반환 (컨텍스트 없이)"""
+    error_def = get_error_definition(error_code)
+    if not error_def:
+        return "알 수 없는 오류가 발생했습니다."
+    
+    severity_config = ERROR_SEVERITY_CONFIG[error_def.severity]
+    return f"{severity_config['icon']} {error_def.user_message}"
+
+
+def get_error_color(error_code: str) -> str:
+    """에러 심각도에 따른 색상 반환"""
+    error_def = get_error_definition(error_code)
+    if not error_def:
+        return '#6B7280'  # 기본 회색
+    
+    return ERROR_SEVERITY_CONFIG[error_def.severity]['color']
+
+
+def group_similar_errors(errors: List[str]) -> Dict[str, List[str]]:
+    """유사한 에러들을 그룹화"""
+    groups = {}
+    for error_code in errors:
+        error_def = get_error_definition(error_code)
+        if error_def:
+            category = error_def.category.value
+            if category not in groups:
+                groups[category] = []
+            groups[category].append(error_code)
+    return groups
+
+
+# ============================================================================
+# 📤 Public API
+# ============================================================================
+
+__all__ = [
+    # Enums
+    'ErrorCategory', 'ErrorSeverity', 'RecoveryStrategy',
+    
+    # Classes
+    'ErrorDefinition',
+    
+    # Error Collections
+    'ERROR_CODES', 'ERROR_BY_CATEGORY', 'SYSTEM_ERRORS', 'USER_INPUT_ERRORS',
+    'NETWORK_ERRORS', 'FILE_ERRORS', 'API_ERRORS', 'DATABASE_ERRORS',
+    'CALCULATION_ERRORS', 'AUTH_ERRORS', 'MODULE_ERRORS',
+    
+    # Configurations
+    'ERROR_SEVERITY_CONFIG', 'RECOVERY_CONFIG', 'ERROR_MESSAGE_TEMPLATES',
+    'ERROR_GROUPING_RULES', 'FORMAT_SPECIFIC_ERRORS', 'ERROR_RECOVERY_STRATEGIES',
+    'RECOVERY_ACTIONS',
+    
+    # Utility Functions
+    'get_error_definition', 'get_errors_by_category', 'get_errors_by_severity',
+    'format_error_message', 'should_auto_recover', 'get_recovery_actions',
+    'log_error', 'get_user_friendly_message', 'get_error_color',
+    'group_similar_errors'
+]
