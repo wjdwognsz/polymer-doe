@@ -383,6 +383,113 @@ class AuthManager:
             except Exception as e:
                 logger.error(f"Login error: {str(e)}")
                 return False, "로그인 중 오류가 발생했습니다.", None
+
+    def social_login(self, provider: str, email: str, name: str,
+                    profile_picture: str = None, oauth_id: str = None) -> Tuple[bool, str, Optional[Dict]]:
+        """소셜 로그인 처리"""
+        try:
+            # 기존 사용자 확인
+            user = self._get_user_by_email(email)
+            
+            if user:
+                # 기존 사용자 - 소셜 계정 연결
+                if provider not in user.get('social_accounts', {}):
+                    self._link_social_account(user['id'], provider, oauth_id)
+                
+                # 로그인 처리
+                return self._create_session_for_user(user)
+            else:
+                # 신규 사용자 - 자동 회원가입
+                user_id = str(uuid.uuid4())
+                
+                # 랜덤 비밀번호 생성 (소셜 로그인 사용자용)
+                temp_password = secrets.token_urlsafe(32)
+                password_hash = bcrypt.hashpw(temp_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                
+                # 사용자 생성
+                if self.db_manager:
+                    conn = self.db_manager.get_connection()
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("""
+                        INSERT INTO users (id, email, password_hash, name,
+                                         organization, role, profile_picture,
+                                         auth_provider, oauth_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (user_id, email, password_hash, name, None, 'user',
+                         profile_picture, provider, oauth_id, datetime.now()))
+                    
+                    conn.commit()
+                    conn.close()
+                
+                # 신규 사용자 세션 생성
+                new_user = {
+                    'id': user_id,
+                    'email': email,
+                    'name': name,
+                    'role': 'user',
+                    'profile_picture': profile_picture
+                }
+                
+                return self._create_session_for_user(new_user)
+                
+        except Exception as e:
+            logger.error(f"Social login error: {str(e)}")
+            return (False, "소셜 로그인 중 오류가 발생했습니다.", None)
+    
+    def _link_social_account(self, user_id: str, provider: str, oauth_id: str):
+        """소셜 계정 연결 (헬퍼 메서드)"""
+        if self.db_manager:
+            conn = self.db_manager.get_connection()
+            cursor = conn.cursor()
+            
+            # social_accounts 테이블이 있다면 사용, 없으면 users 테이블에 JSON으로 저장
+            try:
+                cursor.execute("""
+                    INSERT INTO social_accounts (user_id, provider, oauth_id, linked_at)
+                    VALUES (?, ?, ?, ?)
+                """, (user_id, provider, oauth_id, datetime.now()))
+            except:
+                # 대체 방법: users 테이블의 메타데이터에 저장
+                cursor.execute("""
+                    UPDATE users 
+                    SET auth_provider = ?, oauth_id = ?
+                    WHERE id = ?
+                """, (provider, oauth_id, user_id))
+            
+            conn.commit()
+            conn.close()
+    
+    def _create_session_for_user(self, user: Dict) -> Tuple[bool, str, Optional[Dict]]:
+        """사용자 세션 생성 (헬퍼 메서드)"""
+        # 세션 토큰 생성
+        session_token = secrets.token_urlsafe(32)
+        
+        # 사용자 정보 준비
+        user_info = {
+            'id': user['id'],
+            'email': user['email'],
+            'name': user['name'],
+            'role': user.get('role', 'user'),
+            'profile_picture': user.get('profile_picture'),
+            'token': session_token,
+            'permissions': self._get_user_permissions(user.get('role', 'user'))
+        }
+        
+        # 마지막 로그인 시간 업데이트
+        self._update_last_login(user['id'])
+        
+        logger.info(f"User logged in via social auth: {user['email']}")
+        return (True, "로그인되었습니다.", user_info)
+    
+    def _get_user_permissions(self, role: str) -> list:
+        """역할별 권한 반환"""
+        permissions = {
+            'admin': ['all'],
+            'user': ['read', 'write', 'delete_own'],
+            'guest': ['read']
+        }
+        return permissions.get(role, ['read'])
     
     def verify_2fa(self, user_id: int, totp_code: str) -> Tuple[bool, str]:
         """
