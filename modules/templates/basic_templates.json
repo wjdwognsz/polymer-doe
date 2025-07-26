@@ -1,975 +1,38 @@
 {
   "version": "2.0.0",
-  "description": "Universal DOE Platform Basic Templates",
+  "description": "Universal DOE Platform - Experiment Design Templates",
   "last_updated": "2024-01-01",
-  "supported_languages": ["ko", "en"],
   
-  "factor_templates": {
-    "process_variables": {
-      "temperature": {
-        "name": {
-          "ko": "온도",
-          "en": "Temperature"
-        },
-        "category": "process",
-        "type": "continuous",
-        "default_unit": "°C",
-        "unit_options": ["°C", "°F", "K"],
-        "default_range": {
-          "min": 20,
-          "max": 200
-        },
-        "common_ranges": {
-          "room_temperature": {"min": 20, "max": 30},
-          "reaction": {"min": 50, "max": 150},
-          "high_temperature": {"min": 100, "max": 500}
-        },
-        "description": {
-          "ko": "공정 또는 반응 온도",
-          "en": "Process or reaction temperature"
-        },
-        "validation": {
-          "min_possible": -273.15,
-          "max_possible": 3000
-        }
-      },
-      "pressure": {
-        "name": {
-          "ko": "압력",
-          "en": "Pressure"
-        },
-        "category": "process",
-        "type": "continuous",
-        "default_unit": "bar",
-        "unit_options": ["bar", "atm", "Pa", "kPa", "MPa", "psi", "torr"],
-        "default_range": {
-          "min": 1,
-          "max": 10
-        },
-        "common_ranges": {
-          "atmospheric": {"min": 0.8, "max": 1.2},
-          "vacuum": {"min": 0.001, "max": 0.1},
-          "high_pressure": {"min": 10, "max": 100}
-        },
-        "description": {
-          "ko": "공정 압력",
-          "en": "Process pressure"
-        }
-      },
-      "time": {
-        "name": {
-          "ko": "시간",
-          "en": "Time"
-        },
-        "category": "process",
-        "type": "continuous",
-        "default_unit": "min",
-        "unit_options": ["s", "min", "h", "day"],
-        "default_range": {
-          "min": 10,
-          "max": 180
-        },
-        "common_ranges": {
-          "quick": {"min": 1, "max": 30},
-          "standard": {"min": 30, "max": 180},
-          "long": {"min": 180, "max": 1440}
-        },
-        "description": {
-          "ko": "반응 또는 처리 시간",
-          "en": "Reaction or processing time"
-        }
-      },
-      "stirring_speed": {
-        "name": {
-          "ko": "교반속도",
-          "en": "Stirring Speed"
-        },
-        "category": "process",
-        "type": "continuous",
-        "default_unit": "rpm",
-        "unit_options": ["rpm", "Hz"],
-        "default_range": {
-          "min": 100,
-          "max": 1000
-        },
-        "description": {
-          "ko": "교반기 회전 속도",
-          "en": "Stirrer rotation speed"
-        }
-      },
-      "flow_rate": {
-        "name": {
-          "ko": "유속",
-          "en": "Flow Rate"
-        },
-        "category": "process",
-        "type": "continuous",
-        "default_unit": "mL/min",
-        "unit_options": ["mL/min", "L/min", "mL/h", "L/h"],
-        "default_range": {
-          "min": 0.1,
-          "max": 10
-        },
-        "description": {
-          "ko": "유체 흐름 속도",
-          "en": "Fluid flow rate"
-        }
-      }
-    },
-    
-    "composition_variables": {
-      "concentration": {
-        "name": {
-          "ko": "농도",
-          "en": "Concentration"
-        },
-        "category": "composition",
-        "type": "continuous",
-        "default_unit": "M",
-        "unit_options": ["M", "mM", "μM", "g/L", "mg/L", "wt%", "vol%"],
-        "default_range": {
-          "min": 0.01,
-          "max": 2.0
-        },
-        "description": {
-          "ko": "용질의 농도",
-          "en": "Solute concentration"
-        }
-      },
-      "ph": {
-        "name": {
-          "ko": "pH",
-          "en": "pH"
-        },
-        "category": "composition",
-        "type": "continuous",
-        "default_unit": "",
-        "unit_options": [""],
-        "default_range": {
-          "min": 1,
-          "max": 14
-        },
-        "common_ranges": {
-          "acidic": {"min": 1, "max": 6},
-          "neutral": {"min": 6, "max": 8},
-          "basic": {"min": 8, "max": 14}
-        },
-        "description": {
-          "ko": "수용액의 pH",
-          "en": "Aqueous solution pH"
-        },
-        "validation": {
-          "min_possible": 0,
-          "max_possible": 14
-        }
-      },
-      "content": {
-        "name": {
-          "ko": "함량",
-          "en": "Content"
-        },
-        "category": "composition",
-        "type": "continuous",
-        "default_unit": "wt%",
-        "unit_options": ["wt%", "vol%", "mol%"],
-        "default_range": {
-          "min": 0,
-          "max": 100
-        },
-        "description": {
-          "ko": "성분의 함량",
-          "en": "Component content"
-        },
-        "validation": {
-          "min_possible": 0,
-          "max_possible": 100
-        }
-      },
-      "molar_ratio": {
-        "name": {
-          "ko": "몰비",
-          "en": "Molar Ratio"
-        },
-        "category": "composition",
-        "type": "continuous",
-        "default_unit": "",
-        "unit_options": [""],
-        "default_range": {
-          "min": 0.1,
-          "max": 10
-        },
-        "description": {
-          "ko": "반응물의 몰비",
-          "en": "Reactant molar ratio"
-        }
-      }
-    },
-    
-    "physical_variables": {
-      "particle_size": {
-        "name": {
-          "ko": "입자크기",
-          "en": "Particle Size"
-        },
-        "category": "physical",
-        "type": "continuous",
-        "default_unit": "μm",
-        "unit_options": ["nm", "μm", "mm"],
-        "default_range": {
-          "min": 0.1,
-          "max": 1000
-        },
-        "common_ranges": {
-          "nano": {"min": 1, "max": 100, "unit": "nm"},
-          "micro": {"min": 0.1, "max": 100, "unit": "μm"},
-          "macro": {"min": 0.1, "max": 10, "unit": "mm"}
-        },
-        "description": {
-          "ko": "평균 입자 크기",
-          "en": "Average particle size"
-        }
-      },
-      "thickness": {
-        "name": {
-          "ko": "두께",
-          "en": "Thickness"
-        },
-        "category": "physical",
-        "type": "continuous",
-        "default_unit": "mm",
-        "unit_options": ["nm", "μm", "mm", "cm"],
-        "default_range": {
-          "min": 0.1,
-          "max": 10
-        },
-        "description": {
-          "ko": "필름 또는 코팅 두께",
-          "en": "Film or coating thickness"
-        }
-      },
-      "surface_area": {
-        "name": {
-          "ko": "표면적",
-          "en": "Surface Area"
-        },
-        "category": "physical",
-        "type": "continuous",
-        "default_unit": "m²/g",
-        "unit_options": ["m²/g", "cm²/g"],
-        "default_range": {
-          "min": 1,
-          "max": 1000
-        },
-        "description": {
-          "ko": "비표면적",
-          "en": "Specific surface area"
-        }
-      }
-    },
-    
-    "categorical_variables": {
-      "catalyst_type": {
-        "name": {
-          "ko": "촉매종류",
-          "en": "Catalyst Type"
-        },
-        "category": "categorical",
-        "type": "categorical",
-        "default_levels": ["Pd/C", "Pt/C", "Ru/C", "None"],
-        "common_sets": {
-          "noble_metals": ["Pd/C", "Pt/C", "Rh/C", "Ru/C", "Au/C"],
-          "base_metals": ["Ni", "Cu", "Fe", "Co"],
-          "acid_catalysts": ["H2SO4", "HCl", "p-TSA", "TFA"],
-          "base_catalysts": ["NaOH", "KOH", "K2CO3", "Et3N"]
-        },
-        "description": {
-          "ko": "촉매의 종류",
-          "en": "Type of catalyst"
-        }
-      },
-      "solvent": {
-        "name": {
-          "ko": "용매",
-          "en": "Solvent"
-        },
-        "category": "categorical",
-        "type": "categorical",
-        "default_levels": ["Water", "Ethanol", "Acetone", "Toluene"],
-        "common_sets": {
-          "polar_protic": ["Water", "Methanol", "Ethanol", "IPA"],
-          "polar_aprotic": ["DMF", "DMSO", "Acetone", "Acetonitrile"],
-          "nonpolar": ["Hexane", "Toluene", "DCM", "Chloroform"],
-          "green": ["Water", "Ethanol", "Ethyl acetate", "2-MeTHF"]
-        },
-        "description": {
-          "ko": "반응 용매",
-          "en": "Reaction solvent"
-        }
-      },
-      "additive": {
-        "name": {
-          "ko": "첨가제",
-          "en": "Additive"
-        },
-        "category": "categorical",
-        "type": "categorical",
-        "default_levels": ["None", "Type A", "Type B", "Type C"],
-        "description": {
-          "ko": "첨가제 종류",
-          "en": "Type of additive"
-        }
-      },
-      "material_type": {
-        "name": {
-          "ko": "재료종류",
-          "en": "Material Type"
-        },
-        "category": "categorical",
-        "type": "categorical",
-        "default_levels": ["Type 1", "Type 2", "Type 3"],
-        "description": {
-          "ko": "재료의 종류",
-          "en": "Type of material"
-        }
-      }
-    }
-  },
-  
-  "response_templates": {
-    "yield_efficiency": {
-      "yield": {
-        "name": {
-          "ko": "수율",
-          "en": "Yield"
-        },
-        "category": "yield_efficiency",
-        "default_unit": "%",
-        "unit_options": ["%"],
-        "default_goal": "maximize",
-        "typical_range": {"min": 0, "max": 100},
-        "description": {
-          "ko": "반응 또는 공정의 수율",
-          "en": "Reaction or process yield"
-        },
-        "validation": {
-          "min_possible": 0,
-          "max_possible": 100
-        }
-      },
-      "purity": {
-        "name": {
-          "ko": "순도",
-          "en": "Purity"
-        },
-        "category": "yield_efficiency",
-        "default_unit": "%",
-        "unit_options": ["%"],
-        "default_goal": "maximize",
-        "typical_range": {"min": 0, "max": 100},
-        "description": {
-          "ko": "제품의 순도",
-          "en": "Product purity"
-        }
-      },
-      "conversion": {
-        "name": {
-          "ko": "전환율",
-          "en": "Conversion"
-        },
-        "category": "yield_efficiency",
-        "default_unit": "%",
-        "unit_options": ["%"],
-        "default_goal": "maximize",
-        "typical_range": {"min": 0, "max": 100},
-        "description": {
-          "ko": "반응물의 전환율",
-          "en": "Reactant conversion"
-        }
-      },
-      "selectivity": {
-        "name": {
-          "ko": "선택성",
-          "en": "Selectivity"
-        },
-        "category": "yield_efficiency",
-        "default_unit": "%",
-        "unit_options": ["%"],
-        "default_goal": "maximize",
-        "typical_range": {"min": 0, "max": 100},
-        "description": {
-          "ko": "목표 생성물의 선택성",
-          "en": "Target product selectivity"
-        }
-      }
-    },
-    
-    "physical_properties": {
-      "strength": {
-        "name": {
-          "ko": "강도",
-          "en": "Strength"
-        },
-        "category": "physical",
-        "default_unit": "MPa",
-        "unit_options": ["MPa", "GPa", "kPa", "psi"],
-        "default_goal": "maximize",
-        "description": {
-          "ko": "인장 또는 압축 강도",
-          "en": "Tensile or compressive strength"
-        }
-      },
-      "hardness": {
-        "name": {
-          "ko": "경도",
-          "en": "Hardness"
-        },
-        "category": "physical",
-        "default_unit": "HV",
-        "unit_options": ["HV", "HB", "HRC", "Shore A", "Shore D"],
-        "default_goal": "maximize",
-        "description": {
-          "ko": "재료의 경도",
-          "en": "Material hardness"
-        }
-      },
-      "viscosity": {
-        "name": {
-          "ko": "점도",
-          "en": "Viscosity"
-        },
-        "category": "physical",
-        "default_unit": "cP",
-        "unit_options": ["cP", "mPa·s", "Pa·s"],
-        "default_goal": "target",
-        "description": {
-          "ko": "용액 또는 물질의 점도",
-          "en": "Solution or material viscosity"
-        }
-      },
-      "density": {
-        "name": {
-          "ko": "밀도",
-          "en": "Density"
-        },
-        "category": "physical",
-        "default_unit": "g/cm³",
-        "unit_options": ["g/cm³", "kg/m³", "g/mL"],
-        "default_goal": "target",
-        "description": {
-          "ko": "재료의 밀도",
-          "en": "Material density"
-        }
-      },
-      "melting_point": {
-        "name": {
-          "ko": "녹는점",
-          "en": "Melting Point"
-        },
-        "category": "physical",
-        "default_unit": "°C",
-        "unit_options": ["°C", "°F", "K"],
-        "default_goal": "target",
-        "description": {
-          "ko": "재료의 녹는점",
-          "en": "Material melting point"
-        }
-      }
-    },
-    
-    "analytical_values": {
-      "resolution": {
-        "name": {
-          "ko": "분해능",
-          "en": "Resolution"
-        },
-        "category": "analytical",
-        "default_unit": "",
-        "unit_options": [""],
-        "default_goal": "maximize",
-        "description": {
-          "ko": "크로마토그래피 분해능",
-          "en": "Chromatographic resolution"
-        }
-      },
-      "sensitivity": {
-        "name": {
-          "ko": "감도",
-          "en": "Sensitivity"
-        },
-        "category": "analytical",
-        "default_unit": "S/N",
-        "unit_options": ["S/N", "LOD", "LOQ"],
-        "default_goal": "maximize",
-        "description": {
-          "ko": "분석 감도 또는 신호 대 잡음비",
-          "en": "Analytical sensitivity or signal-to-noise ratio"
-        }
-      },
-      "analysis_time": {
-        "name": {
-          "ko": "분석시간",
-          "en": "Analysis Time"
-        },
-        "category": "analytical",
-        "default_unit": "min",
-        "unit_options": ["s", "min", "h"],
-        "default_goal": "minimize",
-        "description": {
-          "ko": "총 분석 시간",
-          "en": "Total analysis time"
-        }
-      },
-      "peak_area": {
-        "name": {
-          "ko": "피크면적",
-          "en": "Peak Area"
-        },
-        "category": "analytical",
-        "default_unit": "AU·s",
-        "unit_options": ["AU·s", "mV·s"],
-        "default_goal": "maximize",
-        "description": {
-          "ko": "크로마토그램 피크 면적",
-          "en": "Chromatogram peak area"
-        }
-      }
-    },
-    
-    "cost_environmental": {
-      "cost": {
-        "name": {
-          "ko": "비용",
-          "en": "Cost"
-        },
-        "category": "economic",
-        "default_unit": "$/kg",
-        "unit_options": ["$/kg", "$/L", "$/unit", "$/batch"],
-        "default_goal": "minimize",
-        "description": {
-          "ko": "단위 생산 비용",
-          "en": "Unit production cost"
-        }
-      },
-      "energy_consumption": {
-        "name": {
-          "ko": "에너지소비",
-          "en": "Energy Consumption"
-        },
-        "category": "environmental",
-        "default_unit": "kWh",
-        "unit_options": ["kWh", "MJ", "kcal"],
-        "default_goal": "minimize",
-        "description": {
-          "ko": "에너지 소비량",
-          "en": "Energy consumption"
-        }
-      },
-      "waste_generation": {
-        "name": {
-          "ko": "폐기물발생",
-          "en": "Waste Generation"
-        },
-        "category": "environmental",
-        "default_unit": "kg",
-        "unit_options": ["kg", "L", "m³"],
-        "default_goal": "minimize",
-        "description": {
-          "ko": "폐기물 발생량",
-          "en": "Waste generation amount"
-        }
-      },
-      "carbon_footprint": {
-        "name": {
-          "ko": "탄소발자국",
-          "en": "Carbon Footprint"
-        },
-        "category": "environmental",
-        "default_unit": "kg CO₂",
-        "unit_options": ["kg CO₂", "ton CO₂"],
-        "default_goal": "minimize",
-        "description": {
-          "ko": "탄소 발자국",
-          "en": "Carbon footprint"
-        }
-      }
-    }
-  },
-  
-  "experiment_presets": {
-    "chemical_synthesis": {
-      "name": {
-        "ko": "화학합성 최적화",
-        "en": "Chemical Synthesis Optimization"
-      },
-      "description": {
-        "ko": "유기/무기 화학 반응의 수율과 선택성 최적화",
-        "en": "Optimization of yield and selectivity in organic/inorganic reactions"
-      },
-      "domain": "chemistry",
-      "difficulty": "intermediate",
-      "typical_duration": "1-2 weeks",
-      "factors": [
-        {
-          "template": "temperature",
-          "suggested_range": {"min": 20, "max": 150},
-          "importance": "high"
-        },
-        {
-          "template": "time",
-          "suggested_range": {"min": 30, "max": 360},
-          "importance": "high"
-        },
-        {
-          "template": "concentration",
-          "name_override": {
-            "ko": "촉매농도",
-            "en": "Catalyst Concentration"
-          },
-          "suggested_range": {"min": 0.1, "max": 5},
-          "unit": "mol%",
-          "importance": "medium"
-        },
-        {
-          "template": "solvent",
-          "suggested_levels": ["THF", "Toluene", "DMF", "DCM"],
-          "importance": "high"
-        }
-      ],
-      "responses": [
-        {
-          "template": "yield",
-          "weight": 0.5,
-          "target": null
-        },
-        {
-          "template": "purity",
-          "weight": 0.3,
-          "target": {"min": 95}
-        },
-        {
-          "template": "cost",
-          "weight": 0.2,
-          "target": {"max": 100}
-        }
-      ],
-      "suggested_designs": [
-        {
-          "method": "central_composite",
-          "reason": "Suitable for optimization with quadratic effects"
-        },
-        {
-          "method": "box_behnken",
-          "reason": "Good for 3-4 factors without extreme conditions"
-        }
-      ],
-      "constraints": {
-        "temperature_time": "High temperature requires shorter time",
-        "safety": "Some solvent-temperature combinations may be hazardous"
-      },
-      "tips": {
-        "ko": [
-          "온도와 시간은 일반적으로 상호작용이 강합니다",
-          "촉매량은 최적점이 존재하는 경우가 많습니다",
-          "용매 선택이 반응 메커니즘을 바꿀 수 있습니다"
-        ],
-        "en": [
-          "Temperature and time typically have strong interactions",
-          "Catalyst amount often has an optimal point",
-          "Solvent choice can change reaction mechanism"
-        ]
-      }
-    },
-    
-    "material_properties": {
-      "name": {
-        "ko": "재료 물성 최적화",
-        "en": "Material Properties Optimization"
-      },
-      "description": {
-        "ko": "재료의 기계적, 물리적 특성을 목표값에 맞춰 최적화",
-        "en": "Optimization of mechanical and physical properties to target values"
-      },
-      "domain": "materials",
-      "difficulty": "intermediate",
-      "typical_duration": "2-3 weeks",
-      "factors": [
-        {
-          "name": {
-            "ko": "조성A",
-            "en": "Composition A"
-          },
-          "type": "continuous",
-          "range": {"min": 0, "max": 100},
-          "unit": "wt%",
-          "importance": "high"
-        },
-        {
-          "name": {
-            "ko": "조성B",
-            "en": "Composition B"
-          },
-          "type": "continuous",
-          "range": {"min": 0, "max": 100},
-          "unit": "wt%",
-          "importance": "high",
-          "constraint": "A + B <= 100"
-        },
-        {
-          "template": "temperature",
-          "name_override": {
-            "ko": "처리온도",
-            "en": "Processing Temperature"
-          },
-          "suggested_range": {"min": 100, "max": 500},
-          "importance": "high"
-        },
-        {
-          "template": "time",
-          "name_override": {
-            "ko": "처리시간",
-            "en": "Processing Time"
-          },
-          "suggested_range": {"min": 1, "max": 24},
-          "unit": "h",
-          "importance": "medium"
-        }
-      ],
-      "responses": [
-        {
-          "template": "strength",
-          "weight": 0.4,
-          "target": {"min": 300}
-        },
-        {
-          "template": "hardness",
-          "weight": 0.3,
-          "target": {"min": 200}
-        },
-        {
-          "template": "density",
-          "weight": 0.3,
-          "target": {"value": 2.5, "tolerance": 0.1}
-        }
-      ],
-      "suggested_designs": [
-        {
-          "method": "mixture_design",
-          "reason": "Ideal for composition optimization with constraints"
-        },
-        {
-          "method": "d_optimal",
-          "reason": "Flexible for constrained design space"
-        }
-      ],
-      "constraints": {
-        "composition": "Sum of compositions must equal 100%",
-        "processing": "High temperature may cause degradation"
-      }
-    },
-    
-    "analytical_method": {
-      "name": {
-        "ko": "분석법 개발",
-        "en": "Analytical Method Development"
-      },
-      "description": {
-        "ko": "크로마토그래피 또는 분광법의 분리능과 감도 최적화",
-        "en": "Optimization of separation and sensitivity in chromatography or spectroscopy"
-      },
-      "domain": "analytical",
-      "difficulty": "beginner",
-      "typical_duration": "3-5 days",
-      "factors": [
-        {
-          "template": "flow_rate",
-          "suggested_range": {"min": 0.5, "max": 2.0},
-          "importance": "high"
-        },
-        {
-          "name": {
-            "ko": "컬럼온도",
-            "en": "Column Temperature"
-          },
-          "type": "continuous",
-          "range": {"min": 25, "max": 60},
-          "unit": "°C",
-          "importance": "medium"
-        },
-        {
-          "name": {
-            "ko": "이동상조성",
-            "en": "Mobile Phase Composition"
-          },
-          "type": "continuous",
-          "range": {"min": 10, "max": 90},
-          "unit": "%B",
-          "importance": "high"
-        },
-        {
-          "template": "ph",
-          "suggested_range": {"min": 2, "max": 8},
-          "importance": "medium"
-        }
-      ],
-      "responses": [
-        {
-          "template": "resolution",
-          "weight": 0.4,
-          "target": {"min": 1.5}
-        },
-        {
-          "template": "analysis_time",
-          "weight": 0.3,
-          "target": {"max": 30}
-        },
-        {
-          "template": "sensitivity",
-          "weight": 0.3,
-          "target": "maximize"
-        }
-      ],
-      "suggested_designs": [
-        {
-          "method": "face_centered_ccd",
-          "reason": "Good for method optimization without extreme conditions"
-        },
-        {
-          "method": "d_optimal",
-          "reason": "Efficient for screening important factors"
-        }
-      ],
-      "tips": {
-        "ko": [
-          "이동상 조성과 pH는 분리에 큰 영향을 미칩니다",
-          "유속이 너무 높으면 분리능이 떨어집니다",
-          "온도는 재현성에 중요합니다"
-        ],
-        "en": [
-          "Mobile phase composition and pH greatly affect separation",
-          "Too high flow rate reduces resolution",
-          "Temperature is important for reproducibility"
-        ]
-      }
-    },
-    
-    "process_optimization": {
-      "name": {
-        "ko": "공정 최적화",
-        "en": "Process Optimization"
-      },
-      "description": {
-        "ko": "생산 공정의 효율성과 품질을 동시에 최적화",
-        "en": "Simultaneous optimization of process efficiency and quality"
-      },
-      "domain": "engineering",
-      "difficulty": "advanced",
-      "typical_duration": "2-4 weeks",
-      "factors": [
-        {
-          "template": "temperature",
-          "suggested_range": {"min": 60, "max": 120},
-          "importance": "high"
-        },
-        {
-          "template": "pressure",
-          "suggested_range": {"min": 1, "max": 10},
-          "importance": "high"
-        },
-        {
-          "name": {
-            "ko": "체류시간",
-            "en": "Residence Time"
-          },
-          "type": "continuous",
-          "range": {"min": 10, "max": 60},
-          "unit": "min",
-          "importance": "high"
-        },
-        {
-          "template": "stirring_speed",
-          "suggested_range": {"min": 100, "max": 500},
-          "importance": "medium"
-        }
-      ],
-      "responses": [
-        {
-          "name": {
-            "ko": "생산량",
-            "en": "Production Rate"
-          },
-          "unit": "kg/h",
-          "goal": "maximize",
-          "weight": 0.35
-        },
-        {
-          "name": {
-            "ko": "품질지수",
-            "en": "Quality Index"
-          },
-          "unit": "%",
-          "goal": "maximize",
-          "weight": 0.35,
-          "target": {"min": 95}
-        },
-        {
-          "template": "energy_consumption",
-          "unit": "kWh/kg",
-          "weight": 0.3
-        }
-      ],
-      "suggested_designs": [
-        {
-          "method": "fractional_factorial",
-          "reason": "Efficient screening of main effects and interactions"
-        },
-        {
-          "method": "response_surface",
-          "reason": "For detailed optimization after screening"
-        }
-      ],
-      "constraints": {
-        "safety": "Pressure-temperature combination must be within safe operating window",
-        "equipment": "Stirring speed limited by equipment capacity"
-      }
-    }
-  },
-  
-  "design_methods": {
-    "full_factorial": {
+  "experimental_design_methods": {
+    "factorial": {
       "name": {
         "ko": "완전요인설계",
         "en": "Full Factorial Design"
       },
       "description": {
-        "ko": "모든 요인 수준의 조합을 실험하는 설계",
-        "en": "Design that tests all combinations of factor levels"
+        "ko": "모든 요인의 모든 수준 조합을 실험",
+        "en": "All combinations of all factor levels"
       },
       "when_to_use": {
         "ko": [
           "요인 수가 적을 때 (2-4개)",
-          "모든 상호작용을 파악해야 할 때",
+          "모든 상호작용을 조사하고 싶을 때",
           "예산과 시간이 충분할 때"
         ],
         "en": [
-          "When number of factors is small (2-4)",
-          "When all interactions need to be identified",
-          "When budget and time allow"
+          "Few factors (2-4)",
+          "Want to investigate all interactions",
+          "Sufficient budget and time"
         ]
       },
-      "pros": {
-        "ko": ["모든 주효과와 상호작용 추정 가능", "해석이 쉬움", "직교성 보장"],
-        "en": ["Can estimate all main effects and interactions", "Easy to interpret", "Orthogonality guaranteed"]
+      "typical_runs": "2^k (k=factors)",
+      "advantages": {
+        "ko": ["모든 주효과와 상호작용 추정 가능", "해석이 명확"],
+        "en": ["Can estimate all main effects and interactions", "Clear interpretation"]
       },
-      "cons": {
-        "ko": ["실험 횟수가 기하급수적으로 증가", "비용이 많이 듦"],
-        "en": ["Number of runs increases exponentially", "Can be expensive"]
-      },
-      "typical_runs": "2^k (k = number of factors)",
-      "complexity": "low",
-      "statistical_properties": {
-        "orthogonal": true,
-        "rotatable": false,
-        "uniform": true
+      "disadvantages": {
+        "ko": ["실험 수가 기하급수적으로 증가", "비용이 많이 듦"],
+        "en": ["Exponential increase in runs", "Expensive"]
       }
     },
     
@@ -979,34 +42,62 @@
         "en": "Fractional Factorial Design"
       },
       "description": {
-        "ko": "완전요인설계의 일부만 선택하여 실험",
-        "en": "Uses a fraction of the full factorial design"
+        "ko": "전체 실험의 일부만 수행하는 효율적 설계",
+        "en": "Efficient design using fraction of full factorial"
       },
       "when_to_use": {
         "ko": [
           "요인이 많을 때 (5개 이상)",
-          "스크리닝 단계",
-          "고차 상호작용이 무시 가능할 때"
+          "고차 상호작용이 무시 가능할 때",
+          "스크리닝 목적"
         ],
         "en": [
-          "When many factors (5 or more)",
-          "For screening phase",
-          "When high-order interactions are negligible"
+          "Many factors (5+)",
+          "High-order interactions negligible",
+          "Screening purpose"
         ]
       },
-      "resolution_levels": {
+      "resolution": {
         "III": {
           "ko": "주효과가 2차 상호작용과 교락",
           "en": "Main effects confounded with 2-way interactions"
         },
         "IV": {
-          "ko": "주효과는 깨끗, 2차 상호작용끼리 교락",
+          "ko": "주효과는 명확, 2차 상호작용끼리 교락",
           "en": "Main effects clear, 2-way interactions confounded"
         },
         "V": {
-          "ko": "주효과와 2차 상호작용 모두 깨끗",
+          "ko": "주효과와 2차 상호작용 모두 명확",
           "en": "Main effects and 2-way interactions clear"
         }
+      }
+    },
+    
+    "plackett_burman": {
+      "name": {
+        "ko": "Plackett-Burman 설계",
+        "en": "Plackett-Burman Design"
+      },
+      "description": {
+        "ko": "많은 요인의 주효과를 효율적으로 스크리닝",
+        "en": "Efficient screening of main effects for many factors"
+      },
+      "when_to_use": {
+        "ko": [
+          "요인이 매우 많을 때 (8-50개)",
+          "중요한 요인을 찾는 초기 단계",
+          "상호작용이 무시 가능할 때"
+        ],
+        "en": [
+          "Very many factors (8-50)",
+          "Initial stage to find important factors",
+          "Interactions negligible"
+        ]
+      },
+      "typical_runs": "Multiple of 4",
+      "limitations": {
+        "ko": "상호작용 추정 불가",
+        "en": "Cannot estimate interactions"
       }
     },
     
@@ -1017,24 +108,24 @@
       },
       "description": {
         "ko": "2차 반응표면 모델을 위한 설계",
-        "en": "Design for fitting second-order response surface models"
+        "en": "Design for quadratic response surface models"
       },
       "when_to_use": {
         "ko": [
           "최적화 단계",
-          "곡면 효과가 예상될 때",
-          "연속형 요인만 있을 때"
+          "곡률이 있는 반응표면",
+          "2-5개 요인"
         ],
         "en": [
-          "For optimization phase",
-          "When curvature effects are expected",
-          "When all factors are continuous"
+          "Optimization phase",
+          "Curved response surface",
+          "2-5 factors"
         ]
       },
       "components": {
         "factorial": {
-          "ko": "요인점: 2^k 또는 2^(k-p)",
-          "en": "Factorial points: 2^k or 2^(k-p)"
+          "ko": "요인점: 2^k개",
+          "en": "Factorial points: 2^k"
         },
         "axial": {
           "ko": "축점: 2k개",
@@ -1046,7 +137,7 @@
         }
       },
       "alpha_values": {
-        "rotatable": "k^0.25",
+        "rotatable": "sqrt(k)",
         "orthogonal": "depends on design",
         "face_centered": "1"
       }
@@ -1087,31 +178,40 @@
       }
     },
     
-    "latin_hypercube": {
+    "mixture_design": {
       "name": {
-        "ko": "라틴하이퍼큐브 설계",
-        "en": "Latin Hypercube Design"
+        "ko": "혼합물 설계",
+        "en": "Mixture Design"
       },
       "description": {
-        "ko": "설계 공간을 균등하게 채우는 설계",
-        "en": "Space-filling design with uniform coverage"
+        "ko": "성분의 합이 100%인 혼합물 실험",
+        "en": "Experiments where components sum to 100%"
+      },
+      "types": {
+        "simplex_lattice": {
+          "ko": "심플렉스 격자 설계",
+          "en": "Simplex Lattice Design"
+        },
+        "simplex_centroid": {
+          "ko": "심플렉스 중심 설계",
+          "en": "Simplex Centroid Design"
+        },
+        "extreme_vertices": {
+          "ko": "극단 꼭짓점 설계",
+          "en": "Extreme Vertices Design"
+        }
       },
       "when_to_use": {
         "ko": [
-          "컴퓨터 시뮬레이션",
-          "비선형 모델",
-          "탐색적 연구"
+          "용매 혼합 비율 최적화",
+          "합금 조성 설계",
+          "제형 개발"
         ],
         "en": [
-          "For computer simulations",
-          "For nonlinear models",
-          "For exploratory studies"
+          "Solvent mixture optimization",
+          "Alloy composition design",
+          "Formulation development"
         ]
-      },
-      "properties": {
-        "uniformity": "high",
-        "flexibility": "high",
-        "model_dependency": "low"
       }
     },
     
@@ -1132,8 +232,8 @@
         ],
         "en": [
           "With constraints",
-          "For non-standard design regions",
-          "When minimizing number of runs"
+          "Non-standard design regions",
+          "Need to minimize number of runs"
         ]
       },
       "advantages": {
@@ -1251,123 +351,1134 @@
       },
       "common_factors": [
         "precursor_concentration", "reaction_temperature", "reaction_time",
-        "ph", "surfactant_type", "stirring_speed", "reducing_agent"
+        "ph", "surfactant_concentration", "stirring_speed"
       ],
       "common_responses": [
         "particle_size", "size_distribution", "zeta_potential",
-        "surface_area", "crystallinity", "yield"
-      ],
-      "characterization_methods": {
-        "ko": ["TEM/SEM", "DLS", "XRD", "BET", "Zeta potential"],
-        "en": ["TEM/SEM", "DLS", "XRD", "BET", "Zeta potential"]
-      }
+        "morphology", "surface_area", "crystallinity"
+      ]
     }
   },
   
-  "validation_rules": {
-    "factor_limits": {
-      "min_factors": 1,
-      "max_factors": 50,
-      "warning_threshold": 10
+  "polymer_specific_templates": {
+    "polymer_dissolution": {
+      "name": {
+        "ko": "고분자 용해 실험",
+        "en": "Polymer Dissolution Experiment"
+      },
+      "subcategories": {
+        "organic_solvents": {
+          "name": {
+            "ko": "유기 용매 조합",
+            "en": "Organic Solvent Combinations"
+          },
+          "factors": [
+            {
+              "name": {"ko": "주용매", "en": "Primary Solvent"},
+              "type": "categorical",
+              "levels": ["THF", "CHCl3", "DMF", "DMSO", "Toluene", "DCM"]
+            },
+            {
+              "name": {"ko": "보조용매", "en": "Co-solvent"},
+              "type": "categorical",
+              "levels": ["None", "Methanol", "Ethanol", "Acetone", "MEK"]
+            },
+            {
+              "name": {"ko": "용매비율", "en": "Solvent Ratio"},
+              "type": "continuous",
+              "min": 0,
+              "max": 100,
+              "unit": "%"
+            },
+            {
+              "name": {"ko": "온도", "en": "Temperature"},
+              "type": "continuous",
+              "min": 20,
+              "max": 150,
+              "unit": "°C"
+            },
+            {
+              "name": {"ko": "교반속도", "en": "Stirring Speed"},
+              "type": "continuous",
+              "min": 0,
+              "max": 1000,
+              "unit": "rpm"
+            },
+            {
+              "name": {"ko": "상 개수", "en": "Number of Phases"},
+              "type": "categorical",
+              "levels": [
+                {"ko": "단상", "en": "Single Phase"},
+                {"ko": "2상", "en": "Biphasic"},
+                {"ko": "3상", "en": "Triphasic"},
+                {"ko": "다상", "en": "Multiphase"}
+              ]
+            }
+          ],
+          "responses": [
+            {
+              "name": {"ko": "용해시간", "en": "Dissolution Time"},
+              "unit": "min",
+              "target": "minimize"
+            },
+            {
+              "name": {"ko": "투명도", "en": "Transparency"},
+              "unit": "%T",
+              "target": "maximize"
+            },
+            {
+              "name": {"ko": "점도", "en": "Viscosity"},
+              "unit": "cP",
+              "target": "range"
+            }
+          ]
+        },
+        
+        "acid_solvents": {
+          "name": {
+            "ko": "산 용매 조합",
+            "en": "Acid Solvent Combinations"
+          },
+          "factors": [
+            {
+              "name": {"ko": "산 종류", "en": "Acid Type"},
+              "type": "categorical",
+              "levels": [
+                {"ko": "황산", "en": "Sulfuric Acid"},
+                {"ko": "질산", "en": "Nitric Acid"},
+                {"ko": "염산", "en": "Hydrochloric Acid"},
+                {"ko": "포름산", "en": "Formic Acid"},
+                {"ko": "아세트산", "en": "Acetic Acid"}
+              ]
+            },
+            {
+              "name": {"ko": "산 농도", "en": "Acid Concentration"},
+              "type": "continuous",
+              "min": 0.1,
+              "max": 18,
+              "unit": "M"
+            }
+          ]
+        },
+        
+        "alkaline_solvents": {
+          "name": {
+            "ko": "알칼리 용매 조합",
+            "en": "Alkaline Solvent Combinations"
+          }
+        },
+        
+        "ionic_liquids": {
+          "name": {
+            "ko": "이온성 액체 용매 조합",
+            "en": "Ionic Liquid Combinations"
+          }
+        },
+        
+        "deep_eutectic_solvents": {
+          "name": {
+            "ko": "Deep Eutectic Solvents 조합",
+            "en": "Deep Eutectic Solvent Combinations"
+          }
+        }
+      }
     },
-    "response_limits": {
-      "min_responses": 1,
-      "max_responses": 20,
-      "warning_threshold": 5
+    
+    "polymer_partial_dissolution": {
+      "name": {
+        "ko": "고분자 부분 용해 (표면 처리)",
+        "en": "Polymer Partial Dissolution (Surface Treatment)"
+      },
+      "factors": [
+        {
+          "name": {"ko": "처리 시간", "en": "Treatment Time"},
+          "type": "continuous",
+          "min": 0.5,
+          "max": 60,
+          "unit": "min"
+        },
+        {
+          "name": {"ko": "처리 깊이", "en": "Treatment Depth"},
+          "type": "continuous",
+          "min": 0.1,
+          "max": 100,
+          "unit": "μm"
+        }
+      ]
     },
-    "run_limits": {
-      "min_runs": 3,
-      "max_runs": 10000,
-      "recommended_ratio": "runs >= factors + 1"
+    
+    "polymer_melting": {
+      "name": {
+        "ko": "고분자 용융",
+        "en": "Polymer Melting"
+      },
+      "factors": [
+        {
+          "name": {"ko": "용융 온도", "en": "Melting Temperature"},
+          "type": "continuous",
+          "unit": "°C"
+        },
+        {
+          "name": {"ko": "체류 시간", "en": "Residence Time"},
+          "type": "continuous",
+          "unit": "min"
+        },
+        {
+          "name": {"ko": "전단 속도", "en": "Shear Rate"},
+          "type": "continuous",
+          "unit": "s⁻¹"
+        }
+      ]
     },
-    "value_ranges": {
+    
+    "polymer_processing": {
+      "name": {
+        "ko": "고분자 가공",
+        "en": "Polymer Processing"
+      },
+      "subcategories": {
+        "extrusion": {
+          "name": {"ko": "압출 성형", "en": "Extrusion Molding"}
+        },
+        "injection": {
+          "name": {"ko": "사출 성형", "en": "Injection Molding"}
+        },
+        "compression": {
+          "name": {"ko": "압축 성형", "en": "Compression Molding"}
+        }
+      }
+    },
+    
+    "polymer_coating": {
+      "name": {
+        "ko": "고분자 코팅",
+        "en": "Polymer Coating"
+      },
+      "methods": [
+        {"ko": "스핀 코팅", "en": "Spin Coating"},
+        {"ko": "딥 코팅", "en": "Dip Coating"},
+        {"ko": "스프레이 코팅", "en": "Spray Coating"},
+        {"ko": "블레이드 코팅", "en": "Blade Coating"}
+      ]
+    },
+    
+    "polymer_fiberization": {
+      "name": {
+        "ko": "고분자 섬유화",
+        "en": "Polymer Fiberization"
+      },
+      "subcategories": {
+        "electrospinning": {
+          "name": {
+            "ko": "전기방사",
+            "en": "Electrospinning"
+          },
+          "factors": [
+            {
+              "name": {"ko": "전압", "en": "Voltage"},
+              "type": "continuous",
+              "min": 5,
+              "max": 30,
+              "unit": "kV"
+            },
+            {
+              "name": {"ko": "유속", "en": "Flow Rate"},
+              "type": "continuous",
+              "min": 0.1,
+              "max": 10,
+              "unit": "mL/h"
+            },
+            {
+              "name": {"ko": "거리", "en": "Distance"},
+              "type": "continuous",
+              "min": 5,
+              "max": 30,
+              "unit": "cm"
+            }
+          ]
+        },
+        "melt_spinning": {
+          "name": {"ko": "용융 방사", "en": "Melt Spinning"}
+        },
+        "solution_spinning": {
+          "name": {"ko": "용액 방사", "en": "Solution Spinning"}
+        },
+        "nanofiber_bottom_up": {
+          "name": {"ko": "나노섬유 바텀업", "en": "Nanofiber Bottom-up"}
+        },
+        "nanofiber_top_down": {
+          "name": {"ko": "나노섬유 탑다운", "en": "Nanofiber Top-down"}
+        }
+      }
+    },
+    
+    "polymer_film": {
+      "name": {
+        "ko": "고분자 필름화",
+        "en": "Polymer Film Formation"
+      },
+      "factors": [
+        {
+          "name": {"ko": "건조 온도", "en": "Drying Temperature"},
+          "type": "continuous",
+          "unit": "°C"
+        },
+        {
+          "name": {"ko": "건조 시간", "en": "Drying Time"},
+          "type": "continuous",
+          "unit": "min"
+        },
+        {
+          "name": {"ko": "필름 두께", "en": "Film Thickness"},
+          "type": "continuous",
+          "unit": "μm"
+        }
+      ]
+    },
+    
+    "polymer_nanomaterials": {
+      "name": {
+        "ko": "고분자 나노재료 설계",
+        "en": "Polymer Nanomaterial Design"
+      },
+      "types": [
+        {"ko": "나노입자", "en": "Nanoparticles"},
+        {"ko": "나노로드", "en": "Nanorods"},
+        {"ko": "나노시트", "en": "Nanosheets"},
+        {"ko": "나노복합체", "en": "Nanocomposites"}
+      ]
+    }
+  },
+  
+  "common_experimental_variables": {
+    "continuous_variables": {
       "temperature": {
-        "absolute_min": -273.15,
-        "absolute_max": 5000,
-        "common_min": -80,
-        "common_max": 500
+        "name": {
+          "ko": "온도",
+          "en": "Temperature"
+        },
+        "category": "physical",
+        "type": "continuous",
+        "default_unit": "°C",
+        "unit_options": ["°C", "K", "°F"],
+        "default_range": {
+          "min": 20,
+          "max": 200
+        },
+        "common_ranges": {
+          "room": {"min": 20, "max": 30},
+          "moderate": {"min": 30, "max": 100},
+          "high": {"min": 100, "max": 300}
+        },
+        "description": {
+          "ko": "반응 또는 처리 온도",
+          "en": "Reaction or processing temperature"
+        }
       },
+      
+      "time": {
+        "name": {
+          "ko": "시간",
+          "en": "Time"
+        },
+        "category": "physical",
+        "type": "continuous",
+        "default_unit": "min",
+        "unit_options": ["s", "min", "h", "day"],
+        "default_range": {
+          "min": 1,
+          "max": 1440
+        },
+        "description": {
+          "ko": "반응 또는 처리 시간",
+          "en": "Reaction or processing time"
+        }
+      },
+      
       "pressure": {
-        "absolute_min": 0,
-        "absolute_max": 10000,
-        "common_min": 0.001,
-        "common_max": 100
+        "name": {
+          "ko": "압력",
+          "en": "Pressure"
+        },
+        "category": "physical",
+        "type": "continuous",
+        "default_unit": "bar",
+        "unit_options": ["Pa", "kPa", "bar", "atm", "psi", "mmHg"],
+        "default_range": {
+          "min": 0.1,
+          "max": 10
+        },
+        "description": {
+          "ko": "시스템 압력",
+          "en": "System pressure"
+        }
       },
+      
+      "concentration": {
+        "name": {
+          "ko": "농도",
+          "en": "Concentration"
+        },
+        "category": "chemical",
+        "type": "continuous",
+        "default_unit": "wt%",
+        "unit_options": ["wt%", "mol/L", "g/L", "mg/mL", "ppm"],
+        "default_range": {
+          "min": 0.1,
+          "max": 100
+        },
+        "description": {
+          "ko": "물질의 농도",
+          "en": "Concentration of substance"
+        }
+      },
+      
       "ph": {
-        "absolute_min": 0,
-        "absolute_max": 14,
-        "common_min": 1,
-        "common_max": 13
+        "name": {
+          "ko": "pH",
+          "en": "pH"
+        },
+        "category": "chemical",
+        "type": "continuous",
+        "default_unit": "-",
+        "unit_options": ["-"],
+        "default_range": {
+          "min": 0,
+          "max": 14
+        },
+        "description": {
+          "ko": "용액의 수소 이온 농도",
+          "en": "Hydrogen ion concentration"
+        }
       },
-      "percentage": {
-        "absolute_min": 0,
-        "absolute_max": 100
+      
+      "flow_rate": {
+        "name": {
+          "ko": "유속",
+          "en": "Flow Rate"
+        },
+        "category": "process",
+        "type": "continuous",
+        "default_unit": "mL/min",
+        "unit_options": ["mL/min", "L/h", "m³/h"],
+        "default_range": {
+          "min": 0.1,
+          "max": 1000
+        },
+        "description": {
+          "ko": "유체의 흐름 속도",
+          "en": "Fluid flow rate"
+        }
+      },
+      
+      "mixing_speed": {
+        "name": {
+          "ko": "교반속도",
+          "en": "Mixing Speed"
+        },
+        "category": "process",
+        "type": "continuous",
+        "default_unit": "rpm",
+        "unit_options": ["rpm", "Hz"],
+        "default_range": {
+          "min": 0,
+          "max": 2000
+        },
+        "description": {
+          "ko": "교반기 회전 속도",
+          "en": "Stirrer rotation speed"
+        }
+      },
+      
+      "particle_size": {
+        "name": {
+          "ko": "입자크기",
+          "en": "Particle Size"
+        },
+        "category": "physical",
+        "type": "continuous",
+        "default_unit": "μm",
+        "unit_options": ["nm", "μm", "mm"],
+        "default_range": {
+          "min": 0.1,
+          "max": 1000
+        },
+        "common_ranges": {
+          "nano": {"min": 1, "max": 100, "unit": "nm"},
+          "micro": {"min": 0.1, "max": 100, "unit": "μm"},
+          "macro": {"min": 0.1, "max": 10, "unit": "mm"}
+        },
+        "description": {
+          "ko": "평균 입자 크기",
+          "en": "Average particle size"
+        }
+      },
+      
+      "thickness": {
+        "name": {
+          "ko": "두께",
+          "en": "Thickness"
+        },
+        "category": "physical",
+        "type": "continuous",
+        "default_unit": "mm",
+        "unit_options": ["nm", "μm", "mm", "cm"],
+        "default_range": {
+          "min": 0.1,
+          "max": 10
+        },
+        "description": {
+          "ko": "필름 또는 코팅 두께",
+          "en": "Film or coating thickness"
+        }
+      },
+      
+      "surface_area": {
+        "name": {
+          "ko": "표면적",
+          "en": "Surface Area"
+        },
+        "category": "physical",
+        "type": "continuous",
+        "default_unit": "m²/g",
+        "unit_options": ["m²/g", "cm²/g"],
+        "default_range": {
+          "min": 1,
+          "max": 1000
+        },
+        "description": {
+          "ko": "비표면적",
+          "en": "Specific surface area"
+        }
+      }
+    },
+    
+    "categorical_variables": {
+      "catalyst_type": {
+        "name": {
+          "ko": "촉매종류",
+          "en": "Catalyst Type"
+        },
+        "category": "categorical",
+        "type": "categorical",
+        "default_levels": ["Pd/C", "Pt/C", "Ru/C", "None"],
+        "common_sets": {
+          "noble_metals": ["Pd/C", "Pt/C", "Rh/C", "Ru/C", "Au/C"],
+          "base_metals": ["Ni", "Cu", "Fe", "Co"],
+          "acid_catalysts": ["H2SO4", "HCl", "p-TSA", "TFA"],
+          "base_catalysts": ["NaOH", "KOH", "K2CO3", "Et3N"]
+        },
+        "description": {
+          "ko": "촉매의 종류",
+          "en": "Type of catalyst"
+        }
+      },
+      
+      "solvent": {
+        "name": {
+          "ko": "용매",
+          "en": "Solvent"
+        },
+        "category": "categorical",
+        "type": "categorical",
+        "default_levels": ["Water", "Ethanol", "Acetone", "Toluene"],
+        "common_sets": {
+          "polar_protic": ["Water", "Methanol", "Ethanol", "IPA"],
+          "polar_aprotic": ["DMF", "DMSO", "Acetone", "Acetonitrile"],
+          "nonpolar": ["Hexane", "Toluene", "DCM", "Chloroform"],
+          "green": ["Water", "Ethanol", "Ethyl acetate", "2-MeTHF"]
+        },
+        "description": {
+          "ko": "반응 용매",
+          "en": "Reaction solvent"
+        }
+      },
+      
+      "additive": {
+        "name": {
+          "ko": "첨가제",
+          "en": "Additive"
+        },
+        "category": "categorical",
+        "type": "categorical",
+        "default_levels": ["None", "Type A", "Type B", "Type C"],
+        "description": {
+          "ko": "첨가제 종류",
+          "en": "Type of additive"
+        }
       }
     }
   },
   
-  "unit_conversions": {
-    "temperature": {
-      "°C": {
-        "°F": "°C * 9/5 + 32",
-        "K": "°C + 273.15"
+  "common_response_variables": {
+    "yield": {
+      "name": {
+        "ko": "수율",
+        "en": "Yield"
       },
-      "°F": {
-        "°C": "(°F - 32) * 5/9",
-        "K": "(°F - 32) * 5/9 + 273.15"
-      },
-      "K": {
-        "°C": "K - 273.15",
-        "°F": "(K - 273.15) * 9/5 + 32"
+      "type": "continuous",
+      "unit": "%",
+      "range": {"min": 0, "max": 100},
+      "target": "maximize",
+      "description": {
+        "ko": "생성물의 수율",
+        "en": "Product yield"
       }
     },
-    "pressure": {
-      "bar": {
-        "atm": "bar * 0.98692",
-        "Pa": "bar * 100000",
-        "psi": "bar * 14.504"
+    
+    "purity": {
+      "name": {
+        "ko": "순도",
+        "en": "Purity"
       },
-      "atm": {
-        "bar": "atm * 1.01325",
-        "Pa": "atm * 101325",
-        "psi": "atm * 14.696"
+      "type": "continuous",
+      "unit": "%",
+      "range": {"min": 0, "max": 100},
+      "target": "maximize",
+      "description": {
+        "ko": "생성물의 순도",
+        "en": "Product purity"
       }
     },
-    "time": {
-      "s": {
-        "min": "s / 60",
-        "h": "s / 3600",
-        "day": "s / 86400"
+    
+    "cost": {
+      "name": {
+        "ko": "비용",
+        "en": "Cost"
       },
-      "min": {
-        "s": "min * 60",
-        "h": "min / 60",
-        "day": "min / 1440"
+      "type": "continuous",
+      "unit": "$/unit",
+      "target": "minimize",
+      "description": {
+        "ko": "단위당 비용",
+        "en": "Cost per unit"
+      }
+    },
+    
+    "throughput": {
+      "name": {
+        "ko": "처리량",
+        "en": "Throughput"
+      },
+      "type": "continuous",
+      "unit": "units/h",
+      "target": "maximize",
+      "description": {
+        "ko": "시간당 처리량",
+        "en": "Units per hour"
+      }
+    },
+    
+    "quality_score": {
+      "name": {
+        "ko": "품질점수",
+        "en": "Quality Score"
+      },
+      "type": "continuous",
+      "unit": "-",
+      "range": {"min": 0, "max": 10},
+      "target": "maximize",
+      "description": {
+        "ko": "종합 품질 점수",
+        "en": "Overall quality score"
       }
     }
   },
   
-  "metadata": {
-    "version": "2.0.0",
-    "created_date": "2024-01-01",
-    "last_modified": "2024-01-01",
-    "authors": ["Universal DOE Platform Team"],
-    "license": "MIT",
-    "compatibility": {
-      "min_platform_version": "2.0.0",
-      "max_platform_version": null
+  "experiment_purpose_templates": {
+    "screening": {
+      "name": {
+        "ko": "스크리닝",
+        "en": "Screening"
+      },
+      "description": {
+        "ko": "중요한 요인을 찾기 위한 초기 실험",
+        "en": "Initial experiments to find important factors"
+      },
+      "recommended_designs": ["plackett_burman", "fractional_factorial"],
+      "typical_factors": "5-20",
+      "goal": {
+        "ko": "주요 요인 식별",
+        "en": "Identify key factors"
+      }
     },
-    "changelog": [
-      {
-        "version": "2.0.0",
-        "date": "2024-01-01",
-        "changes": [
-          "Initial release of universal templates",
-          "Multi-language support (Korean/English)",
-          "Added domain-specific templates",
-          "Comprehensive unit conversion system"
+    
+    "optimization": {
+      "name": {
+        "ko": "최적화",
+        "en": "Optimization"
+      },
+      "description": {
+        "ko": "최적 조건을 찾기 위한 정밀 실험",
+        "en": "Precise experiments to find optimal conditions"
+      },
+      "recommended_designs": ["central_composite", "box_behnken", "d_optimal"],
+      "typical_factors": "2-5",
+      "goal": {
+        "ko": "최적 조건 도출",
+        "en": "Derive optimal conditions"
+      }
+    },
+    
+    "robustness": {
+      "name": {
+        "ko": "견고성",
+        "en": "Robustness"
+      },
+      "description": {
+        "ko": "공정의 안정성과 재현성 확인",
+        "en": "Verify process stability and reproducibility"
+      },
+      "recommended_designs": ["factorial", "taguchi"],
+      "typical_factors": "3-7",
+      "goal": {
+        "ko": "변동 최소화",
+        "en": "Minimize variation"
+      }
+    },
+    
+    "mechanism": {
+      "name": {
+        "ko": "메커니즘 연구",
+        "en": "Mechanism Study"
+      },
+      "description": {
+        "ko": "현상의 원리와 메커니즘 이해",
+        "en": "Understand principles and mechanisms"
+      },
+      "recommended_designs": ["factorial", "custom"],
+      "typical_factors": "2-4",
+      "goal": {
+        "ko": "원리 규명",
+        "en": "Elucidate principles"
+      }
+    }
+  },
+  
+  "quick_start_templates": {
+    "chemical_synthesis": {
+      "name": {
+        "ko": "화학 합성 최적화",
+        "en": "Chemical Synthesis Optimization"
+      },
+      "description": {
+        "ko": "일반적인 화학 반응 조건 최적화",
+        "en": "Optimization of general chemical reaction conditions"
+      },
+      "domain": "chemistry",
+      "difficulty": "beginner",
+      "typical_duration": "1-2 weeks",
+      "factors": [
+        {
+          "template": "temperature",
+          "suggested_range": {"min": 20, "max": 100},
+          "importance": "high"
+        },
+        {
+          "template": "time",
+          "suggested_range": {"min": 30, "max": 480},
+          "importance": "high"
+        },
+        {
+          "template": "concentration",
+          "name_override": {
+            "ko": "촉매농도",
+            "en": "Catalyst Concentration"
+          },
+          "suggested_range": {"min": 0.1, "max": 10},
+          "importance": "medium"
+        },
+        {
+          "template": "solvent",
+          "suggested_levels": ["THF", "Toluene", "DMF", "DCM"],
+          "importance": "high"
+        }
+      ],
+      "responses": [
+        {
+          "template": "yield",
+          "weight": 0.5,
+          "target": null
+        },
+        {
+          "template": "purity",
+          "weight": 0.3,
+          "target": {"min": 95}
+        },
+        {
+          "template": "cost",
+          "weight": 0.2,
+          "target": {"max": 100}
+        }
+      ],
+      "suggested_designs": [
+        {
+          "method": "central_composite",
+          "reason": "Suitable for optimization with quadratic effects"
+        },
+        {
+          "method": "box_behnken",
+          "reason": "Good for 3-4 factors without extreme conditions"
+        }
+      ],
+      "constraints": {
+        "temperature_time": "High temperature requires shorter time",
+        "safety": "Some solvent-temperature combinations may be hazardous"
+      },
+      "tips": {
+        "ko": [
+          "온도와 시간은 일반적으로 상호작용이 강합니다",
+          "촉매량은 최적점이 존재하는 경우가 많습니다",
+          "용매 선택이 반응 메커니즘을 바꿀 수 있습니다"
+        ],
+        "en": [
+          "Temperature and time typically have strong interactions",
+          "Catalyst amount often has an optimal point",
+          "Solvent choice can change reaction mechanism"
         ]
       }
-    ]
+    },
+    
+    "material_properties": {
+      "name": {
+        "ko": "재료 물성 최적화",
+        "en": "Material Properties Optimization"
+      },
+      "description": {
+        "ko": "재료의 기계적, 물리적 특성을 목표값에 맞춰 최적화",
+        "en": "Optimization of mechanical and physical properties to target values"
+      },
+      "domain": "materials",
+      "difficulty": "intermediate",
+      "typical_duration": "2-3 weeks",
+      "factors": [
+        {
+          "name": {
+            "ko": "조성A",
+            "en": "Composition A"
+          },
+          "type": "continuous",
+          "range": {"min": 0, "max": 100},
+          "unit": "wt%",
+          "importance": "high"
+        },
+        {
+          "name": {
+            "ko": "조성B",
+            "en": "Composition B"
+          },
+          "type": "continuous",
+          "range": {"min": 0, "max": 100},
+          "unit": "wt%",
+          "importance": "high",
+          "constraint": "A + B <= 100"
+        },
+        {
+          "template": "temperature",
+          "name_override": {
+            "ko": "처리온도",
+            "en": "Processing Temperature"
+          },
+          "suggested_range": {"min": 100, "max": 500},
+          "importance": "high"
+        },
+        {
+          "template": "time",
+          "name_override": {
+            "ko": "처리시간",
+            "en": "Processing Time"
+          },
+          "suggested_range": {"min": 10, "max": 240},
+          "importance": "medium"
+        }
+      ],
+      "responses": [
+        {
+          "name": {
+            "ko": "인장강도",
+            "en": "Tensile Strength"
+          },
+          "unit": "MPa",
+          "target": {"min": 500},
+          "weight": 0.4
+        },
+        {
+          "name": {
+            "ko": "연신율",
+            "en": "Elongation"
+          },
+          "unit": "%",
+          "target": {"min": 10},
+          "weight": 0.3
+        },
+        {
+          "name": {
+            "ko": "경도",
+            "en": "Hardness"
+          },
+          "unit": "HV",
+          "target": {"range": [200, 300]},
+          "weight": 0.3
+        }
+      ],
+      "suggested_designs": [
+        {
+          "method": "mixture_design",
+          "reason": "Handles composition constraints naturally"
+        }
+      ]
+    },
+    
+    "polymer_electrospinning": {
+      "name": {
+        "ko": "고분자 전기방사 최적화",
+        "en": "Polymer Electrospinning Optimization"
+      },
+      "description": {
+        "ko": "나노섬유 제조를 위한 전기방사 조건 최적화",
+        "en": "Optimization of electrospinning conditions for nanofiber production"
+      },
+      "domain": "polymer_science",
+      "difficulty": "advanced",
+      "typical_duration": "2-4 weeks",
+      "factors": [
+        {
+          "name": {
+            "ko": "전압",
+            "en": "Voltage"
+          },
+          "type": "continuous",
+          "range": {"min": 10, "max": 25},
+          "unit": "kV",
+          "importance": "high"
+        },
+        {
+          "name": {
+            "ko": "유속",
+            "en": "Flow Rate"
+          },
+          "type": "continuous",
+          "range": {"min": 0.5, "max": 3},
+          "unit": "mL/h",
+          "importance": "high"
+        },
+        {
+          "name": {
+            "ko": "팁-콜렉터 거리",
+            "en": "Tip-to-Collector Distance"
+          },
+          "type": "continuous",
+          "range": {"min": 10, "max": 20},
+          "unit": "cm",
+          "importance": "medium"
+        },
+        {
+          "name": {
+            "ko": "고분자 농도",
+            "en": "Polymer Concentration"
+          },
+          "type": "continuous",
+          "range": {"min": 8, "max": 15},
+          "unit": "wt%",
+          "importance": "high"
+        },
+        {
+          "name": {
+            "ko": "습도",
+            "en": "Humidity"
+          },
+          "type": "continuous",
+          "range": {"min": 30, "max": 60},
+          "unit": "%RH",
+          "importance": "medium"
+        }
+      ],
+      "responses": [
+        {
+          "name": {
+            "ko": "섬유 직경",
+            "en": "Fiber Diameter"
+          },
+          "unit": "nm",
+          "target": {"range": [100, 500]},
+          "weight": 0.4
+        },
+        {
+          "name": {
+            "ko": "직경 균일도",
+            "en": "Diameter Uniformity"
+          },
+          "unit": "CV%",
+          "target": {"max": 15},
+          "weight": 0.3
+        },
+        {
+          "name": {
+            "ko": "비드 형성",
+            "en": "Bead Formation"
+          },
+          "type": "binary",
+          "target": "minimize",
+          "weight": 0.3
+        }
+      ],
+      "suggested_designs": [
+        {
+          "method": "central_composite",
+          "reason": "Good for understanding quadratic effects and interactions"
+        }
+      ],
+      "constraints": {
+        "voltage_distance": "Higher voltage may require larger distance",
+        "concentration_flow": "Higher concentration may require lower flow rate"
+      },
+      "tips": {
+        "ko": [
+          "전압과 거리의 비율이 중요합니다",
+          "습도는 용매 증발에 큰 영향을 미칩니다",
+          "농도가 너무 낮으면 비드가 형성됩니다"
+        ],
+        "en": [
+          "Voltage to distance ratio is critical",
+          "Humidity greatly affects solvent evaporation",
+          "Too low concentration leads to bead formation"
+        ]
+      }
+    }
+  },
+  
+  "hansen_solubility_parameters": {
+    "common_polymers": {
+      "PS": {
+        "name": {"ko": "폴리스티렌", "en": "Polystyrene"},
+        "delta_d": 18.5,
+        "delta_p": 4.5,
+        "delta_h": 2.9,
+        "Ro": 12.7
+      },
+      "PMMA": {
+        "name": {"ko": "폴리메틸메타크릴레이트", "en": "Polymethyl methacrylate"},
+        "delta_d": 18.6,
+        "delta_p": 10.5,
+        "delta_h": 7.5,
+        "Ro": 8.6
+      },
+      "PLA": {
+        "name": {"ko": "폴리락트산", "en": "Polylactic acid"},
+        "delta_d": 18.5,
+        "delta_p": 9.7,
+        "delta_h": 6.0,
+        "Ro": 10.1
+      },
+      "PCL": {
+        "name": {"ko": "폴리카프로락톤", "en": "Polycaprolactone"},
+        "delta_d": 17.0,
+        "delta_p": 4.8,
+        "delta_h": 8.3,
+        "Ro": 9.5
+      },
+      "PVA": {
+        "name": {"ko": "폴리비닐알코올", "en": "Polyvinyl alcohol"},
+        "delta_d": 17.5,
+        "delta_p": 12.6,
+        "delta_h": 21.7,
+        "Ro": 11.8
+      }
+    },
+    
+    "common_solvents": {
+      "water": {
+        "name": {"ko": "물", "en": "Water"},
+        "delta_d": 15.5,
+        "delta_p": 16.0,
+        "delta_h": 42.3
+      },
+      "ethanol": {
+        "name": {"ko": "에탄올", "en": "Ethanol"},
+        "delta_d": 15.8,
+        "delta_p": 8.8,
+        "delta_h": 19.4
+      },
+      "acetone": {
+        "name": {"ko": "아세톤", "en": "Acetone"},
+        "delta_d": 15.5,
+        "delta_p": 10.4,
+        "delta_h": 7.0
+      },
+      "thf": {
+        "name": {"ko": "테트라히드로푸란", "en": "Tetrahydrofuran"},
+        "delta_d": 16.8,
+        "delta_p": 5.7,
+        "delta_h": 8.0
+      },
+      "chloroform": {
+        "name": {"ko": "클로로포름", "en": "Chloroform"},
+        "delta_d": 17.8,
+        "delta_p": 3.1,
+        "delta_h": 5.7
+      },
+      "dmf": {
+        "name": {"ko": "다이메틸포름아마이드", "en": "Dimethylformamide"},
+        "delta_d": 17.4,
+        "delta_p": 13.7,
+        "delta_h": 11.3
+      },
+      "dmso": {
+        "name": {"ko": "다이메틸설폭사이드", "en": "Dimethyl sulfoxide"},
+        "delta_d": 18.4,
+        "delta_p": 16.4,
+        "delta_h": 10.2
+      }
+    }
+  },
+  
+  "solvent_system_design_guide": {
+    "single_component": {
+      "selection_criteria": {
+        "ko": [
+          "Hansen 거리 (Ra) < Ro",
+          "끓는점과 공정 온도 고려",
+          "독성 및 환경 영향",
+          "비용"
+        ],
+        "en": [
+          "Hansen distance (Ra) < Ro",
+          "Consider boiling point vs process temperature",
+          "Toxicity and environmental impact",
+          "Cost"
+        ]
+      }
+    },
+    
+    "binary_mixture": {
+      "design_approach": {
+        "ko": [
+          "좋은 용매 + 나쁜 용매 조합",
+          "공용매 효과 활용",
+          "증발 속도 조절"
+        ],
+        "en": [
+          "Good solvent + poor solvent combination",
+          "Utilize co-solvent effect",
+          "Control evaporation rate"
+        ]
+      },
+      "common_ratios": [0, 25, 50, 75, 100]
+    },
+    
+    "ternary_system": {
+      "applications": {
+        "ko": [
+          "상 분리 유도",
+          "나노입자 형성",
+          "복잡한 모폴로지 제어"
+        ],
+        "en": [
+          "Induce phase separation",
+          "Nanoparticle formation",
+          "Complex morphology control"
+        ]
+      }
+    }
   }
 }
