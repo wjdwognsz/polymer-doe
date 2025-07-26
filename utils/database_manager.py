@@ -387,6 +387,63 @@ class DatabaseManager:
             INSERT OR IGNORE INTO schema_version (version, description)
             VALUES (1, 'Initial schema')
         ''')
+
+        # 고분자 용매 시스템 테이블
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS polymer_solvent_systems (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id INTEGER,
+                polymer_name TEXT NOT NULL,
+                polymer_mw TEXT,
+                solvent_system TEXT NOT NULL,
+                solvent_ratio TEXT,
+                temperature REAL,
+                phase_behavior TEXT,
+                hansen_distance REAL,
+                dissolution_time INTEGER,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (experiment_id) REFERENCES experiments (id) ON DELETE CASCADE
+            )
+        ''')
+    
+        # 고분자 가공 조건 테이블
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS polymer_processing (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id INTEGER,
+                process_type TEXT NOT NULL,  -- electrospinning, extrusion, etc
+                temperature REAL,
+                pressure REAL,
+                flow_rate REAL,
+                voltage REAL,  -- for electrospinning
+                distance REAL,  -- for electrospinning
+                parameters TEXT,  -- JSON for additional params
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (experiment_id) REFERENCES experiments (id) ON DELETE CASCADE
+            )
+        ''')
+    
+        # 추출된 프로토콜 테이블 (기존 protocols 테이블 확장)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS extracted_protocols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_type TEXT NOT NULL,  -- pdf, text, html, etc
+                source_url TEXT,
+                doi TEXT,
+                title TEXT,
+                authors TEXT,
+                materials JSON NOT NULL,
+                equipment JSON,
+                conditions JSON,
+                procedure JSON,
+                safety JSON,
+                confidence_score REAL,
+                extraction_method TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     def _create_indexes(self, conn: sqlite3.Connection):
         """인덱스 생성 (성능 최적화)"""
