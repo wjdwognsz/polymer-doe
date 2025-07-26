@@ -1,1009 +1,1025 @@
 """
-pages/project_setup.py - 프로젝트 설정 페이지
-Universal DOE Platform의 프로젝트 생성 및 관리 페이지
+2_📝_Project_Setup.py - 프로젝트 설정 및 관리
+Universal DOE Platform의 프로젝트 생성, 관리, 모듈 선택 페이지
 """
-
 import streamlit as st
 import pandas as pd
 import json
-import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
-import logging
+from typing import Dict, List, Any, Optional
+import plotly.graph_objects as go
+import plotly.express as px
 from pathlib import Path
+import sys
 
-# 내부 모듈 임포트
-from utils.common_ui import get_common_ui
-from utils.database_manager import get_database_manager
-from utils.auth_manager import get_auth_manager
-from utils.api_manager import get_api_manager
-from utils.notification_manager import get_notification_manager
-from modules.module_registry import get_module_registry
-from config.app_config import EXPERIMENT_DEFAULTS, SECURITY_CONFIG
+# 프로젝트 루트 경로 추가
+sys.path.append(str(Path(__file__).parent.parent))
 
-# 로깅 설정
-logger = logging.getLogger(__name__)
+# 필수 모듈 임포트
+try:
+    from utils.database_manager import get_database_manager
+    from utils.auth_manager import get_auth_manager
+    from utils.common_ui import get_common_ui
+    from utils.api_manager import get_api_manager
+    from modules.module_registry import get_module_registry
+    from utils.notification_manager import get_notification_manager
+    from config.app_config import EXPERIMENT_DEFAULTS
+except ImportError as e:
+    st.error(f"필수 모듈 임포트 오류: {e}")
+    st.stop()
 
-# 권한 레벨 정의
-PERMISSION_LEVELS = {
-    "owner": {
-        "can_edit": True,
-        "can_delete": True,
-        "can_invite": True,
-        "can_remove_members": True,
-        "can_change_visibility": True,
-        "can_export": True
+# 페이지 설정
+st.set_page_config(
+    page_title="프로젝트 설정 - Universal DOE",
+    page_icon="📝",
+    layout="wide"
+)
+
+# 인증 확인
+auth_manager = get_auth_manager()
+if not auth_manager.check_authentication():
+    st.warning("로그인이 필요합니다")
+    st.switch_page("pages/0_🔐_Login.py")
+    st.stop()
+
+# 연구 분야 계층 구조
+RESEARCH_FIELDS = {
+    "화학": {
+        "유기화학": ["합성", "반응 메커니즘", "촉매", "천연물"],
+        "무기화학": ["배위화학", "고체화학", "나노소재", "촉매"],
+        "분석화학": ["크로마토그래피", "분광학", "질량분석", "전기화학"],
+        "물리화학": ["열역학", "반응속도론", "표면화학", "계산화학"]
     },
-    "editor": {
-        "can_edit": True,
-        "can_delete": False,
-        "can_invite": True,
-        "can_remove_members": False,
-        "can_change_visibility": False,
-        "can_export": True
+    "재료과학": {
+        "고분자": ["합성", "물성", "가공", "복합재료"],
+        "세라믹": ["구조세라믹", "기능세라믹", "바이오세라믹", "나노세라믹"],
+        "금속": ["합금설계", "열처리", "부식", "표면처리"],
+        "전자재료": ["반도체", "디스플레이", "배터리", "태양전지"]
     },
-    "viewer": {
-        "can_edit": False,
-        "can_delete": False,
-        "can_invite": False,
-        "can_remove_members": False,
-        "can_change_visibility": False,
-        "can_export": True
+    "생명공학": {
+        "분자생물학": ["유전자조작", "단백질공학", "세포배양", "오믹스"],
+        "의약품": ["신약개발", "제형", "약물전달", "바이오시밀러"],
+        "식품공학": ["발효", "가공", "기능성식품", "품질관리"],
+        "환경생물": ["생물정화", "바이오에너지", "미생물", "생태계"]
+    },
+    "기타": {
+        "융합연구": ["바이오소재", "나노바이오", "에너지", "환경"],
+        "공정개발": ["반응기설계", "분리정제", "스케일업", "최적화"],
+        "품질관리": ["분석법개발", "안정성", "표준화", "인증"],
+        "커스텀": ["사용자정의"]
     }
 }
 
-class ProjectSetupManager:
-    """프로젝트 설정 관리 클래스"""
+class ProjectSetupPage:
+    """프로젝트 설정 페이지 클래스"""
     
     def __init__(self):
         self.ui = get_common_ui()
-        self.db = get_database_manager()
-        self.auth = get_auth_manager()
-        self.api = get_api_manager()
-        self.notifier = get_notification_manager()
+        self.db_manager = get_database_manager()
         self.module_registry = get_module_registry()
-        self.current_user = self.auth.get_current_user()
+        self.api_manager = get_api_manager()
+        self.notification_manager = get_notification_manager()
         
-    def render_page(self):
-        """프로젝트 설정 페이지 메인"""
-        # 인증 확인
-        if not self.current_user:
-            st.warning("로그인이 필요합니다.")
-            st.stop()
-            
-        # 페이지 헤더
-        self.ui.render_header(
-            "프로젝트 관리",
-            "실험 프로젝트를 생성하고 관리합니다",
-            "📝"
-        )
+        # 세션 상태 초기화
+        self._initialize_session_state()
+    
+    def _initialize_session_state(self):
+        """세션 상태 초기화"""
+        defaults = {
+            'project_step': 0,
+            'new_project': {},
+            'selected_modules': [],
+            'project_view': 'grid',
+            'show_ai_details': False,
+            'ai_recommendations': None,
+            'editing_project': None
+        }
         
-        # 프로젝트 탭
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+    
+    def render(self):
+        """메인 렌더링"""
+        self.ui.render_header("📝 프로젝트 설정", "연구 프로젝트를 생성하고 관리합니다")
+        
+        # 탭 구성
         tabs = st.tabs([
-            "내 프로젝트",
-            "공유된 프로젝트",
-            "템플릿",
-            "새 프로젝트"
+            "📋 프로젝트 목록",
+            "➕ 새 프로젝트",
+            "🔧 프로젝트 편집",
+            "📚 템플릿 관리"
         ])
         
         with tabs[0]:
-            self._render_my_projects()
-            
+            self._render_project_list()
+        
         with tabs[1]:
-            self._render_shared_projects()
-            
+            self._render_new_project_wizard()
+        
         with tabs[2]:
-            self._render_templates()
-            
+            self._render_project_editor()
+        
         with tabs[3]:
-            self._render_new_project()
+            self._render_template_manager()
     
-    def _render_my_projects(self):
-        """내 프로젝트 목록"""
+    def _render_project_list(self):
+        """프로젝트 목록 렌더링"""
         st.subheader("내 프로젝트")
         
-        # 필터링 옵션
-        col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+        # 필터 및 뷰 옵션
+        col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
         
         with col1:
-            search_query = st.text_input(
-                "검색",
-                placeholder="프로젝트명, 태그...",
-                label_visibility="collapsed"
-            )
-            
+            search_query = st.text_input("🔍 검색", placeholder="프로젝트명, 태그...")
+        
         with col2:
-            status_filter = st.selectbox(
-                "상태",
-                ["전체", "진행중", "완료", "보관"],
-                label_visibility="collapsed"
+            status_filter = st.multiselect(
+                "상태 필터",
+                ["활성", "완료", "보관", "공유됨"],
+                default=["활성"]
             )
-            
+        
         with col3:
             sort_by = st.selectbox(
                 "정렬",
-                ["최근 수정", "이름순", "생성일순"],
-                label_visibility="collapsed"
+                ["최근 수정", "이름", "생성일", "진행률"]
             )
-            
-        with col4:
-            if st.button("🔄 새로고침", use_container_width=True):
-                st.rerun()
         
-        # 프로젝트 목록 로드
-        projects = self._load_user_projects(
-            search_query,
-            status_filter,
-            sort_by
-        )
+        with col4:
+            view_mode = st.radio(
+                "보기",
+                ["그리드", "리스트"],
+                horizontal=True,
+                key="project_view_toggle"
+            )
+            st.session_state.project_view = view_mode.lower()
+        
+        # 프로젝트 데이터 조회
+        projects = self._get_user_projects(search_query, status_filter, sort_by)
         
         if not projects:
             self.ui.render_empty_state(
                 "아직 프로젝트가 없습니다",
-                "🗂️"
+                "🚀"
             )
             if st.button("첫 프로젝트 만들기", type="primary"):
-                st.session_state.current_tab = 3
+                st.session_state.project_step = 0
                 st.rerun()
         else:
-            # 프로젝트 카드 렌더링
-            for i in range(0, len(projects), 3):
-                cols = st.columns(3)
-                for j, col in enumerate(cols):
-                    if i + j < len(projects):
-                        with col:
-                            self._render_project_card(projects[i + j])
+            if st.session_state.project_view == "grid":
+                self._render_projects_grid(projects)
+            else:
+                self._render_projects_list(projects)
     
-    def _render_project_card(self, project: Dict):
-        """프로젝트 카드 렌더링"""
-        with st.container():
-            st.markdown(
-                f"""
-                <div class="custom-card" style="height: 250px;">
-                    <h4>{project['name']}</h4>
-                    <p style="color: #666; font-size: 0.9em;">
-                        {project['field']} | {project['status']}
-                    </p>
-                    <p style="margin: 10px 0;">
-                        {project.get('description', 'No description')[:100]}...
-                    </p>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            
-            # 액션 버튼
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("열기", key=f"open_{project['id']}", use_container_width=True):
-                    st.session_state.current_project = project['id']
-                    st.session_state.current_page = 'experiment_design'
-                    st.rerun()
+    def _render_projects_grid(self, projects: List[Dict]):
+        """프로젝트 그리드 뷰"""
+        cols = st.columns(3)
+        
+        for idx, project in enumerate(projects):
+            with cols[idx % 3]:
+                with st.container():
+                    # 프로젝트 카드
+                    st.markdown(f"""
+                    <div class="custom-card">
+                        <h4>{project['name']}</h4>
+                        <p><small>{project['field']} > {project['subfield']}</small></p>
+                        <div style="margin: 1rem 0;">
+                            <p>{project.get('description', '설명 없음')}</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-            with col2:
-                if st.button("편집", key=f"edit_{project['id']}", use_container_width=True):
-                    self._show_edit_dialog(project)
+                    # 진행률 표시
+                    progress = project.get('progress', 0) / 100
+                    st.progress(progress, text=f"진행률: {project.get('progress', 0)}%")
                     
-            with col3:
-                if st.button("공유", key=f"share_{project['id']}", use_container_width=True):
-                    self._show_share_dialog(project)
+                    # 메타 정보
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.caption(f"🧪 실험: {project.get('experiment_count', 0)}")
+                    with col2:
+                        st.caption(f"📅 {project['updated_at'][:10]}")
+                    
+                    # 액션 버튼
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("열기", key=f"open_{project['id']}"):
+                            st.session_state.current_project = project
+                            st.switch_page("pages/3_🧪_Experiment_Design.py")
+                    with col2:
+                        if st.button("편집", key=f"edit_{project['id']}"):
+                            st.session_state.editing_project = project
+                            st.rerun()
+                    with col3:
+                        if st.button("공유", key=f"share_{project['id']}"):
+                            self._show_share_dialog(project)
     
-    def _render_new_project(self):
-        """새 프로젝트 생성"""
+    def _render_projects_list(self, projects: List[Dict]):
+        """프로젝트 리스트 뷰"""
+        # 테이블 데이터 준비
+        df = pd.DataFrame(projects)
+        df['작업'] = '선택'
+        
+        # 테이블 표시
+        edited_df = st.data_editor(
+            df[['name', 'field', 'subfield', 'progress', 'updated_at', '작업']],
+            column_config={
+                "name": st.column_config.TextColumn("프로젝트명", width="large"),
+                "field": st.column_config.TextColumn("분야", width="medium"),
+                "subfield": st.column_config.TextColumn("세부분야", width="medium"),
+                "progress": st.column_config.ProgressColumn("진행률", width="small"),
+                "updated_at": st.column_config.DateColumn("수정일", width="small"),
+                "작업": st.column_config.SelectboxColumn(
+                    "작업",
+                    options=["선택", "열기", "편집", "공유", "삭제"],
+                    width="small"
+                )
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # 선택된 작업 처리
+        for idx, row in edited_df.iterrows():
+            if row['작업'] != '선택':
+                self._handle_project_action(
+                    projects[idx], 
+                    row['작업']
+                )
+    
+    def _render_new_project_wizard(self):
+        """새 프로젝트 생성 마법사"""
         st.subheader("새 프로젝트 만들기")
         
-        # 생성 방법 선택
-        creation_method = st.radio(
-            "프로젝트 생성 방법",
-            ["🚀 빠른 시작", "📋 템플릿 사용", "🎯 AI 추천", "⚙️ 고급 설정"],
-            horizontal=True
-        )
+        # 진행 표시
+        steps = ["기본 정보", "연구 분야", "실험 모듈", "협업 설정", "확인"]
+        progress = st.session_state.project_step / (len(steps) - 1)
+        st.progress(progress)
+        st.write(f"단계 {st.session_state.project_step + 1}/{len(steps)}: {steps[st.session_state.project_step]}")
         
-        if creation_method == "🚀 빠른 시작":
-            self._render_quick_start()
-        elif creation_method == "📋 템플릿 사용":
-            self._render_template_selection()
-        elif creation_method == "🎯 AI 추천":
-            self._render_ai_guided_creation()
-        else:
-            self._render_advanced_creation()
-    
-    def _render_quick_start(self):
-        """빠른 시작 - 간단한 프로젝트 생성"""
-        with st.form("quick_start_form"):
-            # 기본 정보
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                name = st.text_input(
-                    "프로젝트명 *",
-                    placeholder="예: 신약 후보물질 스크리닝"
-                )
-                
-                field = st.selectbox(
-                    "연구 분야 *",
-                    ["화학", "재료과학", "생명공학", "제약", "환경", "기타"]
-                )
-                
-            with col2:
-                module_category = st.selectbox(
-                    "실험 유형",
-                    self.module_registry.get_categories()
-                )
-                
-                visibility = st.radio(
-                    "공개 범위",
-                    ["🔒 비공개", "👥 팀 공개", "🌍 전체 공개"],
-                    index=0
-                )
-            
-            description = st.text_area(
-                "프로젝트 설명",
-                placeholder="프로젝트의 목표와 배경을 간단히 설명해주세요",
-                height=100
-            )
-            
-            # AI 설명 상세도 설정 (필수 구현)
-            st.markdown("### 🤖 AI 지원 설정")
-            ai_detail_level = st.select_slider(
-                "AI 설명 상세도",
-                options=["간단히", "보통", "상세히", "매우 상세히"],
-                value="보통",
-                help="AI가 제공하는 설명의 상세도를 설정합니다. 언제든지 변경 가능합니다."
-            )
-            
-            # 제출
-            submitted = st.form_submit_button(
-                "프로젝트 생성",
-                type="primary",
-                use_container_width=True
-            )
-            
-            if submitted:
-                if not name or not field:
-                    st.error("필수 항목을 입력해주세요")
-                else:
-                    project_data = {
-                        "name": name,
-                        "field": field,
-                        "description": description,
-                        "module_id": self._get_default_module(module_category),
-                        "visibility": visibility.split()[0],
-                        "ai_detail_level": ai_detail_level,
-                        "created_by": "quick_start"
-                    }
-                    
-                    project_id = self.create_project(project_data)
-                    if project_id:
-                        st.success("프로젝트가 생성되었습니다!")
-                        st.balloons()
-                        
-                        # 바로 실험 설계로 이동
-                        if st.button("실험 설계 시작하기", type="primary"):
-                            st.session_state.current_project = project_id
-                            st.session_state.current_page = 'experiment_design'
-                            st.rerun()
-    
-    def _render_ai_guided_creation(self):
-        """AI 가이드 프로젝트 생성"""
-        st.info("AI가 프로젝트 설정을 도와드립니다. 몇 가지 질문에 답해주세요.")
+        # 단계별 렌더링
+        if st.session_state.project_step == 0:
+            self._render_basic_info_step()
+        elif st.session_state.project_step == 1:
+            self._render_field_selection_step()
+        elif st.session_state.project_step == 2:
+            self._render_module_selection_step()
+        elif st.session_state.project_step == 3:
+            self._render_collaboration_step()
+        elif st.session_state.project_step == 4:
+            self._render_confirmation_step()
         
-        # AI 대화형 인터페이스
-        if 'ai_creation_state' not in st.session_state:
-            st.session_state.ai_creation_state = {
-                'step': 0,
-                'responses': {},
-                'recommendations': None
-            }
+        # 네비게이션 버튼
+        col1, col2, col3 = st.columns([1, 1, 1])
         
-        state = st.session_state.ai_creation_state
-        
-        # 단계별 질문
-        questions = [
-            "어떤 문제를 해결하고 싶으신가요?",
-            "현재 가지고 있는 리소스는 무엇인가요? (장비, 재료, 시간 등)",
-            "목표로 하는 결과는 무엇인가요?",
-            "이전에 유사한 실험을 해보신 적이 있나요?"
-        ]
-        
-        if state['step'] < len(questions):
-            st.markdown(f"### 질문 {state['step'] + 1}/{len(questions)}")
-            st.write(questions[state['step']])
-            
-            response = st.text_area(
-                "답변",
-                key=f"ai_response_{state['step']}",
-                height=100
-            )
-            
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                if state['step'] > 0:
-                    if st.button("이전", use_container_width=True):
-                        state['step'] -= 1
-                        st.rerun()
-                        
-            with col2:
-                if st.button("다음", type="primary", use_container_width=True):
-                    if response:
-                        state['responses'][state['step']] = response
-                        state['step'] += 1
-                        st.rerun()
-                    else:
-                        st.warning("답변을 입력해주세요")
-        
-        else:
-            # AI 분석 및 추천
-            if not state['recommendations']:
-                with st.spinner("AI가 최적의 프로젝트 설정을 분석하고 있습니다..."):
-                    recommendations = self._get_ai_project_recommendations(
-                        state['responses']
-                    )
-                    state['recommendations'] = recommendations
-            
-            # 추천 결과 표시
-            self._render_ai_recommendations(state['recommendations'])
-            
-            # 프로젝트 생성 버튼
-            if st.button("추천 설정으로 프로젝트 생성", type="primary", use_container_width=True):
-                project_id = self.create_project(state['recommendations']['project_data'])
-                if project_id:
-                    st.success("AI 추천 프로젝트가 생성되었습니다!")
-                    st.session_state.ai_creation_state = None
-                    st.session_state.current_project = project_id
+        with col1:
+            if st.session_state.project_step > 0:
+                if st.button("⬅️ 이전", use_container_width=True):
+                    st.session_state.project_step -= 1
                     st.rerun()
+        
+        with col2:
+            if st.button("❌ 취소", use_container_width=True):
+                if st.confirm("프로젝트 생성을 취소하시겠습니까?"):
+                    st.session_state.project_step = 0
+                    st.session_state.new_project = {}
+                    st.rerun()
+        
+        with col3:
+            if st.session_state.project_step < len(steps) - 1:
+                if st.button("다음 ➡️", use_container_width=True, type="primary"):
+                    if self._validate_current_step():
+                        st.session_state.project_step += 1
+                        st.rerun()
+            else:
+                if st.button("✅ 생성", use_container_width=True, type="primary"):
+                    self._create_project()
     
-    def _get_ai_project_recommendations(self, responses: Dict) -> Dict:
-        """AI 기반 프로젝트 추천"""
-        # AI 프롬프트 구성
-        prompt = f"""
-        사용자가 새로운 실험 프로젝트를 만들려고 합니다.
+    def _render_basic_info_step(self):
+        """기본 정보 입력 단계"""
+        st.markdown("### 1️⃣ 기본 정보")
         
-        사용자 응답:
-        1. 해결하려는 문제: {responses.get(0, '')}
-        2. 보유 리소스: {responses.get(1, '')}
-        3. 목표 결과: {responses.get(2, '')}
-        4. 이전 경험: {responses.get(3, '')}
-        
-        다음을 추천해주세요:
-        1. 프로젝트명
-        2. 적합한 실험 모듈
-        3. 주요 실험 요인
-        4. 예상 실험 횟수
-        5. 유사 프로젝트 사례
-        6. 주의사항
-        
-        JSON 형식으로 응답해주세요.
-        """
-        
-        # AI 호출 (상세 설명 포함)
-        response = self.api.generate_structured_response(
-            prompt,
-            detail_level=st.session_state.get('ai_detail_level', 'normal'),
-            include_reasoning=True
+        # 프로젝트명
+        project_name = st.text_input(
+            "프로젝트명 *",
+            value=st.session_state.new_project.get('name', ''),
+            placeholder="예: 신규 촉매 개발",
+            help="명확하고 구체적인 이름을 사용하세요"
         )
+        st.session_state.new_project['name'] = project_name
         
-        # 기본 추천 (오프라인 폴백)
-        if not response:
-            return self._get_default_recommendations(responses)
-        
-        return response
-    
-    def _render_ai_recommendations(self, recommendations: Dict):
-        """AI 추천 결과 표시"""
-        st.markdown("### 🤖 AI 추천 결과")
-        
-        # AI 설명 상세도 토글
-        show_details = st.checkbox(
-            "🔍 상세 설명 보기",
-            value=st.session_state.get('show_ai_details', True),
-            key="project_ai_details"
+        # 설명
+        description = st.text_area(
+            "프로젝트 설명",
+            value=st.session_state.new_project.get('description', ''),
+            height=100,
+            placeholder="프로젝트의 목적과 주요 내용을 간단히 설명하세요"
         )
+        st.session_state.new_project['description'] = description
         
-        # 기본 추천 사항
+        # 프로젝트 유형
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("**추천 프로젝트명**")
-            st.info(recommendations.get('project_name', 'AI 추천 프로젝트'))
-            
-            st.markdown("**추천 실험 모듈**")
-            st.info(recommendations.get('module', '범용 실험 설계'))
-            
+            project_type = st.selectbox(
+                "프로젝트 유형",
+                ["연구개발", "품질관리", "공정개선", "분석법개발", "기타"],
+                index=["연구개발", "품질관리", "공정개선", "분석법개발", "기타"].index(
+                    st.session_state.new_project.get('type', '연구개발')
+                )
+            )
+            st.session_state.new_project['type'] = project_type
+        
         with col2:
-            st.markdown("**예상 실험 횟수**")
-            st.info(f"{recommendations.get('estimated_runs', 20)}회")
-            
-            st.markdown("**예상 소요 시간**")
-            st.info(recommendations.get('estimated_duration', '2-4주'))
-        
-        # 상세 설명 (토글)
-        if show_details:
-            tabs = st.tabs([
-                "추론 과정",
-                "실험 요인",
-                "유사 프로젝트",
-                "주의사항"
-            ])
-            
-            with tabs[0]:
-                st.markdown("**AI 추론 과정**")
-                reasoning = recommendations.get('reasoning', {})
-                for step, explanation in reasoning.items():
-                    st.write(f"• {step}: {explanation}")
-            
-            with tabs[1]:
-                st.markdown("**추천 실험 요인**")
-                factors = recommendations.get('factors', [])
-                for factor in factors:
-                    with st.expander(factor['name']):
-                        st.write(f"**범위**: {factor['min']} - {factor['max']} {factor['unit']}")
-                        st.write(f"**중요도**: {factor['importance']}")
-                        st.write(f"**근거**: {factor['rationale']}")
-            
-            with tabs[2]:
-                st.markdown("**유사 프로젝트 사례**")
-                similar = recommendations.get('similar_projects', [])
-                for proj in similar:
-                    with st.expander(f"{proj['name']} (유사도: {proj['similarity']}%)"):
-                        st.write(f"**분야**: {proj['field']}")
-                        st.write(f"**결과**: {proj['outcome']}")
-                        st.write(f"**배울 점**: {proj['lessons']}")
-            
-            with tabs[3]:
-                st.markdown("**⚠️ 주의사항**")
-                for warning in recommendations.get('warnings', []):
-                    st.warning(warning)
-                
-                st.markdown("**💡 성공 팁**")
-                for tip in recommendations.get('tips', []):
-                    st.info(tip)
-    
-    def create_project(self, project_data: Dict) -> Optional[str]:
-        """새 프로젝트 생성"""
-        try:
-            # 프로젝트 ID 생성
-            project_id = f"proj_{uuid.uuid4().hex[:8]}"
-            
-            # 프로젝트 데이터 구성
-            project = {
-                "id": project_id,
-                "user_id": self.current_user['id'],
-                "name": project_data['name'],
-                "description": project_data.get('description', ''),
-                "field": project_data['field'],
-                "module_id": project_data.get('module_id'),
-                "status": "active",
-                "visibility": project_data.get('visibility', '🔒'),
-                "collaborators": json.dumps([{
-                    "user_id": self.current_user['id'],
-                    "role": "owner",
-                    "joined_at": datetime.now().isoformat()
-                }]),
-                "settings": json.dumps({
-                    "ai_detail_level": project_data.get('ai_detail_level', '보통'),
-                    "notifications": True,
-                    "auto_save": True
-                }),
-                "created_at": datetime.now(),
-                "updated_at": datetime.now()
-            }
-            
-            # 데이터베이스에 저장
-            self.db.create_project(project)
-            
-            # 알림 발송
-            self.notifier.send(
-                "프로젝트 생성",
-                f"'{project['name']}' 프로젝트가 생성되었습니다.",
-                "success"
+            priority = st.select_slider(
+                "우선순위",
+                options=["낮음", "보통", "높음", "긴급"],
+                value=st.session_state.new_project.get('priority', '보통')
             )
-            
-            # 활동 로그
-            logger.info(f"Project created: {project_id} by user {self.current_user['id']}")
-            
-            return project_id
-            
-        except Exception as e:
-            logger.error(f"Failed to create project: {e}")
-            st.error(f"프로젝트 생성 실패: {str(e)}")
-            return None
-    
-    def _load_user_projects(self, search_query: str = "", 
-                           status_filter: str = "전체",
-                           sort_by: str = "최근 수정") -> List[Dict]:
-        """사용자 프로젝트 로드"""
-        try:
-            # 데이터베이스에서 프로젝트 조회
-            projects = self.db.get_user_projects(
-                user_id=self.current_user['id'],
-                include_shared=False
+            st.session_state.new_project['priority'] = priority
+        
+        # 일정
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            start_date = st.date_input(
+                "시작일",
+                value=st.session_state.new_project.get('start_date', datetime.now().date())
             )
-            
-            # 필터링
-            if search_query:
-                projects = [
-                    p for p in projects
-                    if search_query.lower() in p['name'].lower() or
-                       search_query.lower() in p.get('description', '').lower()
-                ]
-            
-            if status_filter != "전체":
-                status_map = {
-                    "진행중": "active",
-                    "완료": "completed",
-                    "보관": "archived"
-                }
-                projects = [
-                    p for p in projects
-                    if p['status'] == status_map.get(status_filter, status_filter)
-                ]
-            
-            # 정렬
-            if sort_by == "최근 수정":
-                projects.sort(key=lambda x: x['updated_at'], reverse=True)
-            elif sort_by == "이름순":
-                projects.sort(key=lambda x: x['name'])
-            elif sort_by == "생성일순":
-                projects.sort(key=lambda x: x['created_at'], reverse=True)
-            
-            return projects
-            
-        except Exception as e:
-            logger.error(f"Failed to load projects: {e}")
-            return []
-    
-    def _render_shared_projects(self):
-        """공유된 프로젝트 목록"""
-        st.subheader("공유된 프로젝트")
+            st.session_state.new_project['start_date'] = start_date.isoformat()
         
-        # 공유된 프로젝트 로드
-        shared_projects = self.db.get_shared_projects(self.current_user['id'])
-        
-        if not shared_projects:
-            self.ui.render_empty_state(
-                "공유된 프로젝트가 없습니다",
-                "👥"
+        with col2:
+            end_date = st.date_input(
+                "목표 종료일",
+                value=st.session_state.new_project.get('end_date', None)
             )
-        else:
-            # 역할별 그룹화
-            by_role = {"editor": [], "viewer": []}
-            
-            for project in shared_projects:
-                # 협업자 정보 파싱
-                collaborators = json.loads(project.get('collaborators', '[]'))
-                user_role = None
-                
-                for collab in collaborators:
-                    if collab['user_id'] == self.current_user['id']:
-                        user_role = collab['role']
-                        break
-                
-                if user_role in by_role:
-                    by_role[user_role].append(project)
-            
-            # 편집 가능한 프로젝트
-            if by_role['editor']:
-                st.markdown("### ✏️ 편집 가능")
-                for project in by_role['editor']:
-                    self._render_shared_project_card(project, 'editor')
-            
-            # 보기만 가능한 프로젝트
-            if by_role['viewer']:
-                st.markdown("### 👁️ 보기 전용")
-                for project in by_role['viewer']:
-                    self._render_shared_project_card(project, 'viewer')
+            if end_date:
+                st.session_state.new_project['end_date'] = end_date.isoformat()
     
-    def _render_shared_project_card(self, project: Dict, role: str):
-        """공유 프로젝트 카드"""
-        with st.container():
-            col1, col2, col3 = st.columns([3, 1, 1])
-            
-            with col1:
-                st.markdown(f"**{project['name']}**")
-                st.caption(f"소유자: {self._get_owner_name(project)}")
-                
-            with col2:
-                st.write(f"역할: {role}")
-                
-            with col3:
-                if st.button("열기", key=f"open_shared_{project['id']}"):
-                    st.session_state.current_project = project['id']
-                    st.session_state.current_page = 'experiment_design'
-                    st.rerun()
-    
-    def _render_templates(self):
-        """템플릿 목록"""
-        st.subheader("프로젝트 템플릿")
+    def _render_field_selection_step(self):
+        """연구 분야 선택 단계"""
+        st.markdown("### 2️⃣ 연구 분야 선택")
         
-        # 템플릿 카테고리
-        categories = ["전체", "화학", "재료과학", "생명공학", "인기", "내 템플릿"]
+        # 대분야 선택
+        main_field = st.selectbox(
+            "대분야 *",
+            list(RESEARCH_FIELDS.keys()),
+            index=list(RESEARCH_FIELDS.keys()).index(
+                st.session_state.new_project.get('field', '화학')
+            )
+        )
+        st.session_state.new_project['field'] = main_field
+        
+        # 중분야 선택
+        if main_field:
+            sub_fields = list(RESEARCH_FIELDS[main_field].keys())
+            sub_field = st.selectbox(
+                "중분야 *",
+                sub_fields,
+                index=sub_fields.index(
+                    st.session_state.new_project.get('subfield', sub_fields[0])
+                ) if st.session_state.new_project.get('subfield') in sub_fields else 0
+            )
+            st.session_state.new_project['subfield'] = sub_field
+            
+            # 세부분야 선택
+            if sub_field:
+                detail_fields = RESEARCH_FIELDS[main_field][sub_field]
+                detail_field = st.multiselect(
+                    "세부분야 (복수 선택 가능)",
+                    detail_fields,
+                    default=st.session_state.new_project.get('detail_fields', [])
+                )
+                st.session_state.new_project['detail_fields'] = detail_field
+        
+        # 키워드
+        keywords = st.text_input(
+            "키워드 (쉼표로 구분)",
+            value=', '.join(st.session_state.new_project.get('keywords', [])),
+            placeholder="예: 촉매, 반응속도, 선택성"
+        )
+        st.session_state.new_project['keywords'] = [k.strip() for k in keywords.split(',') if k.strip()]
+        
+        # AI 분야 추천
+        if st.button("🤖 AI 추천 받기"):
+            self._get_field_recommendations()
+    
+    def _render_module_selection_step(self):
+        """실험 모듈 선택 단계"""
+        st.markdown("### 3️⃣ 실험 모듈 선택")
+        
+        # 모듈 추천
+        field = st.session_state.new_project.get('field', '')
+        subfield = st.session_state.new_project.get('subfield', '')
+        
+        if field and subfield:
+            # AI 추천 모듈
+            st.markdown("#### 🤖 AI 추천 모듈")
+            
+            if st.button("AI 모듈 추천 받기"):
+                self._get_module_recommendations()
+            
+            # AI 추천 결과 표시
+            if st.session_state.ai_recommendations:
+                self._render_ai_recommendations()
+        
+        # 모듈 카탈로그
+        st.markdown("#### 📚 모듈 카탈로그")
+        
+        # 카테고리 필터
+        categories = self.module_registry.get_categories()
         selected_category = st.selectbox(
             "카테고리",
-            categories,
-            label_visibility="collapsed"
+            ["전체"] + categories,
+            help="모듈 카테고리를 선택하세요"
         )
         
-        # 템플릿 로드
-        templates = self._load_templates(selected_category)
-        
-        if not templates:
-            self.ui.render_empty_state(
-                "템플릿이 없습니다",
-                "📋"
-            )
+        # 모듈 목록
+        if selected_category == "전체":
+            modules = self.module_registry.list_modules()
         else:
-            # 템플릿 그리드
-            for i in range(0, len(templates), 3):
-                cols = st.columns(3)
-                for j, col in enumerate(cols):
-                    if i + j < len(templates):
-                        with col:
-                            self._render_template_card(templates[i + j])
+            modules = self.module_registry.list_modules(category=selected_category)
+        
+        # 모듈 선택 UI
+        selected_modules = []
+        for module in modules:
+            col1, col2, col3 = st.columns([3, 2, 1])
+            
+            with col1:
+                st.write(f"**{module['name']}**")
+                st.caption(module['description'])
+            
+            with col2:
+                tags = module.get('tags', [])
+                if tags:
+                    st.write(' '.join([f"`{tag}`" for tag in tags[:3]]))
+            
+            with col3:
+                if st.checkbox("선택", key=f"module_{module['id']}"):
+                    selected_modules.append(module['id'])
+        
+        st.session_state.selected_modules = selected_modules
+        
+        # 선택된 모듈 요약
+        if selected_modules:
+            st.success(f"✅ {len(selected_modules)}개 모듈 선택됨")
     
-    def _render_template_card(self, template: Dict):
-        """템플릿 카드"""
-        with st.container():
-            st.markdown(
-                f"""
-                <div class="custom-card">
-                    <h5>{template['name']}</h5>
-                    <p style="font-size: 0.9em; color: #666;">
-                        {template['category']} | ⭐ {template.get('rating', 0)}/5
-                    </p>
-                    <p>{template['description'][:100]}...</p>
-                    <p style="font-size: 0.8em; color: #888;">
-                        사용 {template.get('usage_count', 0)}회
-                    </p>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    def _render_collaboration_step(self):
+        """협업 설정 단계"""
+        st.markdown("### 4️⃣ 협업 설정")
+        
+        # 공개 범위
+        visibility = st.radio(
+            "프로젝트 공개 범위",
+            ["비공개", "팀 공개", "전체 공개"],
+            index=["비공개", "팀 공개", "전체 공개"].index(
+                st.session_state.new_project.get('visibility', '비공개')
+            ),
+            help="프로젝트의 공개 범위를 설정합니다"
+        )
+        st.session_state.new_project['visibility'] = visibility
+        
+        # 협업자 초대
+        st.markdown("#### 협업자 초대")
+        
+        # 이메일 입력
+        invited_emails = st.text_area(
+            "이메일 주소 (한 줄에 하나씩)",
+            value='\n'.join(st.session_state.new_project.get('collaborators', [])),
+            height=100,
+            placeholder="user1@example.com\nuser2@example.com"
+        )
+        
+        # 권한 설정
+        if invited_emails:
+            emails = [e.strip() for e in invited_emails.split('\n') if e.strip()]
+            st.session_state.new_project['collaborators'] = emails
             
-            if st.button(
-                "이 템플릿 사용",
-                key=f"use_template_{template['id']}",
-                use_container_width=True
-            ):
-                self._create_from_template(template)
+            default_permission = st.selectbox(
+                "기본 권한",
+                ["보기", "편집", "관리"],
+                help="초대된 사용자의 기본 권한"
+            )
+            st.session_state.new_project['default_permission'] = default_permission
+            
+            # 초대 메시지
+            invite_message = st.text_area(
+                "초대 메시지 (선택사항)",
+                value=st.session_state.new_project.get('invite_message', ''),
+                placeholder="프로젝트에 대한 간단한 소개나 협업 요청 사항을 작성하세요"
+            )
+            st.session_state.new_project['invite_message'] = invite_message
     
-    def _create_from_template(self, template: Dict):
-        """템플릿으로부터 프로젝트 생성"""
-        with st.form("template_project_form"):
-            st.markdown(f"### '{template['name']}' 템플릿으로 프로젝트 만들기")
-            
-            # 프로젝트명
-            name = st.text_input(
-                "프로젝트명 *",
-                value=f"{template['name']} - 복사본"
+    def _render_confirmation_step(self):
+        """확인 단계"""
+        st.markdown("### 5️⃣ 프로젝트 생성 확인")
+        
+        project = st.session_state.new_project
+        
+        # 프로젝트 요약
+        st.markdown("#### 📋 프로젝트 요약")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**기본 정보**")
+            st.write(f"- 프로젝트명: {project.get('name', '')}")
+            st.write(f"- 유형: {project.get('type', '')}")
+            st.write(f"- 우선순위: {project.get('priority', '')}")
+            st.write(f"- 기간: {project.get('start_date', '')} ~ {project.get('end_date', '미정')}")
+        
+        with col2:
+            st.write("**연구 분야**")
+            st.write(f"- 대분야: {project.get('field', '')}")
+            st.write(f"- 중분야: {project.get('subfield', '')}")
+            if project.get('detail_fields'):
+                st.write(f"- 세부분야: {', '.join(project.get('detail_fields', []))}")
+            if project.get('keywords'):
+                st.write(f"- 키워드: {', '.join(project.get('keywords', []))}")
+        
+        # 선택된 모듈
+        if st.session_state.selected_modules:
+            st.write("**선택된 실험 모듈**")
+            for module_id in st.session_state.selected_modules:
+                module = self.module_registry.get_module(module_id)
+                if module:
+                    st.write(f"- {module.get_module_info()['name']}")
+        
+        # 협업 설정
+        if project.get('collaborators'):
+            st.write("**협업자**")
+            st.write(f"- {len(project['collaborators'])}명 초대 예정")
+            st.write(f"- 기본 권한: {project.get('default_permission', '보기')}")
+        
+        # 템플릿 저장 옵션
+        st.divider()
+        save_as_template = st.checkbox(
+            "이 설정을 템플릿으로 저장",
+            help="나중에 비슷한 프로젝트를 만들 때 사용할 수 있습니다"
+        )
+        
+        if save_as_template:
+            template_name = st.text_input(
+                "템플릿 이름",
+                placeholder="예: 촉매 개발 프로젝트"
             )
+            st.session_state.new_project['save_as_template'] = True
+            st.session_state.new_project['template_name'] = template_name
+    
+    def _render_project_editor(self):
+        """프로젝트 편집기"""
+        if not st.session_state.editing_project:
+            st.info("편집할 프로젝트를 선택하세요")
+            return
+        
+        project = st.session_state.editing_project
+        st.subheader(f"프로젝트 편집: {project['name']}")
+        
+        # 편집 폼
+        with st.form("project_edit_form"):
+            # 기본 정보
+            st.markdown("#### 기본 정보")
             
-            # 설명 (템플릿 설명 포함)
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("프로젝트명", value=project['name'])
+                project_type = st.selectbox(
+                    "유형",
+                    ["연구개발", "품질관리", "공정개선", "분석법개발", "기타"],
+                    index=["연구개발", "품질관리", "공정개선", "분석법개발", "기타"].index(project.get('type', '연구개발'))
+                )
+            
+            with col2:
+                status = st.selectbox(
+                    "상태",
+                    ["활성", "일시중지", "완료", "보관"],
+                    index=["활성", "일시중지", "완료", "보관"].index(project.get('status', '활성'))
+                )
+                priority = st.select_slider(
+                    "우선순위",
+                    options=["낮음", "보통", "높음", "긴급"],
+                    value=project.get('priority', '보통')
+                )
+            
             description = st.text_area(
-                "프로젝트 설명",
-                value=template.get('description', ''),
+                "설명",
+                value=project.get('description', ''),
                 height=100
             )
             
-            # 커스터마이징 옵션
-            st.markdown("### 커스터마이징")
+            # 실험 모듈
+            st.markdown("#### 실험 모듈")
+            current_modules = project.get('modules', [])
             
-            # 템플릿 설정 로드
-            template_data = json.loads(template.get('data', '{}'))
-            
-            # 실험 요인 편집
-            if 'factors' in template_data:
-                st.write("**실험 요인**")
-                edited_factors = []
-                
-                for factor in template_data['factors']:
-                    with st.expander(factor['name']):
-                        col1, col2 = st.columns(2)
-                        
+            # 현재 모듈 표시
+            if current_modules:
+                st.write("현재 모듈:")
+                for module_id in current_modules:
+                    module = self.module_registry.get_module(module_id)
+                    if module:
+                        col1, col2 = st.columns([4, 1])
                         with col1:
-                            min_val = st.number_input(
-                                "최소값",
-                                value=factor.get('min', 0),
-                                key=f"min_{factor['name']}"
-                            )
-                            
+                            st.write(f"- {module.get_module_info()['name']}")
                         with col2:
-                            max_val = st.number_input(
-                                "최대값",
-                                value=factor.get('max', 100),
-                                key=f"max_{factor['name']}"
-                            )
-                        
-                        edited_factors.append({
-                            **factor,
-                            'min': min_val,
-                            'max': max_val
-                        })
+                            if st.button("제거", key=f"remove_{module_id}"):
+                                current_modules.remove(module_id)
             
-            # 제출
-            if st.form_submit_button("프로젝트 생성", type="primary"):
-                project_data = {
-                    "name": name,
-                    "description": description,
-                    "field": template.get('category', '기타'),
-                    "module_id": template.get('module_id'),
-                    "template_id": template['id'],
-                    **template_data
-                }
+            # 모듈 추가
+            if st.checkbox("모듈 추가/변경"):
+                modules = self.module_registry.list_modules()
+                module_options = {m['name']: m['id'] for m in modules}
                 
-                project_id = self.create_project(project_data)
-                if project_id:
-                    st.success("템플릿으로부터 프로젝트가 생성되었습니다!")
+                selected_new = st.multiselect(
+                    "추가할 모듈",
+                    list(module_options.keys())
+                )
+                
+                for module_name in selected_new:
+                    module_id = module_options[module_name]
+                    if module_id not in current_modules:
+                        current_modules.append(module_id)
+            
+            # 저장 버튼
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col2:
+                if st.form_submit_button("💾 저장", type="primary", use_container_width=True):
+                    # 업데이트 데이터 준비
+                    updated_data = {
+                        'name': name,
+                        'type': project_type,
+                        'status': status,
+                        'priority': priority,
+                        'description': description,
+                        'modules': current_modules,
+                        'updated_at': datetime.now().isoformat()
+                    }
                     
-                    # 템플릿 사용 횟수 증가
-                    self.db.increment_template_usage(template['id'])
+                    # 데이터베이스 업데이트
+                    if self.db_manager.update_project(project['id'], updated_data):
+                        st.success("✅ 프로젝트가 업데이트되었습니다")
+                        st.session_state.editing_project = None
+                        st.rerun()
+                    else:
+                        st.error("프로젝트 업데이트 실패")
+            
+            with col3:
+                if st.form_submit_button("취소", use_container_width=True):
+                    st.session_state.editing_project = None
+                    st.rerun()
     
-    def _show_share_dialog(self, project: Dict):
-        """프로젝트 공유 대화상자"""
-        with st.expander("🔗 프로젝트 공유", expanded=True):
-            st.markdown(f"### '{project['name']}' 공유 설정")
-            
-            # 현재 협업자 목록
-            st.markdown("**현재 팀원**")
-            collaborators = json.loads(project.get('collaborators', '[]'))
-            
-            for collab in collaborators:
+    def _render_template_manager(self):
+        """템플릿 관리"""
+        st.subheader("프로젝트 템플릿")
+        
+        # 템플릿 목록
+        templates = self.db_manager.get_project_templates(st.session_state.user['id'])
+        
+        if not templates:
+            st.info("저장된 템플릿이 없습니다. 새 프로젝트를 만들 때 템플릿으로 저장할 수 있습니다.")
+        else:
+            for template in templates:
+                with st.expander(template['name']):
+                    # 템플릿 정보
+                    st.write(f"**설명**: {template.get('description', '없음')}")
+                    st.write(f"**분야**: {template['field']} > {template['subfield']}")
+                    st.write(f"**생성일**: {template['created_at'][:10]}")
+                    
+                    # 액션 버튼
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if st.button("사용", key=f"use_template_{template['id']}"):
+                            self._load_template(template)
+                    
+                    with col2:
+                        if st.button("수정", key=f"edit_template_{template['id']}"):
+                            st.session_state.editing_template = template
+                    
+                    with col3:
+                        if st.button("삭제", key=f"delete_template_{template['id']}"):
+                            if st.confirm("템플릿을 삭제하시겠습니까?"):
+                                self.db_manager.delete_template(template['id'])
+                                st.rerun()
+    
+    def _render_ai_recommendations(self):
+        """AI 추천 결과 렌더링"""
+        recommendations = st.session_state.ai_recommendations
+        
+        # AI 설명 상세도 제어
+        col1, col2 = st.columns([4, 1])
+        with col2:
+            show_details = st.checkbox(
+                "🔍 상세 설명",
+                value=st.session_state.show_ai_details,
+                key="ai_details_toggle"
+            )
+            st.session_state.show_ai_details = show_details
+        
+        # 추천 모듈 표시
+        for idx, rec in enumerate(recommendations):
+            with st.container():
                 col1, col2, col3 = st.columns([3, 1, 1])
                 
                 with col1:
-                    user_info = self.db.get_user(collab['user_id'])
-                    st.write(f"{user_info['name']} ({user_info['email']})")
-                    
+                    st.write(f"**{rec['module_name']}**")
+                    st.write(rec['reason'])
+                
                 with col2:
-                    st.write(collab['role'])
-                    
+                    st.write(f"적합도: {rec['score']}%")
+                
                 with col3:
-                    if collab['role'] != 'owner' and self._can_manage_collaborators(project):
-                        if st.button("제거", key=f"remove_{collab['user_id']}"):
-                            self._remove_collaborator(project['id'], collab['user_id'])
-            
-            # 새 협업자 초대
-            if self._can_manage_collaborators(project):
-                st.markdown("**팀원 초대**")
+                    if st.button("선택", key=f"select_ai_{idx}"):
+                        if rec['module_id'] not in st.session_state.selected_modules:
+                            st.session_state.selected_modules.append(rec['module_id'])
                 
-                with st.form("invite_form"):
-                    emails = st.text_area(
-                        "이메일 주소",
-                        placeholder="한 줄에 하나씩 입력\nexample@email.com",
-                        height=100
-                    )
-                    
-                    role = st.selectbox(
-                        "권한",
-                        ["viewer", "editor"],
-                        format_func=lambda x: {"viewer": "보기 전용", "editor": "편집 가능"}[x]
-                    )
-                    
-                    if st.form_submit_button("초대 보내기"):
-                        if emails:
-                            email_list = [e.strip() for e in emails.split('\n') if e.strip()]
-                            self._invite_collaborators(project['id'], email_list, role)
-    
-    def _invite_collaborators(self, project_id: str, emails: List[str], role: str):
-        """협업자 초대"""
-        invited = []
-        failed = []
-        
-        for email in emails:
-            try:
-                # 사용자 조회
-                user = self.db.get_user_by_email(email)
-                
-                if user:
-                    # 기존 사용자 추가
-                    success = self.db.add_collaborator(
-                        project_id,
-                        user['id'],
-                        role
-                    )
-                    
-                    if success:
-                        invited.append(email)
+                # 상세 설명 (토글)
+                if show_details:
+                    with st.expander("상세 설명"):
+                        st.write("**추론 과정**")
+                        st.write(rec.get('reasoning', ''))
                         
-                        # 알림 발송
-                        self.notifier.send_to_user(
-                            user['id'],
-                            "프로젝트 초대",
-                            f"{self.current_user['name']}님이 프로젝트에 초대했습니다.",
-                            "info"
-                        )
-                    else:
-                        failed.append(f"{email} (이미 팀원)")
-                else:
-                    # 신규 사용자 - 초대 이메일 발송
-                    # (이메일 시스템 구현 필요)
-                    failed.append(f"{email} (미가입)")
-                    
-            except Exception as e:
-                failed.append(f"{email} ({str(e)})")
-        
-        # 결과 표시
-        if invited:
-            st.success(f"{len(invited)}명을 초대했습니다: {', '.join(invited)}")
-        
-        if failed:
-            st.warning(f"초대 실패: {', '.join(failed)}")
+                        st.write("**대안**")
+                        for alt in rec.get('alternatives', []):
+                            st.write(f"- {alt}")
+                        
+                        st.write("**주의사항**")
+                        st.write(rec.get('limitations', ''))
     
-    def _get_default_module(self, category: str) -> str:
-        """기본 모듈 ID 반환"""
-        modules = self.module_registry.list_modules(category)
-        if modules:
-            return modules[0]['id']
-        return "core.general_experiment"
-    
-    def _load_templates(self, category: str) -> List[Dict]:
-        """템플릿 로드"""
-        try:
-            if category == "내 템플릿":
-                return self.db.get_user_templates(self.current_user['id'])
-            elif category == "인기":
-                return self.db.get_popular_templates(limit=12)
-            elif category != "전체":
-                return self.db.get_templates_by_category(category)
+    def _get_module_recommendations(self):
+        """AI 모듈 추천"""
+        project = st.session_state.new_project
+        
+        with st.spinner("AI가 최적의 모듈을 추천하고 있습니다..."):
+            prompt = f"""
+            다음 프로젝트에 적합한 실험 모듈을 추천해주세요:
+            
+            분야: {project.get('field')} > {project.get('subfield')}
+            세부분야: {', '.join(project.get('detail_fields', []))}
+            키워드: {', '.join(project.get('keywords', []))}
+            프로젝트 유형: {project.get('type')}
+            설명: {project.get('description', '')}
+            
+            사용 가능한 모듈:
+            {self._get_available_modules_list()}
+            
+            응답 형식:
+            1. 추천 모듈 3-5개
+            2. 각 모듈별 추천 이유
+            3. 적합도 점수 (0-100)
+            4. 추론 과정 (상세)
+            5. 대안 모듈
+            6. 주의사항
+            """
+            
+            response = self.api_manager.call_ai(
+                prompt,
+                response_format="structured",
+                detail_level='detailed' if st.session_state.show_ai_details else 'auto'
+            )
+            
+            if response:
+                st.session_state.ai_recommendations = response['recommendations']
+                st.success("✅ AI 추천이 완료되었습니다")
             else:
-                return self.db.get_all_templates(limit=12)
-                
-        except Exception as e:
-            logger.error(f"Failed to load templates: {e}")
-            return []
+                st.error("AI 추천을 받을 수 없습니다")
     
-    def _get_owner_name(self, project: Dict) -> str:
-        """프로젝트 소유자 이름 반환"""
-        try:
-            owner_info = self.db.get_user(project['user_id'])
-            return owner_info.get('name', 'Unknown')
-        except:
-            return 'Unknown'
+    def _validate_current_step(self) -> bool:
+        """현재 단계 검증"""
+        step = st.session_state.project_step
+        project = st.session_state.new_project
+        
+        if step == 0:  # 기본 정보
+            if not project.get('name'):
+                st.error("프로젝트명은 필수입니다")
+                return False
+            if len(project['name']) < 3:
+                st.error("프로젝트명은 3자 이상이어야 합니다")
+                return False
+        
+        elif step == 1:  # 연구 분야
+            if not project.get('field') or not project.get('subfield'):
+                st.error("연구 분야를 선택해주세요")
+                return False
+        
+        elif step == 2:  # 실험 모듈
+            if not st.session_state.selected_modules:
+                st.warning("실험 모듈을 하나 이상 선택해주세요")
+                return False
+        
+        return True
     
-    def _can_manage_collaborators(self, project: Dict) -> bool:
-        """협업자 관리 권한 확인"""
-        collaborators = json.loads(project.get('collaborators', '[]'))
+    def _create_project(self):
+        """프로젝트 생성"""
+        project = st.session_state.new_project
         
-        for collab in collaborators:
-            if collab['user_id'] == self.current_user['id']:
-                return collab['role'] in ['owner', 'editor']
-        
-        return False
-    
-    def _show_edit_dialog(self, project: Dict):
-        """프로젝트 편집 대화상자"""
-        # 편집 권한 확인
-        if not self._has_edit_permission(project):
-            st.error("프로젝트를 편집할 권한이 없습니다.")
-            return
-        
-        with st.expander("✏️ 프로젝트 편집", expanded=True):
-            with st.form("edit_project_form"):
-                # 기본 정보
-                name = st.text_input("프로젝트명", value=project['name'])
-                description = st.text_area(
-                    "설명",
-                    value=project.get('description', ''),
-                    height=100
-                )
-                
-                # 상태 변경
-                status = st.selectbox(
-                    "상태",
-                    ["active", "completed", "archived"],
-                    index=["active", "completed", "archived"].index(project['status']),
-                    format_func=lambda x: {
-                        "active": "진행중",
-                        "completed": "완료",
-                        "archived": "보관"
-                    }[x]
-                )
-                
-                # AI 설정
-                settings = json.loads(project.get('settings', '{}'))
-                ai_detail_level = st.select_slider(
-                    "AI 설명 상세도",
-                    options=["간단히", "보통", "상세히", "매우 상세히"],
-                    value=settings.get('ai_detail_level', '보통')
-                )
-                
-                # 저장
-                if st.form_submit_button("변경사항 저장"):
-                    updates = {
-                        "name": name,
-                        "description": description,
-                        "status": status,
-                        "settings": json.dumps({
-                            **settings,
-                            "ai_detail_level": ai_detail_level
-                        }),
-                        "updated_at": datetime.now()
-                    }
-                    
-                    if self.db.update_project(project['id'], updates):
-                        st.success("프로젝트가 업데이트되었습니다.")
-                        st.rerun()
-                    else:
-                        st.error("업데이트 실패")
-    
-    def _has_edit_permission(self, project: Dict) -> bool:
-        """편집 권한 확인"""
-        if project['user_id'] == self.current_user['id']:
-            return True
-        
-        collaborators = json.loads(project.get('collaborators', '[]'))
-        for collab in collaborators:
-            if collab['user_id'] == self.current_user['id']:
-                return PERMISSION_LEVELS[collab['role']]['can_edit']
-        
-        return False
-    
-    def _get_default_recommendations(self, responses: Dict) -> Dict:
-        """오프라인 기본 추천 (AI 사용 불가 시)"""
-        # 응답 분석을 통한 기본 추천
-        problem = responses.get(0, '').lower()
-        
-        # 키워드 기반 간단한 추천
-        if any(word in problem for word in ['합성', '화학', '반응']):
-            module = '화학합성'
-            field = '화학'
-        elif any(word in problem for word in ['재료', '물성', '강도']):
-            module = '재료특성'
-            field = '재료과학'
-        elif any(word in problem for word in ['분석', '측정', '검출']):
-            module = '분석실험'
-            field = '분석화학'
-        else:
-            module = '범용실험'
-            field = '기타'
-        
-        return {
-            'project_name': f"{field} 최적화 프로젝트",
-            'module': module,
-            'field': field,
-            'estimated_runs': 20,
-            'estimated_duration': '2-4주',
-            'factors': [
-                {
-                    'name': '온도',
-                    'min': 20,
-                    'max': 100,
-                    'unit': '°C',
-                    'importance': '높음',
-                    'rationale': '대부분의 화학/재료 실험에서 중요'
-                },
-                {
-                    'name': '시간',
-                    'min': 30,
-                    'max': 180,
-                    'unit': '분',
-                    'importance': '중간',
-                    'rationale': '반응 완료도에 영향'
-                }
-            ],
-            'similar_projects': [],
-            'warnings': [
-                '초기 실험은 넓은 범위로 시작하세요',
-                '안전 규정을 반드시 준수하세요'
-            ],
-            'tips': [
-                '중심점 반복실험으로 재현성 확인',
-                '요인 간 상호작용 고려'
-            ],
-            'project_data': {
-                'name': f"{field} 최적화 프로젝트",
-                'field': field,
-                'module_id': f"core.{module.lower()}",
-                'description': f"{problem} 해결을 위한 실험 설계"
-            }
+        # 프로젝트 데이터 준비
+        project_data = {
+            'user_id': st.session_state.user['id'],
+            'name': project['name'],
+            'description': project.get('description', ''),
+            'type': project.get('type', '연구개발'),
+            'field': project['field'],
+            'subfield': project['subfield'],
+            'detail_fields': project.get('detail_fields', []),
+            'keywords': project.get('keywords', []),
+            'modules': st.session_state.selected_modules,
+            'priority': project.get('priority', '보통'),
+            'visibility': project.get('visibility', '비공개'),
+            'start_date': project.get('start_date'),
+            'end_date': project.get('end_date'),
+            'status': '활성',
+            'progress': 0,
+            'created_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
         }
+        
+        # 데이터베이스에 저장
+        with st.spinner("프로젝트를 생성하고 있습니다..."):
+            project_id = self.db_manager.create_project(project_data)
+            
+            if project_id:
+                # 협업자 초대
+                if project.get('collaborators'):
+                    for email in project['collaborators']:
+                        self._invite_collaborator(
+                            project_id, 
+                            email, 
+                            project.get('default_permission', '보기'),
+                            project.get('invite_message', '')
+                        )
+                
+                # 템플릿 저장
+                if project.get('save_as_template'):
+                    self._save_as_template(project_data, project.get('template_name'))
+                
+                st.success("✅ 프로젝트가 성공적으로 생성되었습니다!")
+                st.balloons()
+                
+                # 초기화
+                st.session_state.project_step = 0
+                st.session_state.new_project = {}
+                st.session_state.selected_modules = []
+                
+                # 프로젝트 페이지로 이동
+                if st.button("프로젝트로 이동", type="primary"):
+                    st.session_state.current_project = {'id': project_id}
+                    st.switch_page("pages/3_🧪_Experiment_Design.py")
+            else:
+                st.error("프로젝트 생성에 실패했습니다")
+    
+    def _get_user_projects(self, search_query: str, 
+                          status_filter: List[str], 
+                          sort_by: str) -> List[Dict]:
+        """사용자 프로젝트 조회"""
+        # 데이터베이스에서 프로젝트 조회
+        projects = self.db_manager.get_user_projects(
+            user_id=st.session_state.user['id'],
+            search=search_query,
+            status=status_filter,
+            sort_by=sort_by
+        )
+        
+        return projects
+    
+    def _handle_project_action(self, project: Dict, action: str):
+        """프로젝트 액션 처리"""
+        if action == "열기":
+            st.session_state.current_project = project
+            st.switch_page("pages/3_🧪_Experiment_Design.py")
+        elif action == "편집":
+            st.session_state.editing_project = project
+            st.rerun()
+        elif action == "공유":
+            self._show_share_dialog(project)
+        elif action == "삭제":
+            if st.confirm(f"'{project['name']}' 프로젝트를 삭제하시겠습니까?"):
+                self.db_manager.delete_project(project['id'])
+                st.rerun()
+    
+    def _show_share_dialog(self, project: Dict):
+        """공유 대화상자"""
+        with st.dialog("프로젝트 공유"):
+            st.write(f"**{project['name']}** 프로젝트 공유")
+            
+            # 공유 링크 생성
+            share_link = f"https://universaldoe.com/project/{project['id']}"
+            st.code(share_link)
+            
+            # 이메일로 초대
+            emails = st.text_area(
+                "이메일 주소 (한 줄에 하나씩)",
+                placeholder="user@example.com"
+            )
+            
+            permission = st.selectbox(
+                "권한",
+                ["보기", "편집", "관리"]
+            )
+            
+            if st.button("초대 보내기", type="primary"):
+                # 초대 처리
+                st.success("초대가 발송되었습니다")
+    
+    def _invite_collaborator(self, project_id: str, email: str, 
+                           permission: str, message: str):
+        """협업자 초대"""
+        # 데이터베이스에 초대 기록
+        self.db_manager.add_collaborator(
+            project_id=project_id,
+            email=email,
+            permission=permission
+        )
+        
+        # 알림 발송
+        self.notification_manager.send_notification(
+            to_email=email,
+            type='project_invitation',
+            data={
+                'project_id': project_id,
+                'inviter': st.session_state.user['name'],
+                'message': message
+            }
+        )
+    
+    def _load_template(self, template: Dict):
+        """템플릿 로드"""
+        # 새 프로젝트 설정에 템플릿 적용
+        st.session_state.new_project = {
+            'name': '',  # 이름은 비워둠
+            'type': template.get('type'),
+            'field': template.get('field'),
+            'subfield': template.get('subfield'),
+            'detail_fields': template.get('detail_fields', []),
+            'keywords': template.get('keywords', []),
+            'description': template.get('description', '')
+        }
+        
+        st.session_state.selected_modules = template.get('modules', [])
+        st.session_state.project_step = 0
+        
+        st.success(f"템플릿 '{template['name']}'이 적용되었습니다")
+        st.rerun()
+    
+    def _save_as_template(self, project_data: Dict, template_name: str):
+        """프로젝트를 템플릿으로 저장"""
+        template_data = {
+            'user_id': st.session_state.user['id'],
+            'name': template_name or f"{project_data['name']} 템플릿",
+            'type': project_data['type'],
+            'field': project_data['field'],
+            'subfield': project_data['subfield'],
+            'detail_fields': project_data.get('detail_fields', []),
+            'keywords': project_data.get('keywords', []),
+            'modules': project_data.get('modules', []),
+            'description': project_data.get('description', ''),
+            'created_at': datetime.now().isoformat()
+        }
+        
+        self.db_manager.save_project_template(template_data)
+    
+    def _get_available_modules_list(self) -> str:
+        """사용 가능한 모듈 목록 문자열"""
+        modules = self.module_registry.list_modules()
+        module_list = []
+        
+        for module in modules:
+            module_list.append(f"- {module['name']}: {module['description']}")
+        
+        return '\n'.join(module_list)
+    
+    def _get_field_recommendations(self):
+        """AI 연구 분야 추천"""
+        project = st.session_state.new_project
+        
+        with st.spinner("AI가 연구 분야를 분석하고 있습니다..."):
+            prompt = f"""
+            다음 프로젝트 정보를 바탕으로 가장 적합한 연구 분야를 추천해주세요:
+            
+            프로젝트명: {project.get('name', '')}
+            설명: {project.get('description', '')}
+            유형: {project.get('type', '')}
+            
+            사용 가능한 분야:
+            {json.dumps(RESEARCH_FIELDS, ensure_ascii=False, indent=2)}
+            
+            추천 형식:
+            1. 가장 적합한 대분야/중분야/세부분야
+            2. 추천 이유
+            3. 관련 키워드 5-10개
+            """
+            
+            response = self.api_manager.call_ai(prompt)
+            
+            if response:
+                st.info(response)
 
+# 페이지 렌더링
 def render():
     """페이지 렌더링 함수"""
-    manager = ProjectSetupManager()
-    manager.render_page()
+    page = ProjectSetupPage()
+    page.render()
 
+# 메인 실행
 if __name__ == "__main__":
     render()
