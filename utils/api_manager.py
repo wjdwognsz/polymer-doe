@@ -1,8 +1,9 @@
-# utils/api_manager.py
 """
-AI API 통합 관리자
-6개 AI 엔진과 다양한 과학 데이터베이스를 중앙에서 관리합니다.
-오프라인 우선 설계로 캐싱과 폴백 메커니즘을 제공합니다.
+🤖 Universal DOE Platform - API 통합 관리자
+================================================================================
+6개 AI 엔진과 과학 데이터베이스를 통합 관리하는 핵심 모듈
+오프라인 우선 설계, 캐싱, 폴백 메커니즘 제공
+================================================================================
 """
 
 import os
@@ -82,18 +83,42 @@ except ImportError:
     GITHUB_AVAILABLE = False
     logging.warning("PyGithub 라이브러리가 설치되지 않았습니다.")
 
-# 내부 모듈
-from utils.database_manager import get_database_manager
-from utils.common_ui import show_error, show_warning, show_info, show_success
+# 로컬 모듈 임포트
+try:
+    from config.app_config import (
+        API_CONFIG, FILE_PROCESSING, PROTOCOL_EXTRACTION,
+        get_config
+    )
+    from config.secrets_config import API_KEY_STRUCTURE
+except ImportError:
+    # 기본값 설정
+    API_CONFIG = {
+        'google_gemini': {
+            'name': 'Google Gemini 2.0 Flash',
+            'model': 'gemini-2.0-flash-exp',
+            'required': True,
+            'free_tier': True,
+            'rate_limit': 60,
+            'max_tokens': 1048576
+        }
+    }
+    FILE_PROCESSING = {
+        'allowed_extensions': {
+            'document': ['.pdf', '.docx', '.doc', '.txt', '.rtf'],
+            'markup': ['.html', '.htm', '.md', '.xml'],
+            'data': ['.json', '.csv']
+        }
+    }
 
-# 로깅 설정
+# ===========================================================================
+# 🔧 로깅 설정
+# ===========================================================================
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-
-# ============================================================================
-# Enums 및 데이터 클래스
-# ============================================================================
+# ===========================================================================
+# 📌 상수 및 Enum 정의
+# ===========================================================================
 
 class AIEngineType(Enum):
     """AI 엔진 타입"""
@@ -104,63 +129,114 @@ class AIEngineType(Enum):
     DEEPSEEK = "deepseek"
     HUGGINGFACE = "huggingface"
 
-
-class APICategory(Enum):
-    """API 카테고리"""
-    AI_ENGINE = "ai_engine"
-    SCIENCE_DB = "science_db"
-    DATA_REPO = "data_repo"
-
-
 class ResponseStatus(Enum):
     """API 응답 상태"""
     SUCCESS = "success"
     ERROR = "error"
     RATE_LIMITED = "rate_limited"
-    TIMEOUT = "timeout"
     CACHED = "cached"
+    OFFLINE = "offline"
 
+# Rate Limit 설정
+RATE_LIMITS = {
+    AIEngineType.GEMINI: {'calls': 60, 'period': 60},  # 60 calls/min
+    AIEngineType.GROQ: {'calls': 100, 'period': 60},   # 100 calls/min
+    AIEngineType.HUGGINGFACE: {'calls': 1000, 'period': 3600},  # 1000 calls/hour
+    'default': {'calls': 30, 'period': 60}
+}
 
-@dataclass
-class APIConfig:
-    """API 설정"""
-    engine_type: AIEngineType
-    model_name: str
-    api_key_id: str
-    max_tokens: int = 2048
-    temperature: float = 0.7
-    timeout: int = 30
-    cache_ttl: int = 3600
-    features: List[str] = field(default_factory=list)
+# 캐시 TTL 설정 (초)
+CACHE_TTL = {
+    'ai_response': 3600,      # 1시간
+    'material_data': 86400,   # 24시간
+    'compound_data': 86400,   # 24시간
+    'protocol': 7200,         # 2시간
+    'default': 1800           # 30분
+}
 
+# API 비용 추정 (1K 토큰당 USD)
+API_COSTS = {
+    AIEngineType.GEMINI: {'input': 0.0, 'output': 0.0},  # 무료
+    AIEngineType.GROQ: {'input': 0.0, 'output': 0.0},    # 무료
+    AIEngineType.DEEPSEEK: {'input': 0.001, 'output': 0.002},
+    AIEngineType.SAMBANOVA: {'input': 0.0, 'output': 0.0},  # 무료 티어
+    'default': {'input': 0.001, 'output': 0.002}
+}
+
+# ===========================================================================
+# 🔧 프로토콜 추출 프롬프트 템플릿
+# ===========================================================================
+
+EXTRACTION_PROMPTS = {
+    'pdf_academic': """
+학술 논문 PDF에서 실험 프로토콜을 추출합니다.
+Methods/Experimental/Materials and Methods 섹션을 중점적으로 분석하세요.
+
+추출해야 할 정보:
+1. 재료 및 시약 (이름, 순도, 공급업체)
+2. 장비 및 도구 (모델명, 제조사)
+3. 실험 조건 (온도, 압력, 시간, pH 등)
+4. 실험 절차 (단계별 상세 설명)
+5. 주의사항 및 안전 정보
+
+JSON 형식으로 구조화하여 반환하세요.
+""",
+    
+    'text_protocol': """
+일반 텍스트에서 실험 절차를 식별합니다.
+번호나 불릿으로 구분된 단계를 찾고, 재료와 조건을 구분하세요.
+
+추출 포맷:
+{
+  "materials": [...],
+  "equipment": [...],
+  "conditions": {...},
+  "procedure": [...],
+  "safety": [...]
+}
+""",
+    
+    'html_webpage': """
+웹페이지에서 프로토콜 정보를 추출합니다.
+구조화된 리스트, 테이블, 또는 단계별 설명을 찾으세요.
+네비게이션이나 광고 같은 무관한 내용은 제외하세요.
+""",
+    
+    'mixed_format': """
+다양한 형식이 혼재된 텍스트를 분석합니다.
+재료, 조건, 절차를 구분하여 추출하고, 논리적 순서로 정리하세요.
+수량, 단위, 시간 정보를 정확히 파악하세요.
+"""
+}
+
+# ===========================================================================
+# 📊 데이터 클래스
+# ===========================================================================
 
 @dataclass
 class APIResponse:
-    """API 응답"""
+    """API 응답 데이터 클래스"""
     status: ResponseStatus
     data: Optional[Any] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    latency: float = 0.0
     cached: bool = False
-
+    timestamp: datetime = field(default_factory=datetime.now)
 
 @dataclass
-class APIUsage:
-    """API 사용량 추적"""
-    api_id: str
+class UsageRecord:
+    """API 사용량 기록"""
     user_id: str
+    api_type: str
     timestamp: datetime
     tokens_used: Optional[int] = None
     cost: Optional[float] = None
     success: bool = True
-    error_type: Optional[str] = None
-    latency: float = 0.0
+    error: Optional[str] = None
 
-
-# ============================================================================
-# 유틸리티 클래스
-# ============================================================================
+# ===========================================================================
+# 🔐 암호화 관리자
+# ===========================================================================
 
 class EncryptionManager:
     """API 키 암호화 관리"""
@@ -170,9 +246,9 @@ class EncryptionManager:
         self.cipher = Fernet(self.key)
     
     def _get_or_create_key(self) -> bytes:
-        """암호화 키 생성 또는 로드"""
-        key_file = Path.home() / '.polymer_doe' / 'api_key.key'
-        key_file.parent.mkdir(exist_ok=True)
+        """암호화 키 가져오기 또는 생성"""
+        key_file = Path.home() / '.universaldoe' / 'api_key.key'
+        key_file.parent.mkdir(parents=True, exist_ok=True)
         
         if key_file.exists():
             return key_file.read_bytes()
@@ -189,677 +265,600 @@ class EncryptionManager:
         """문자열 복호화"""
         return self.cipher.decrypt(encrypted.encode()).decode()
 
+# ===========================================================================
+# ⏱️ Rate Limiter
+# ===========================================================================
 
 class RateLimiter:
-    """API 호출 제한 관리"""
+    """API Rate Limiting"""
     
-    def __init__(self, calls_per_minute: int = 60, calls_per_day: Optional[int] = None):
-        self.calls_per_minute = calls_per_minute
-        self.calls_per_day = calls_per_day
-        self.minute_calls = deque()
-        self.day_calls = deque()
+    def __init__(self, max_calls: int, period: int):
+        self.max_calls = max_calls
+        self.period = period  # 초
+        self.calls = deque()
         self.lock = threading.Lock()
     
-    def check_and_add(self) -> Tuple[bool, Optional[float]]:
-        """호출 가능 여부 확인 및 기록"""
+    def check(self) -> bool:
+        """호출 가능 여부 확인"""
         with self.lock:
             now = time.time()
+            # 기간이 지난 호출 제거
+            while self.calls and self.calls[0] < now - self.period:
+                self.calls.popleft()
             
-            # 1분 제한 확인
-            minute_ago = now - 60
-            self.minute_calls = deque(t for t in self.minute_calls if t > minute_ago)
-            
-            if len(self.minute_calls) >= self.calls_per_minute:
-                wait_time = 60 - (now - self.minute_calls[0])
-                return False, wait_time
-            
-            # 일일 제한 확인
-            if self.calls_per_day:
-                day_ago = now - 86400
-                self.day_calls = deque(t for t in self.day_calls if t > day_ago)
-                
-                if len(self.day_calls) >= self.calls_per_day:
-                    wait_time = 86400 - (now - self.day_calls[0])
-                    return False, wait_time
-            
-            # 호출 기록
-            self.minute_calls.append(now)
-            if self.calls_per_day:
-                self.day_calls.append(now)
-            
-            return True, None
+            return len(self.calls) < self.max_calls
     
-    def get_remaining(self) -> Dict[str, int]:
-        """남은 호출 횟수"""
+    def record(self):
+        """호출 기록"""
+        with self.lock:
+            self.calls.append(time.time())
+    
+    def get_remaining(self) -> Dict[str, Any]:
+        """남은 호출 수 반환"""
         with self.lock:
             now = time.time()
-            minute_ago = now - 60
+            while self.calls and self.calls[0] < now - self.period:
+                self.calls.popleft()
             
-            minute_calls = sum(1 for t in self.minute_calls if t > minute_ago)
-            remaining_minute = max(0, self.calls_per_minute - minute_calls)
-            
-            result = {'per_minute': remaining_minute}
-            
-            if self.calls_per_day:
-                day_ago = now - 86400
-                day_calls = sum(1 for t in self.day_calls if t > day_ago)
-                result['per_day'] = max(0, self.calls_per_day - day_calls)
-            
-            return result
+            return {
+                'remaining': self.max_calls - len(self.calls),
+                'reset_in': int(self.period - (now - self.calls[0])) if self.calls else 0
+            }
 
+# ===========================================================================
+# 💾 캐시 시스템
+# ===========================================================================
 
-class ResponseCache:
-    """API 응답 캐시"""
+class APICache:
+    """API 응답 캐싱"""
     
-    def __init__(self, default_ttl: int = 3600):
-        self.default_ttl = default_ttl
-        self.cache = {}
-        self.timestamps = {}
+    def __init__(self, ttl: int = 3600):
+        self.ttl = ttl
+        self.cache: Dict[str, Tuple[Any, float]] = {}
         self.lock = threading.Lock()
-        self.db_manager = get_database_manager()
     
-    def _generate_key(self, api_type: str, params: Dict) -> str:
+    def _make_key(self, prefix: str, params: Dict) -> str:
         """캐시 키 생성"""
         param_str = json.dumps(params, sort_keys=True)
-        return hashlib.md5(f"{api_type}:{param_str}".encode()).hexdigest()
+        return f"{prefix}:{hashlib.md5(param_str.encode()).hexdigest()}"
     
-    def get(self, api_type: str, params: Dict) -> Optional[Any]:
-        """캐시에서 응답 조회"""
-        key = self._generate_key(api_type, params)
-        
+    def get(self, prefix: str, params: Dict) -> Optional[Any]:
+        """캐시에서 가져오기"""
         with self.lock:
-            # 메모리 캐시 확인
+            key = self._make_key(prefix, params)
             if key in self.cache:
-                timestamp = self.timestamps.get(key, 0)
-                if time.time() - timestamp < self.default_ttl:
-                    return self.cache[key]
+                data, timestamp = self.cache[key]
+                if time.time() - timestamp < self.ttl:
+                    return data
                 else:
-                    # 만료된 캐시 삭제
                     del self.cache[key]
-                    del self.timestamps[key]
-            
-            # DB 캐시 확인
-            cached = self.db_manager.cache_get(f"api:{key}")
-            if cached:
-                self.cache[key] = cached
-                self.timestamps[key] = time.time()
-                return cached
-        
-        return None
+            return None
     
-    def set(self, api_type: str, params: Dict, response: Any, 
-            ttl: Optional[int] = None):
-        """응답 캐시에 저장"""
-        key = self._generate_key(api_type, params)
-        ttl = ttl or self.default_ttl
-        
+    def set(self, prefix: str, params: Dict, data: Any):
+        """캐시에 저장"""
         with self.lock:
-            # 메모리 캐시 저장
-            self.cache[key] = response
-            self.timestamps[key] = time.time()
-            
-            # DB 캐시 저장
-            self.db_manager.cache_set(f"api:{key}", response, ttl)
+            key = self._make_key(prefix, params)
+            self.cache[key] = (data, time.time())
     
-    def clear(self, api_type: Optional[str] = None):
+    def clear(self, prefix: Optional[str] = None):
         """캐시 초기화"""
         with self.lock:
-            if api_type:
-                # 특정 API 타입만 삭제
-                keys_to_remove = [
-                    k for k in self.cache.keys() 
-                    if k.startswith(f"{api_type}:")
-                ]
+            if prefix:
+                keys_to_remove = [k for k in self.cache.keys() if k.startswith(prefix)]
                 for key in keys_to_remove:
                     del self.cache[key]
-                    del self.timestamps[key]
             else:
-                # 전체 캐시 삭제
                 self.cache.clear()
-                self.timestamps.clear()
 
+# ===========================================================================
+# 📊 사용량 추적
+# ===========================================================================
 
 class UsageTracker:
     """API 사용량 추적"""
     
     def __init__(self):
-        self.usage_data = defaultdict(list)
+        self.records: List[UsageRecord] = []
         self.lock = threading.Lock()
-        self.db_manager = get_database_manager()
     
-    async def track(self, usage: APIUsage):
+    def record(self, record: UsageRecord):
         """사용량 기록"""
         with self.lock:
-            self.usage_data[usage.api_id].append(usage)
-            
-            # DB에 저장
-            try:
-                self.db_manager.insert('api_usage', {
-                    'api_id': usage.api_id,
-                    'user_id': usage.user_id,
-                    'timestamp': usage.timestamp.isoformat(),
-                    'tokens_used': usage.tokens_used,
-                    'cost': usage.cost,
-                    'success': usage.success,
-                    'error_type': usage.error_type,
-                    'latency': usage.latency
-                })
-            except Exception as e:
-                logger.error(f"사용량 추적 DB 저장 실패: {e}")
+            self.records.append(record)
+            # 7일 이상 된 기록 제거
+            cutoff = datetime.now() - timedelta(days=7)
+            self.records = [r for r in self.records if r.timestamp > cutoff]
     
-    def get_usage_summary(self, user_id: Optional[str] = None, 
-                         period: str = 'day') -> Dict[str, Any]:
+    def get_summary(self, user_id: Optional[str] = None, 
+                   period: str = 'day') -> Dict[str, Any]:
         """사용량 요약"""
-        now = datetime.now()
-        
-        if period == 'day':
-            start_time = now - timedelta(days=1)
-        elif period == 'week':
-            start_time = now - timedelta(weeks=1)
-        elif period == 'month':
-            start_time = now - timedelta(days=30)
-        else:
-            start_time = datetime.min
-        
-        # 필터링
-        summary = defaultdict(lambda: {
-            'requests': 0, 'tokens': 0, 'cost': 0.0, 
-            'errors': 0, 'success_rate': 0.0
-        })
-        
-        for api_id, usages in self.usage_data.items():
-            filtered = [u for u in usages if u.timestamp >= start_time]
-            if user_id:
-                filtered = [u for u in filtered if u.user_id == user_id]
+        with self.lock:
+            # 기간 설정
+            if period == 'day':
+                start = datetime.now() - timedelta(days=1)
+            elif period == 'week':
+                start = datetime.now() - timedelta(days=7)
+            elif period == 'month':
+                start = datetime.now() - timedelta(days=30)
+            else:
+                start = datetime.min
             
-            if filtered:
-                total = len(filtered)
-                success = sum(1 for u in filtered if u.success)
-                
-                summary[api_id] = {
-                    'requests': total,
-                    'tokens': sum(u.tokens_used or 0 for u in filtered),
-                    'cost': sum(u.cost or 0 for u in filtered),
-                    'errors': total - success,
-                    'success_rate': (success / total * 100) if total > 0 else 0
-                }
-        
-        return dict(summary)
+            # 필터링
+            filtered = [r for r in self.records if r.timestamp >= start]
+            if user_id:
+                filtered = [r for r in filtered if r.user_id == user_id]
+            
+            # 집계
+            summary = defaultdict(lambda: {
+                'calls': 0,
+                'tokens': 0,
+                'cost': 0.0,
+                'errors': 0
+            })
+            
+            for record in filtered:
+                api_summary = summary[record.api_type]
+                api_summary['calls'] += 1
+                api_summary['tokens'] += record.tokens_used or 0
+                api_summary['cost'] += record.cost or 0
+                if not record.success:
+                    api_summary['errors'] += 1
+            
+            return dict(summary)
 
-
-# ============================================================================
-# AI 엔진 기본 클래스
-# ============================================================================
+# ===========================================================================
+# 🤖 AI 엔진 기본 클래스
+# ===========================================================================
 
 class BaseAIEngine:
-    """모든 AI 엔진의 기본 클래스"""
+    """AI 엔진 추상 클래스"""
     
-    def __init__(self, config: APIConfig):
-        self.config = config
-        self.client = None
-        self.rate_limiter = None
-        self.cache = ResponseCache(config.cache_ttl)
-        self.is_available = False
-        self.usage_tracker = UsageTracker()
-        self._initialize()
-    
-    def _initialize(self):
-        """엔진 초기화"""
-        # API 키 확인
-        if not self.config.api_key_id:
-            self.config.api_key_id = self._get_api_key()
+    def __init__(self, engine_type: AIEngineType, model_name: str):
+        self.engine_type = engine_type
+        self.model_name = model_name
+        self.api_key = self._get_api_key()
+        self.is_available = self._check_availability()
         
-        if not self.config.api_key_id:
-            logger.warning(f"{self.config.engine_type.value} API 키가 없습니다.")
-            return
+        # Rate Limiter
+        limits = RATE_LIMITS.get(engine_type, RATE_LIMITS['default'])
+        self.rate_limiter = RateLimiter(limits['calls'], limits['period'])
         
-        # Rate limiter 설정
-        limits = self._get_rate_limits()
-        self.rate_limiter = RateLimiter(
-            calls_per_minute=limits.get('per_minute', 60),
-            calls_per_day=limits.get('per_day')
-        )
+        # Cache
+        ttl = CACHE_TTL.get('ai_response', CACHE_TTL['default'])
+        self.cache = APICache(ttl)
         
-        # 클라이언트 초기화
-        try:
-            self._init_client()
-            self.is_available = True
-            logger.info(f"{self.config.engine_type.value} 엔진 초기화 성공")
-        except Exception as e:
-            logger.error(f"{self.config.engine_type.value} 초기화 실패: {str(e)}")
-            self.is_available = False
+        # 비용 정보
+        self.costs = API_COSTS.get(engine_type, API_COSTS['default'])
     
     def _get_api_key(self) -> Optional[str]:
         """API 키 가져오기"""
-        # 1. 환경 변수
-        key = os.environ.get(f"{self.config.engine_type.value.upper()}_API_KEY")
-        if key:
-            return key
+        # 1. 세션 상태 확인
+        if hasattr(st, 'session_state') and 'api_keys' in st.session_state:
+            key = st.session_state.api_keys.get(self.engine_type.value)
+            if key:
+                return key
         
-        # 2. Streamlit secrets
+        # 2. Streamlit secrets 확인
         if hasattr(st, 'secrets'):
             try:
-                key = st.secrets.get(f"{self.config.engine_type.value}_api_key")
+                key = st.secrets.get(f"{self.engine_type.value}_api_key")
                 if key:
                     return key
             except:
                 pass
         
-        # 3. 세션 상태
-        if hasattr(st, 'session_state') and 'api_keys' in st.session_state:
-            key = st.session_state.api_keys.get(self.config.engine_type.value)
-            if key:
-                return key
-        
-        return None
+        # 3. 환경 변수 확인
+        env_key = f"{self.engine_type.value.upper()}_API_KEY"
+        return os.getenv(env_key)
     
-    def _get_rate_limits(self) -> Dict[str, int]:
-        """Rate limit 설정 가져오기"""
-        # 기본 제한
-        defaults = {
-            'gemini': {'per_minute': 60, 'per_day': 1500},
-            'grok': {'per_minute': 60},
-            'groq': {'per_minute': 30, 'per_day': 14400},
-            'sambanova': {'per_minute': 60},
-            'deepseek': {'per_minute': 60},
-            'huggingface': {'per_minute': 100}
-        }
-        return defaults.get(self.config.engine_type.value, {'per_minute': 60})
-    
-    def _init_client(self):
-        """클라이언트 초기화 (서브클래스에서 구현)"""
-        raise NotImplementedError
+    def _check_availability(self) -> bool:
+        """사용 가능 여부 확인"""
+        return bool(self.api_key)
     
     async def generate(self, prompt: str, user_id: str = "anonymous", 
                       **kwargs) -> APIResponse:
-        """텍스트 생성"""
-        start_time = time.time()
-        
-        # 캐시 확인
-        use_cache = kwargs.pop('use_cache', True)
-        cache_params = {'prompt': prompt, **kwargs}
-        
-        if use_cache:
-            cached = self.cache.get(self.config.engine_type.value, cache_params)
-            if cached:
-                return APIResponse(
-                    status=ResponseStatus.CACHED,
-                    data=cached,
-                    cached=True,
-                    latency=time.time() - start_time
-                )
-        
-        # Rate limit 확인
-        can_call, wait_time = self.rate_limiter.check_and_add()
-        if not can_call:
-            return APIResponse(
-                status=ResponseStatus.RATE_LIMITED,
-                error=f"Rate limit 초과. {wait_time:.1f}초 후 재시도하세요.",
-                metadata={'wait_time': wait_time}
-            )
-        
-        # API 호출
-        try:
-            response = await self._generate_with_retry(prompt, **kwargs)
-            
-            # 캐시 저장
-            if use_cache:
-                self.cache.set(
-                    self.config.engine_type.value,
-                    cache_params,
-                    response
-                )
-            
-            # 사용량 추적
-            tokens_estimate = len(prompt.split()) + len(response.split())
-            await self.usage_tracker.track(APIUsage(
-                api_id=self.config.engine_type.value,
-                user_id=user_id,
-                timestamp=datetime.now(),
-                tokens_used=tokens_estimate,
-                success=True,
-                latency=time.time() - start_time
-            ))
-            
-            return APIResponse(
-                status=ResponseStatus.SUCCESS,
-                data=response,
-                latency=time.time() - start_time,
-                metadata={
-                    'model': self.config.model_name,
-                    'temperature': kwargs.get('temperature', self.config.temperature)
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"{self.config.engine_type.value} 오류: {e}")
-            
-            # 사용량 추적 (실패)
-            await self.usage_tracker.track(APIUsage(
-                api_id=self.config.engine_type.value,
-                user_id=user_id,
-                timestamp=datetime.now(),
-                success=False,
-                error_type=type(e).__name__,
-                latency=time.time() - start_time
-            ))
-            
-            return APIResponse(
-                status=ResponseStatus.ERROR,
-                error=str(e),
-                latency=time.time() - start_time
-            )
-    
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10)
-    )
-    async def _generate_with_retry(self, prompt: str, **kwargs) -> str:
-        """재시도 로직이 포함된 API 호출"""
-        return await self._generate_response(prompt, **kwargs)
-    
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """실제 API 호출 (서브클래스에서 구현)"""
+        """텍스트 생성 (구현 필요)"""
         raise NotImplementedError
+    
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """비용 추정"""
+        input_cost = (input_tokens / 1000) * self.costs['input']
+        output_cost = (output_tokens / 1000) * self.costs['output']
+        return input_cost + output_cost
 
-
-# ============================================================================
-# AI 엔진 구현체
-# ============================================================================
+# ===========================================================================
+# 🌟 Google Gemini 엔진
+# ===========================================================================
 
 class GeminiEngine(BaseAIEngine):
     """Google Gemini AI 엔진"""
     
     def __init__(self):
-        super().__init__(APIConfig(
-            engine_type=AIEngineType.GEMINI,
-            model_name="gemini-2.0-flash-exp",
-            api_key_id="gemini",
-            max_tokens=8192,
-            temperature=0.9,
-            features=["text", "code", "vision", "function_calling"]
-        ))
+        super().__init__(AIEngineType.GEMINI, "gemini-2.0-flash-exp")
+        if self.is_available and GEMINI_AVAILABLE:
+            genai.configure(api_key=self.api_key)
+            self.model = genai.GenerativeModel(self.model_name)
+            self.chat = None
     
-    def _init_client(self):
-        """Gemini 클라이언트 초기화"""
-        if GEMINI_AVAILABLE:
-            genai.configure(api_key=self.config.api_key_id)
-            self.client = genai.GenerativeModel(self.config.model_name)
-    
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """Gemini API 호출"""
-        if not self.client:
-            raise Exception("Gemini 클라이언트가 초기화되지 않았습니다.")
+    async def generate(self, prompt: str, user_id: str = "anonymous", 
+                      **kwargs) -> APIResponse:
+        """Gemini로 텍스트 생성"""
+        # 캐시 확인
+        cache_params = {'prompt': prompt, **kwargs}
+        cached = self.cache.get('gemini', cache_params)
+        if cached:
+            return APIResponse(
+                status=ResponseStatus.CACHED,
+                data=cached,
+                cached=True
+            )
         
-        generation_config = genai.types.GenerationConfig(
-            temperature=kwargs.get('temperature', self.config.temperature),
-            max_output_tokens=kwargs.get('max_tokens', self.config.max_tokens),
-            top_p=kwargs.get('top_p', 0.95)
-        )
+        # Rate limit 확인
+        if not self.rate_limiter.check():
+            return APIResponse(
+                status=ResponseStatus.RATE_LIMITED,
+                error="Rate limit exceeded"
+            )
         
-        response = await asyncio.to_thread(
-            self.client.generate_content,
-            prompt,
-            generation_config=generation_config
-        )
-        
-        return response.text
-
-
-class GrokEngine(BaseAIEngine):
-    """xAI Grok 엔진"""
-    
-    def __init__(self):
-        super().__init__(APIConfig(
-            engine_type=AIEngineType.GROK,
-            model_name="grok-2-latest",
-            api_key_id="grok",
-            max_tokens=131072,
-            features=["text", "code", "real_time_info"]
-        ))
-    
-    def _init_client(self):
-        """Grok 클라이언트 초기화"""
-        if OPENAI_AVAILABLE:
-            self.client = AsyncOpenAI(
-                api_key=self.config.api_key_id,
-                base_url="https://api.x.ai/v1"
+        try:
+            # 동기 호출을 비동기로 변환
+            response = await asyncio.to_thread(
+                self.model.generate_content, prompt
+            )
+            
+            # Rate limit 기록
+            self.rate_limiter.record()
+            
+            # 응답 처리
+            result = response.text
+            
+            # 캐시 저장
+            self.cache.set('gemini', cache_params, result)
+            
+            # 사용량 기록 (추후 토큰 계산 추가)
+            # tokens = response.usage_metadata...
+            
+            return APIResponse(
+                status=ResponseStatus.SUCCESS,
+                data=result,
+                metadata={'model': self.model_name}
+            )
+            
+        except Exception as e:
+            logger.error(f"Gemini 에러: {str(e)}")
+            return APIResponse(
+                status=ResponseStatus.ERROR,
+                error=str(e)
             )
     
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """Grok API 호출"""
-        if not self.client:
-            raise Exception("Grok 클라이언트가 초기화되지 않았습니다.")
+    async def extract_protocol(self, text: str, file_type: str = "mixed_format",
+                             user_id: str = "anonymous") -> APIResponse:
+        """프로토콜 추출 특화 기능"""
+        # 파일 타입별 프롬프트 선택
+        base_prompt = EXTRACTION_PROMPTS.get(file_type, EXTRACTION_PROMPTS['mixed_format'])
         
-        response = await self.client.chat.completions.create(
-            model=self.config.model_name,
-            messages=[
-                {"role": "system", "content": "You are an expert in polymer science and experimental design."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=kwargs.get('temperature', self.config.temperature),
-            max_tokens=kwargs.get('max_tokens', self.config.max_tokens)
-        )
-        
-        return response.choices[0].message.content
+        # 전체 프롬프트 구성
+        full_prompt = f"""
+{base_prompt}
 
+텍스트:
+{text[:10000]}  # 길이 제한
+
+반드시 다음 JSON 형식으로만 응답하세요:
+{{
+  "materials": [
+    {{"name": "재료명", "amount": "양", "purity": "순도", "supplier": "공급업체"}}
+  ],
+  "equipment": [
+    {{"name": "장비명", "model": "모델", "manufacturer": "제조사"}}
+  ],
+  "conditions": {{
+    "temperature": "온도",
+    "pressure": "압력",
+    "time": "시간",
+    "ph": "pH",
+    "other": {{}}
+  }},
+  "procedure": [
+    {{"step": 1, "action": "동작", "details": "상세 설명", "duration": "소요 시간"}}
+  ],
+  "safety": ["주의사항1", "주의사항2"]
+}}
+"""
+        
+        response = await self.generate(full_prompt, user_id)
+        
+        if response.status == ResponseStatus.SUCCESS:
+            try:
+                # JSON 파싱
+                protocol_data = json.loads(response.data)
+                response.data = protocol_data
+            except json.JSONDecodeError:
+                # JSON 파싱 실패 시 텍스트 그대로 반환
+                logger.warning("프로토콜 JSON 파싱 실패")
+        
+        return response
+
+# ===========================================================================
+# ⚡ Groq 엔진
+# ===========================================================================
 
 class GroqEngine(BaseAIEngine):
     """Groq 초고속 추론 엔진"""
     
     def __init__(self):
-        super().__init__(APIConfig(
-            engine_type=AIEngineType.GROQ,
-            model_name="llama-3.1-70b-versatile",
-            api_key_id="groq",
-            max_tokens=8192,
-            features=["ultra_fast", "streaming", "batch_processing"]
-        ))
+        super().__init__(AIEngineType.GROQ, "llama-3.3-70b-versatile")
+        if self.is_available and GROQ_AVAILABLE:
+            self.client = AsyncGroq(api_key=self.api_key)
     
-    def _init_client(self):
-        """Groq 클라이언트 초기화"""
-        if GROQ_AVAILABLE:
-            self.client = AsyncGroq(api_key=self.config.api_key_id)
-    
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """Groq API 호출"""
-        if not self.client:
-            raise Exception("Groq 클라이언트가 초기화되지 않았습니다.")
-        
-        response = await self.client.chat.completions.create(
-            model=self.config.model_name,
-            messages=[
-                {"role": "system", "content": "You are an expert in polymer science."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=kwargs.get('temperature', self.config.temperature),
-            max_tokens=kwargs.get('max_tokens', self.config.max_tokens)
-        )
-        
-        return response.choices[0].message.content
-
-
-class SambaNovaEngine(BaseAIEngine):
-    """SambaNova 대규모 모델 엔진"""
-    
-    def __init__(self):
-        super().__init__(APIConfig(
-            engine_type=AIEngineType.SAMBANOVA,
-            model_name="llama-3.1-405b",
-            api_key_id="sambanova",
-            max_tokens=4096,
-            features=["large_scale", "stable", "enterprise"]
-        ))
-    
-    def _init_client(self):
-        """SambaNova 클라이언트 초기화"""
-        if OPENAI_AVAILABLE:
-            self.client = AsyncOpenAI(
-                api_key=self.config.api_key_id,
-                base_url="https://api.sambanova.ai/v1"
+    async def generate(self, prompt: str, user_id: str = "anonymous", 
+                      **kwargs) -> APIResponse:
+        """Groq로 텍스트 생성"""
+        # 캐시 확인
+        cache_params = {'prompt': prompt, **kwargs}
+        cached = self.cache.get('groq', cache_params)
+        if cached:
+            return APIResponse(
+                status=ResponseStatus.CACHED,
+                data=cached,
+                cached=True
             )
-    
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """SambaNova API 호출"""
-        if not self.client:
-            raise Exception("SambaNova 클라이언트가 초기화되지 않았습니다.")
         
-        response = await self.client.chat.completions.create(
-            model=self.config.model_name,
-            messages=[
-                {"role": "system", "content": "You are an expert in materials science."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=kwargs.get('temperature', self.config.temperature),
-            max_tokens=kwargs.get('max_tokens', self.config.max_tokens)
-        )
-        
-        return response.choices[0].message.content
-
-
-class DeepSeekEngine(BaseAIEngine):
-    """DeepSeek 수학/코드 특화 엔진"""
-    
-    def __init__(self):
-        super().__init__(APIConfig(
-            engine_type=AIEngineType.DEEPSEEK,
-            model_name="deepseek-chat",
-            api_key_id="deepseek",
-            max_tokens=16384,
-            features=["math", "code", "formula"]
-        ))
-    
-    def _init_client(self):
-        """DeepSeek 클라이언트 초기화"""
-        if OPENAI_AVAILABLE:
-            self.client = AsyncOpenAI(
-                api_key=self.config.api_key_id,
-                base_url="https://api.deepseek.com/v1"
+        # Rate limit 확인
+        if not self.rate_limiter.check():
+            return APIResponse(
+                status=ResponseStatus.RATE_LIMITED,
+                error="Rate limit exceeded"
             )
-    
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """DeepSeek API 호출"""
-        if not self.client:
-            raise Exception("DeepSeek 클라이언트가 초기화되지 않았습니다.")
         
-        response = await self.client.chat.completions.create(
-            model=self.config.model_name,
-            messages=[
-                {"role": "system", "content": "You are an expert in mathematical modeling and polymer calculations."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=kwargs.get('temperature', self.config.temperature),
-            max_tokens=kwargs.get('max_tokens', self.config.max_tokens)
-        )
-        
-        return response.choices[0].message.content
+        try:
+            # API 호출
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert in materials science and chemistry."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=kwargs.get('temperature', 0.7),
+                max_tokens=kwargs.get('max_tokens', 4096)
+            )
+            
+            # Rate limit 기록
+            self.rate_limiter.record()
+            
+            # 응답 처리
+            result = response.choices[0].message.content
+            
+            # 캐시 저장
+            self.cache.set('groq', cache_params, result)
+            
+            # 사용량 기록
+            if hasattr(response, 'usage'):
+                tokens = response.usage.total_tokens
+                # 토큰 기록...
+            
+            return APIResponse(
+                status=ResponseStatus.SUCCESS,
+                data=result,
+                metadata={'model': self.model_name}
+            )
+            
+        except Exception as e:
+            logger.error(f"Groq 에러: {str(e)}")
+            return APIResponse(
+                status=ResponseStatus.ERROR,
+                error=str(e)
+            )
 
+# ===========================================================================
+# 🤗 HuggingFace 엔진
+# ===========================================================================
 
 class HuggingFaceEngine(BaseAIEngine):
     """HuggingFace 특수 모델 엔진"""
     
     def __init__(self):
-        super().__init__(APIConfig(
-            engine_type=AIEngineType.HUGGINGFACE,
-            model_name="microsoft/ChemBERTa-77M",
-            api_key_id="huggingface",
-            features=["chemistry", "materials", "local_inference"]
-        ))
-        self.pipeline = None
+        super().__init__(AIEngineType.HUGGINGFACE, "microsoft/BioGPT-Large")
+        if self.is_available and HUGGINGFACE_AVAILABLE:
+            # 로컬 모델 또는 API 사용
+            self.use_local = kwargs.get('use_local', False)
+            if self.use_local:
+                self._init_local_model()
+            else:
+                self._init_api_client()
     
-    def _init_client(self):
-        """HuggingFace 파이프라인 초기화"""
-        if HUGGINGFACE_AVAILABLE:
-            try:
-                self.pipeline = pipeline(
-                    "text-generation",
-                    model=self.config.model_name,
-                    device=0 if torch.cuda.is_available() else -1
-                )
-            except Exception as e:
-                logger.warning(f"로컬 모델 로드 실패, API 사용: {e}")
-                # API 폴백
-                self.use_api = True
-    
-    async def _generate_response(self, prompt: str, **kwargs) -> str:
-        """HuggingFace 모델 추론"""
-        if self.pipeline:
-            # 로컬 추론
-            result = await asyncio.to_thread(
-                self.pipeline,
-                prompt,
-                max_length=kwargs.get('max_tokens', 512),
-                temperature=kwargs.get('temperature', self.config.temperature)
+    def _init_local_model(self):
+        """로컬 모델 초기화"""
+        try:
+            self.pipeline = pipeline(
+                "text-generation",
+                model=self.model_name,
+                device=0 if torch.cuda.is_available() else -1
             )
-            return result[0]['generated_text']
-        else:
-            # API 사용
-            async with aiohttp.ClientSession() as session:
-                headers = {"Authorization": f"Bearer {self.config.api_key_id}"}
-                data = {
-                    "inputs": prompt,
-                    "parameters": {
-                        "max_length": kwargs.get('max_tokens', 512),
-                        "temperature": kwargs.get('temperature', self.config.temperature)
+        except Exception as e:
+            logger.error(f"로컬 모델 로드 실패: {e}")
+            self.is_available = False
+    
+    def _init_api_client(self):
+        """HuggingFace API 클라이언트 초기화"""
+        self.api_url = f"https://api-inference.huggingface.co/models/{self.model_name}"
+        self.headers = {"Authorization": f"Bearer {self.api_key}"}
+    
+    async def generate(self, prompt: str, user_id: str = "anonymous", 
+                      **kwargs) -> APIResponse:
+        """HuggingFace로 텍스트 생성"""
+        # 캐시 확인
+        cache_params = {'prompt': prompt, **kwargs}
+        cached = self.cache.get('huggingface', cache_params)
+        if cached:
+            return APIResponse(
+                status=ResponseStatus.CACHED,
+                data=cached,
+                cached=True
+            )
+        
+        try:
+            if self.use_local and hasattr(self, 'pipeline'):
+                # 로컬 추론
+                result = await asyncio.to_thread(
+                    self.pipeline,
+                    prompt,
+                    max_length=kwargs.get('max_length', 512),
+                    temperature=kwargs.get('temperature', 0.7)
+                )
+                text = result[0]['generated_text']
+            else:
+                # API 호출
+                async with aiohttp.ClientSession() as session:
+                    payload = {
+                        "inputs": prompt,
+                        "parameters": {
+                            "max_length": kwargs.get('max_length', 512),
+                            "temperature": kwargs.get('temperature', 0.7)
+                        }
                     }
-                }
-                
-                async with session.post(
-                    f"https://api-inference.huggingface.co/models/{self.config.model_name}",
-                    headers=headers,
-                    json=data
-                ) as response:
-                    result = await response.json()
-                    return result[0]['generated_text']
+                    async with session.post(
+                        self.api_url,
+                        headers=self.headers,
+                        json=payload
+                    ) as response:
+                        result = await response.json()
+                        text = result[0]['generated_text']
+            
+            # 캐시 저장
+            self.cache.set('huggingface', cache_params, text)
+            
+            return APIResponse(
+                status=ResponseStatus.SUCCESS,
+                data=text,
+                metadata={'model': self.model_name}
+            )
+            
+        except Exception as e:
+            logger.error(f"HuggingFace 에러: {str(e)}")
+            return APIResponse(
+                status=ResponseStatus.ERROR,
+                error=str(e)
+            )
 
+# ===========================================================================
+# 🔄 OpenAI 호환 엔진 (Grok, DeepSeek, SambaNova)
+# ===========================================================================
 
-# ============================================================================
-# 과학 데이터베이스 클라이언트
-# ============================================================================
+class OpenAICompatibleEngine(BaseAIEngine):
+    """OpenAI API 호환 엔진"""
+    
+    def __init__(self, engine_type: AIEngineType, model_name: str, 
+                 base_url: str):
+        super().__init__(engine_type, model_name)
+        self.base_url = base_url
+        if self.is_available and OPENAI_AVAILABLE:
+            self.client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=base_url
+            )
+    
+    async def generate(self, prompt: str, user_id: str = "anonymous", 
+                      **kwargs) -> APIResponse:
+        """OpenAI 호환 API로 텍스트 생성"""
+        # 캐시 확인
+        cache_params = {'prompt': prompt, **kwargs}
+        cached = self.cache.get(self.engine_type.value, cache_params)
+        if cached:
+            return APIResponse(
+                status=ResponseStatus.CACHED,
+                data=cached,
+                cached=True
+            )
+        
+        # Rate limit 확인
+        if not self.rate_limiter.check():
+            return APIResponse(
+                status=ResponseStatus.RATE_LIMITED,
+                error="Rate limit exceeded"
+            )
+        
+        try:
+            # API 호출
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=kwargs.get('temperature', 0.7),
+                max_tokens=kwargs.get('max_tokens', 4096)
+            )
+            
+            # Rate limit 기록
+            self.rate_limiter.record()
+            
+            # 응답 처리
+            result = response.choices[0].message.content
+            
+            # 캐시 저장
+            self.cache.set(self.engine_type.value, cache_params, result)
+            
+            # 사용량 기록
+            if hasattr(response, 'usage'):
+                tokens = response.usage.total_tokens
+                cost = self.estimate_cost(
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens
+                )
+                # 기록...
+            
+            return APIResponse(
+                status=ResponseStatus.SUCCESS,
+                data=result,
+                metadata={'model': self.model_name}
+            )
+            
+        except Exception as e:
+            logger.error(f"{self.engine_type.value} 에러: {str(e)}")
+            return APIResponse(
+                status=ResponseStatus.ERROR,
+                error=str(e)
+            )
+
+# ===========================================================================
+# 🔬 과학 데이터베이스 클라이언트
+# ===========================================================================
 
 class ScienceDBClient:
     """과학 데이터베이스 통합 클라이언트"""
     
     def __init__(self):
         self.clients = {}
-        self.cache = ResponseCache(ttl=86400)  # 24시간 캐시
-        self._initialize_clients()
+        self.cache = APICache(CACHE_TTL.get('material_data', 86400))
+        self._init_clients()
     
-    def _initialize_clients(self):
-        """각 DB 클라이언트 초기화"""
+    def _init_clients(self):
+        """클라이언트 초기화"""
         # Materials Project
         if MATERIALS_PROJECT_AVAILABLE:
             mp_key = self._get_api_key('materials_project')
             if mp_key:
-                try:
-                    self.clients['materials_project'] = MPRester(mp_key)
-                    logger.info("Materials Project 클라이언트 초기화 성공")
-                except Exception as e:
-                    logger.error(f"Materials Project 초기화 실패: {e}")
+                self.clients['materials_project'] = MPRester(mp_key)
         
-        # PubChem
+        # PubChem (API 키 불필요)
         if PUBCHEM_AVAILABLE:
-            self.clients['pubchem'] = pcp  # API 키 불필요
-            logger.info("PubChem 클라이언트 초기화 성공")
+            self.clients['pubchem'] = pcp
         
         # GitHub
         if GITHUB_AVAILABLE:
             github_token = self._get_api_key('github')
             if github_token:
-                try:
-                    self.clients['github'] = Github(github_token)
-                    logger.info("GitHub 클라이언트 초기화 성공")
-                except Exception as e:
-                    logger.error(f"GitHub 초기화 실패: {e}")
+                self.clients['github'] = Github(github_token)
     
     def _get_api_key(self, service: str) -> Optional[str]:
         """API 키 가져오기"""
-        # 환경 변수
-        key = os.environ.get(f"{service.upper()}_API_KEY")
-        if key:
-            return key
+        # 세션, secrets, 환경변수 순으로 확인
+        if hasattr(st, 'session_state') and 'api_keys' in st.session_state:
+            key = st.session_state.api_keys.get(service)
+            if key:
+                return key
         
-        # Streamlit secrets
         if hasattr(st, 'secrets'):
             try:
                 key = st.secrets.get(f"{service}_api_key")
@@ -868,76 +867,59 @@ class ScienceDBClient:
             except:
                 pass
         
-        # 세션 상태
-        if hasattr(st, 'session_state') and 'api_keys' in st.session_state:
-            key = st.session_state.api_keys.get(service)
-            if key:
-                return key
-        
-        return None
+        return os.getenv(f"{service.upper()}_API_KEY")
     
-    async def search_materials(self, formula: str = None, 
-                             material_id: str = None,
-                             properties: List[str] = None) -> List[Dict]:
+    async def search_materials(self, formula: Optional[str] = None,
+                             **criteria) -> List[Dict]:
         """재료 검색"""
         if 'materials_project' not in self.clients:
             return []
         
         # 캐시 확인
-        cache_key = {'formula': formula, 'material_id': material_id, 'properties': properties}
-        cached = self.cache.get('materials_project', cache_key)
+        cache_params = {'formula': formula, **criteria}
+        cached = self.cache.get('materials', cache_params)
         if cached:
             return cached
         
         try:
             mp = self.clients['materials_project']
+            # 동기 호출을 비동기로 변환
+            results = await asyncio.to_thread(
+                mp.materials.search,
+                formula=formula,
+                **criteria
+            )
             
-            # 검색 실행
-            if material_id:
-                results = [mp.get_structure_by_material_id(material_id)]
-            elif formula:
-                results = mp.get_structures(formula)
-            else:
-                return []
-            
-            # 속성 조회
+            # 결과 변환
             materials = []
-            for structure in results[:10]:  # 최대 10개
-                material = {
-                    'formula': structure.composition.reduced_formula,
-                    'crystal_system': structure.get_space_group_info()[0],
-                    'volume': structure.volume,
-                    'density': structure.density
-                }
-                
-                if properties:
-                    # 추가 속성 조회
-                    props = mp.get_data(structure.composition.reduced_formula, 
-                                       prop=properties)
-                    if props:
-                        material.update(props[0])
-                
-                materials.append(material)
+            for material in results:
+                materials.append({
+                    'material_id': material.material_id,
+                    'formula': material.formula,
+                    'energy': material.energy_per_atom,
+                    'band_gap': material.band_gap,
+                    'density': material.density,
+                    'crystal_system': material.symmetry.crystal_system
+                })
             
             # 캐시 저장
-            self.cache.set('materials_project', cache_key, materials)
+            self.cache.set('materials', cache_params, materials)
             
             return materials
             
         except Exception as e:
-            logger.error(f"Materials Project 검색 오류: {e}")
+            logger.error(f"Materials Project 검색 에러: {str(e)}")
             return []
     
-    async def search_compounds(self, name: str = None, 
-                             formula: str = None,
-                             smiles: str = None) -> List[Dict]:
+    async def search_compounds(self, name: Optional[str] = None,
+                             formula: Optional[str] = None) -> List[Dict]:
         """화합물 검색"""
         if 'pubchem' not in self.clients:
             return []
         
         # 캐시 확인
-        cache_key = {'name': name, 'formula': formula, 'smiles': smiles}
-        cached = self.cache.get('pubchem', cache_key)
+        cache_params = {'name': name, 'formula': formula}
+        cached = self.cache.get('compounds', cache_params)
         if cached:
             return cached
         
@@ -945,319 +927,265 @@ class ScienceDBClient:
             compounds = []
             
             if name:
-                results = pcp.get_compounds(name, 'name')
+                # 이름으로 검색
+                results = await asyncio.to_thread(
+                    pcp.get_compounds, name, 'name'
+                )
             elif formula:
-                results = pcp.get_compounds(formula, 'formula')
-            elif smiles:
-                results = pcp.get_compounds(smiles, 'smiles')
+                # 분자식으로 검색
+                results = await asyncio.to_thread(
+                    pcp.get_compounds, formula, 'formula'
+                )
             else:
                 return []
             
+            # 결과 변환
             for compound in results[:10]:  # 최대 10개
                 compounds.append({
                     'cid': compound.cid,
-                    'name': compound.iupac_name or compound.synonyms[0] if compound.synonyms else 'Unknown',
-                    'formula': compound.molecular_formula,
-                    'weight': compound.molecular_weight,
+                    'iupac_name': compound.iupac_name,
+                    'molecular_formula': compound.molecular_formula,
+                    'molecular_weight': compound.molecular_weight,
                     'smiles': compound.canonical_smiles,
-                    'inchi': compound.inchi
+                    'synonyms': compound.synonyms[:5] if compound.synonyms else []
                 })
             
             # 캐시 저장
-            self.cache.set('pubchem', cache_key, compounds)
+            self.cache.set('compounds', cache_params, compounds)
             
             return compounds
             
         except Exception as e:
-            logger.error(f"PubChem 검색 오류: {e}")
-            return []
-    
-    async def search_github_data(self, query: str, 
-                               language: str = "Python") -> List[Dict]:
-        """GitHub 과학 데이터 검색"""
-        if 'github' not in self.clients:
-            return []
-        
-        try:
-            github = self.clients['github']
-            
-            # 과학 관련 리포지토리 검색
-            search_query = f"{query} polymer materials science data language:{language}"
-            results = github.search_repositories(query=search_query, sort='stars')
-            
-            repos = []
-            for repo in results[:10]:  # 최대 10개
-                repos.append({
-                    'name': repo.full_name,
-                    'description': repo.description,
-                    'url': repo.html_url,
-                    'stars': repo.stargazers_count,
-                    'language': repo.language,
-                    'updated': repo.updated_at.isoformat() if repo.updated_at else None
-                })
-            
-            return repos
-            
-        except Exception as e:
-            logger.error(f"GitHub 검색 오류: {e}")
+            logger.error(f"PubChem 검색 에러: {str(e)}")
             return []
 
-
-# ============================================================================
-# 메인 API 관리자
-# ============================================================================
+# ===========================================================================
+# 🎯 메인 API 관리자
+# ===========================================================================
 
 class APIManager:
     """통합 API 관리자"""
     
     def __init__(self):
-        self.ai_engines = {}
-        self.db_client = None
-        self.usage_tracker = defaultdict(list)
         self.encryption_manager = EncryptionManager()
-        self._initialize()
-    
-    def _initialize(self):
-        """관리자 초기화"""
-        # AI 엔진 초기화
-        self._init_ai_engines()
-        
-        # 데이터베이스 클라이언트 초기화
+        self.ai_engines: Dict[str, BaseAIEngine] = {}
         self.db_client = ScienceDBClient()
+        self.usage_tracker = UsageTracker()
+        self._init_engines()
         
         logger.info("API Manager 초기화 완료")
     
-    def _init_ai_engines(self):
+    def _init_engines(self):
         """AI 엔진 초기화"""
-        engines = [
-            (AIEngineType.GEMINI, GeminiEngine),
-            (AIEngineType.GROK, GrokEngine),
-            (AIEngineType.GROQ, GroqEngine),
-            (AIEngineType.SAMBANOVA, SambaNovaEngine),
-            (AIEngineType.DEEPSEEK, DeepSeekEngine),
-            (AIEngineType.HUGGINGFACE, HuggingFaceEngine)
-        ]
-        
-        for engine_type, engine_class in engines:
+        # Gemini
+        if GEMINI_AVAILABLE:
             try:
-                engine = engine_class()
+                engine = GeminiEngine()
                 if engine.is_available:
-                    self.ai_engines[engine_type.value] = engine
-                    logger.info(f"{engine_type.value} 엔진 초기화 성공")
+                    self.ai_engines['gemini'] = engine
+                    logger.info("Gemini 엔진 초기화 성공")
             except Exception as e:
-                logger.warning(f"{engine_type.value} 엔진 초기화 실패: {e}")
-    
-    # ============================================================================
-    # API 키 관리
-    # ============================================================================
-    
-    def set_api_key(self, service: str, key: str) -> bool:
-        """API 키 설정"""
-        try:
-            # 암호화 저장
-            encrypted = self.encryption_manager.encrypt(key)
-            
-            # 세션 상태에 저장
-            if 'api_keys' not in st.session_state:
-                st.session_state.api_keys = {}
-            st.session_state.api_keys[service] = encrypted
-            
-            # 엔진 재초기화
-            if service in [e.value for e in AIEngineType]:
-                self._init_ai_engines()
-            elif service in ['materials_project', 'github']:
-                self.db_client._initialize_clients()
-            
-            logger.info(f"{service} API 키 설정 완료")
-            return True
-            
-        except Exception as e:
-            logger.error(f"API 키 설정 오류: {e}")
-            return False
-    
-    def remove_api_key(self, service: str):
-        """API 키 제거"""
-        if hasattr(st, 'session_state') and 'api_keys' in st.session_state:
-            if service in st.session_state.api_keys:
-                del st.session_state.api_keys[service]
-    
-    def get_configured_services(self) -> Dict[str, bool]:
-        """설정된 서비스 목록"""
-        services = {}
+                logger.error(f"Gemini 초기화 실패: {e}")
         
-        # AI 엔진
-        for engine_type in AIEngineType:
-            services[engine_type.value] = engine_type.value in self.ai_engines
+        # Groq
+        if GROQ_AVAILABLE:
+            try:
+                engine = GroqEngine()
+                if engine.is_available:
+                    self.ai_engines['groq'] = engine
+                    logger.info("Groq 엔진 초기화 성공")
+            except Exception as e:
+                logger.error(f"Groq 초기화 실패: {e}")
         
-        # 데이터베이스
-        if self.db_client:
-            for db_name in ['materials_project', 'pubchem', 'github']:
-                services[db_name] = db_name in self.db_client.clients
+        # HuggingFace
+        if HUGGINGFACE_AVAILABLE:
+            try:
+                engine = HuggingFaceEngine()
+                if engine.is_available:
+                    self.ai_engines['huggingface'] = engine
+                    logger.info("HuggingFace 엔진 초기화 성공")
+            except Exception as e:
+                logger.error(f"HuggingFace 초기화 실패: {e}")
         
-        return services
-    
-    # ============================================================================
-    # AI 엔진 메서드
-    # ============================================================================
+        # OpenAI 호환 엔진들 (나중에 API 제공시 활성화)
+        # self.ai_engines['grok'] = OpenAICompatibleEngine(
+        #     AIEngineType.GROK, "grok-beta", "https://api.x.ai/v1"
+        # )
     
     def get_available_engines(self) -> List[str]:
         """사용 가능한 AI 엔진 목록"""
         return list(self.ai_engines.keys())
     
-    async def generate_text(self, engine_id: str, prompt: str, 
+    def set_api_key(self, service: str, api_key: str) -> bool:
+        """API 키 설정"""
+        try:
+            # 세션 상태에 저장
+            if 'api_keys' not in st.session_state:
+                st.session_state.api_keys = {}
+            
+            st.session_state.api_keys[service] = api_key
+            
+            # 엔진 재초기화
+            self._init_engines()
+            
+            return True
+        except Exception as e:
+            logger.error(f"API 키 설정 실패: {e}")
+            return False
+    
+    async def generate_text(self, engine_id: str, prompt: str,
                           user_id: str = "anonymous", **kwargs) -> APIResponse:
         """AI 텍스트 생성"""
+        # 오프라인 체크
+        if not self._check_connection():
+            # 캐시 확인
+            for engine in self.ai_engines.values():
+                cache_params = {'prompt': prompt, **kwargs}
+                cached = engine.cache.get(engine_id, cache_params)
+                if cached:
+                    return APIResponse(
+                        status=ResponseStatus.OFFLINE,
+                        data=cached,
+                        cached=True,
+                        metadata={'offline_mode': True}
+                    )
+            
+            return APIResponse(
+                status=ResponseStatus.OFFLINE,
+                error="오프라인 모드: 캐시된 응답이 없습니다"
+            )
+        
+        # 엔진 확인
         if engine_id not in self.ai_engines:
             # 폴백: 사용 가능한 첫 번째 엔진 사용
-            available = self.get_available_engines()
-            if available:
-                engine_id = available[0]
-                logger.info(f"{engine_id} 엔진으로 폴백")
+            if self.ai_engines:
+                engine_id = list(self.ai_engines.keys())[0]
+                logger.warning(f"요청된 엔진 없음, {engine_id}로 폴백")
             else:
                 return APIResponse(
                     status=ResponseStatus.ERROR,
-                    error="사용 가능한 AI 엔진이 없습니다."
+                    error="사용 가능한 AI 엔진이 없습니다"
                 )
         
         engine = self.ai_engines[engine_id]
+        
+        # 생성 요청
         response = await engine.generate(prompt, user_id, **kwargs)
         
         # 사용량 기록
-        self.usage_tracker[engine_id].append({
-            'user_id': user_id,
-            'timestamp': datetime.now(),
-            'success': response.status == ResponseStatus.SUCCESS
-        })
+        if response.status == ResponseStatus.SUCCESS:
+            record = UsageRecord(
+                user_id=user_id,
+                api_type=engine_id,
+                timestamp=datetime.now(),
+                tokens_used=kwargs.get('tokens', 0),
+                cost=0.0,  # 추후 계산
+                success=True
+            )
+            self.usage_tracker.record(record)
         
         return response
     
-    async def analyze_experiment(self, engine_id: str, 
-                               experiment_data: Dict,
+    async def extract_protocol(self, text: str, file_type: str = "mixed_format",
+                             user_id: str = "anonymous") -> APIResponse:
+        """프로토콜 추출"""
+        # Gemini 우선 사용 (프로토콜 추출에 최적화)
+        if 'gemini' in self.ai_engines:
+            engine = self.ai_engines['gemini']
+            if hasattr(engine, 'extract_protocol'):
+                return await engine.extract_protocol(text, file_type, user_id)
+        
+        # 다른 엔진으로 폴백
+        prompt = f"""
+{EXTRACTION_PROMPTS.get(file_type, EXTRACTION_PROMPTS['mixed_format'])}
+
+텍스트:
+{text[:10000]}
+
+JSON 형식으로 프로토콜 정보를 추출하세요.
+"""
+        
+        return await self.generate_text(
+            list(self.ai_engines.keys())[0] if self.ai_engines else 'gemini',
+            prompt,
+            user_id
+        )
+    
+    async def analyze_experiment(self, engine_id: str, experiment_data: Dict,
                                user_id: str = "anonymous") -> APIResponse:
         """실험 데이터 분석"""
         prompt = f"""
-        다음 실험 데이터를 분석하고 인사이트를 제공해주세요:
+다음 실험 데이터를 분석하고 인사이트를 제공하세요:
+
+실험 정보:
+{json.dumps(experiment_data, indent=2, ensure_ascii=False)}
+
+다음 항목들을 포함하여 분석하세요:
+1. 주요 발견사항
+2. 통계적 유의성
+3. 개선 제안
+4. 다음 실험 추천
+"""
         
-        실험 유형: {experiment_data.get('type', '알 수 없음')}
-        요인: {experiment_data.get('factors', [])}
-        반응변수: {experiment_data.get('responses', [])}
-        결과: {experiment_data.get('results', {})}
-        
-        1. 주요 발견사항
-        2. 통계적 유의성
-        3. 최적 조건
-        4. 개선 제안
-        """
-        
-        return await self.generate_text(engine_id, prompt, user_id, 
-                                      temperature=0.5)  # 분석은 낮은 온도
-    
-    async def suggest_next_experiment(self, engine_id: str,
-                                    current_results: Dict,
-                                    user_id: str = "anonymous") -> APIResponse:
-        """다음 실험 제안"""
-        prompt = f"""
-        현재까지의 실험 결과를 바탕으로 다음 실험을 제안해주세요:
-        
-        완료된 실험: {current_results.get('completed_runs', 0)}
-        현재 최적값: {current_results.get('current_optimum', {})}
-        탐색된 영역: {current_results.get('explored_region', [])}
-        
-        제안 형식:
-        1. 추천하는 다음 실험 조건
-        2. 기대되는 개선 정도
-        3. 위험 요소
-        4. 대안적 접근법
-        """
-        
-        return await self.generate_text(engine_id, prompt, user_id,
-                                      temperature=0.7)
-    
-    # ============================================================================
-    # 데이터베이스 메서드
-    # ============================================================================
-    
-    async def search_materials(self, **kwargs) -> List[Dict]:
-        """재료 검색"""
-        if not self.db_client:
-            return []
-        return await self.db_client.search_materials(**kwargs)
-    
-    async def search_compounds(self, **kwargs) -> List[Dict]:
-        """화합물 검색"""
-        if not self.db_client:
-            return []
-        return await self.db_client.search_compounds(**kwargs)
-    
-    async def search_github_data(self, **kwargs) -> List[Dict]:
-        """GitHub 데이터 검색"""
-        if not self.db_client:
-            return []
-        return await self.db_client.search_github_data(**kwargs)
-    
-    # ============================================================================
-    # 사용량 및 상태 관리
-    # ============================================================================
+        return await self.generate_text(engine_id, prompt, user_id)
     
     def get_usage_summary(self, user_id: Optional[str] = None,
-                         period: str = 'day') -> Dict[str, Dict]:
+                         period: str = 'day') -> Dict[str, Any]:
         """사용량 요약"""
-        summary = {}
-        
-        # AI 엔진별 사용량
-        for engine_id, engine in self.ai_engines.items():
-            summary[engine_id] = engine.usage_tracker.get_usage_summary(user_id, period)
-        
-        return summary
+        return self.usage_tracker.get_summary(user_id, period)
     
-    def get_rate_limit_status(self) -> Dict[str, Dict]:
-        """Rate limit 상태"""
-        status = {}
+    def get_api_status(self) -> Dict[str, Any]:
+        """API 상태 확인"""
+        status = {
+            'ai_engines': {},
+            'databases': {},
+            'total_available': 0
+        }
         
+        # AI 엔진 상태
         for engine_id, engine in self.ai_engines.items():
-            if engine.rate_limiter:
-                status[engine_id] = engine.rate_limiter.get_remaining()
+            status['ai_engines'][engine_id] = {
+                'available': engine.is_available,
+                'model': engine.model_name,
+                'rate_limit': engine.rate_limiter.get_remaining()
+            }
+            if engine.is_available:
+                status['total_available'] += 1
+        
+        # 데이터베이스 상태
+        for db_name, client in self.db_client.clients.items():
+            status['databases'][db_name] = {
+                'available': client is not None
+            }
         
         return status
     
+    def _check_connection(self) -> bool:
+        """인터넷 연결 확인"""
+        try:
+            import requests
+            response = requests.get('https://www.google.com', timeout=3)
+            return response.status_code == 200
+        except:
+            return False
+    
     def clear_cache(self, cache_type: Optional[str] = None):
         """캐시 초기화"""
-        # AI 엔진 캐시
         for engine in self.ai_engines.values():
             engine.cache.clear(cache_type)
         
-        # DB 클라이언트 캐시
-        if self.db_client:
-            self.db_client.cache.clear(cache_type)
+        self.db_client.cache.clear(cache_type)
         
         logger.info(f"캐시 초기화 완료: {cache_type or '전체'}")
-    
-    def get_api_status(self) -> Dict[str, Any]:
-        """전체 API 상태"""
-        return {
-            'ai_engines': {
-                engine_id: {
-                    'available': True,
-                    'model': engine.config.model_name,
-                    'features': engine.config.features,
-                    'rate_limit': engine.rate_limiter.get_remaining() if engine.rate_limiter else None
-                }
-                for engine_id, engine in self.ai_engines.items()
-            },
-            'databases': self.get_configured_services(),
-            'total_available': len(self.ai_engines) + len(self.db_client.clients if self.db_client else {})
-        }
 
-
-# ============================================================================
-# 싱글톤 인스턴스
-# ============================================================================
+# ===========================================================================
+# 🔧 싱글톤 인스턴스
+# ===========================================================================
 
 _api_manager: Optional[APIManager] = None
 
-
 def get_api_manager() -> APIManager:
-    """APIManager 싱글톤 인스턴스 반환"""
+    """API Manager 싱글톤 인스턴스 반환"""
     global _api_manager
     
     if _api_manager is None:
@@ -1265,118 +1193,62 @@ def get_api_manager() -> APIManager:
     
     return _api_manager
 
+# ===========================================================================
+# 🎯 헬퍼 함수
+# ===========================================================================
 
-# ============================================================================
-# 헬퍼 함수
-# ============================================================================
-
-async def ask_ai(prompt: str, engine: str = "gemini", 
+async def ask_ai(prompt: str, engine: str = "gemini",
                 user_id: str = "anonymous", **kwargs) -> str:
     """간편 AI 질문 함수"""
     manager = get_api_manager()
     response = await manager.generate_text(engine, prompt, user_id, **kwargs)
     
-    if response.status == ResponseStatus.SUCCESS:
+    if response.status in [ResponseStatus.SUCCESS, ResponseStatus.CACHED]:
         return response.data
     else:
         return f"오류: {response.error}"
 
-
-async def analyze_experiment_data(data: Dict, user_id: str = "anonymous") -> Dict:
-    """간편 실험 분석 함수"""
+def get_available_ai_engines() -> List[str]:
+    """사용 가능한 AI 엔진 목록"""
     manager = get_api_manager()
-    
-    # 사용 가능한 첫 번째 엔진 사용
-    engines = manager.get_available_engines()
-    if not engines:
-        return {"error": "사용 가능한 AI 엔진이 없습니다"}
-    
-    response = await manager.analyze_experiment(engines[0], data, user_id)
-    
-    if response.status == ResponseStatus.SUCCESS:
-        return {"analysis": response.data}
-    else:
-        return {"error": response.error}
+    return manager.get_available_engines()
 
+# ===========================================================================
+# 🧪 테스트 코드
+# ===========================================================================
 
-def render_api_status_card():
-    """API 상태 카드 렌더링"""
-    manager = get_api_manager()
-    status = manager.get_api_status()
+if __name__ == "__main__":
+    import asyncio
     
-    col1, col2, col3 = st.columns(3)
+    async def test_api_manager():
+        """API Manager 테스트"""
+        manager = get_api_manager()
+        
+        # 상태 확인
+        print("API 상태:", manager.get_api_status())
+        
+        # 텍스트 생성 테스트
+        if manager.get_available_engines():
+            engine = manager.get_available_engines()[0]
+            response = await manager.generate_text(
+                engine,
+                "고분자 합성의 기본 원리를 설명하세요.",
+                "test_user"
+            )
+            print(f"\n{engine} 응답:", response.data[:200] if response.data else response.error)
+        
+        # 프로토콜 추출 테스트
+        test_text = """
+        Materials: Polymer A (98% purity, Sigma-Aldrich), Solvent B
+        
+        Procedure:
+        1. Dissolve 5g of Polymer A in 100mL of Solvent B
+        2. Heat to 80°C for 2 hours
+        3. Cool to room temperature
+        """
+        
+        protocol_response = await manager.extract_protocol(test_text)
+        print("\n프로토콜 추출:", protocol_response.data)
     
-    with col1:
-        st.metric(
-            "활성 AI 엔진",
-            len(status['ai_engines']),
-            delta=f"/{len(AIEngineType)}"
-        )
-    
-    with col2:
-        active_dbs = sum(1 for v in status['databases'].values() if v)
-        st.metric(
-            "연결된 DB",
-            active_dbs,
-            delta=f"/{len(status['databases'])}"
-        )
-    
-    with col3:
-        st.metric(
-            "전체 API",
-            status['total_available'],
-            delta="활성"
-        )
-
-
-def render_api_configuration():
-    """API 설정 UI"""
-    st.subheader("🔑 API 설정")
-    
-    manager = get_api_manager()
-    configured = manager.get_configured_services()
-    
-    # AI 엔진 설정
-    with st.expander("AI 엔진 API 키", expanded=False):
-        for engine_type in AIEngineType:
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                key = st.text_input(
-                    f"{engine_type.value.upper()} API Key",
-                    type="password",
-                    key=f"api_key_{engine_type.value}",
-                    help=f"{engine_type.value} API 키를 입력하세요"
-                )
-            with col2:
-                if st.button("저장", key=f"save_{engine_type.value}"):
-                    if key:
-                        if manager.set_api_key(engine_type.value, key):
-                            show_success(f"{engine_type.value} API 키가 저장되었습니다.")
-                        else:
-                            show_error("API 키 저장에 실패했습니다.")
-                
-                status = "✅" if configured.get(engine_type.value) else "❌"
-                st.write(f"상태: {status}")
-    
-    # 데이터베이스 설정
-    with st.expander("과학 데이터베이스 API 키", expanded=False):
-        db_services = ['materials_project', 'github']
-        for service in db_services:
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                key = st.text_input(
-                    f"{service.replace('_', ' ').title()} API Key",
-                    type="password",
-                    key=f"api_key_{service}",
-                    help=f"{service} API 키를 입력하세요"
-                )
-            with col2:
-                if st.button("저장", key=f"save_{service}"):
-                    if key:
-                        if manager.set_api_key(service, key):
-                            show_success(f"{service} API 키가 저장되었습니다.")
-                        else:
-                            show_error("API 키 저장에 실패했습니다.")
-                
-                status = "✅" if configured.get(service) else "❌"
-                st.write(f"상태: {status}")
+    # 테스트 실행
+    asyncio.run(test_api_manager())
