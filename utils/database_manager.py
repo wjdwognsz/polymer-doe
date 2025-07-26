@@ -219,8 +219,9 @@ class DatabaseManager:
             
             conn.commit()
     
-    def _create_tables(self, conn: sqlite3.Connection):
+    def create_tables(self):
         """테이블 생성"""
+        cursor = self.conn.cursor()
         
         # 사용자 테이블
         conn.execute('''
@@ -444,6 +445,39 @@ class DatabaseManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # users 테이블에 소셜 로그인 필드 추가
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                organization TEXT,
+                role TEXT DEFAULT 'user',
+                profile_picture TEXT,
+                auth_provider TEXT DEFAULT 'local',  -- 'local', 'google', 'github'
+                oauth_id TEXT,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        """)
+    
+        # 선택적: 소셜 계정 연결 테이블
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS social_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                oauth_id TEXT NOT NULL,
+                linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE(provider, oauth_id)
+            )
+        """)
+    
+        self.conn.commit()
     
     def _create_indexes(self, conn: sqlite3.Connection):
         """인덱스 생성 (성능 최적화)"""
