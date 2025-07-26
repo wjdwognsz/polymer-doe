@@ -1,241 +1,74 @@
 """
-📊 대시보드 - Universal DOE Platform
-=============================================================================
-데스크톱 앱용 개인 맞춤 대시보드
-SQLite 로컬 DB 기반, 오프라인 우선 설계, 선택적 클라우드 동기화
-=============================================================================
+📊 Dashboard Page - 개인 대시보드
+===========================================================================
+사용자별 맞춤 대시보드로 프로젝트 현황, 실험 진행상황, 
+활동 타임라인, 성과 분석 등을 한눈에 보여주는 메인 화면
+===========================================================================
 """
 
 import streamlit as st
-import sys
-from pathlib import Path
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Tuple, Any, Union
 import json
 import logging
 from collections import defaultdict, Counter
+from pathlib import Path
 import time
-import sqlite3
+import hashlib
 
-# 프로젝트 루트 경로 추가
-sys.path.append(str(Path(__file__).parent.parent))
-
-# 로컬 모듈
-try:
-    from utils.database_manager import get_database_manager
-    from utils.auth_manager import get_auth_manager, UserRole
-    from utils.common_ui import get_common_ui
-    from config.app_config import APP_INFO, AI_EXPLANATION_CONFIG
-    from config.local_config import LOCAL_CONFIG
-    from config.offline_config import OFFLINE_CONFIG
-except ImportError as e:
-    st.error(f"🚨 필수 모듈을 찾을 수 없습니다: {str(e)}")
-    st.stop()
-
-# 로깅 설정
-logger = logging.getLogger(__name__)
-
-# 페이지 설정
+# ===========================================================================
+# 🔧 페이지 설정 (반드시 최상단)
+# ===========================================================================
 st.set_page_config(
-    page_title="대시보드 - Universal DOE Platform",
+    page_title="대시보드 - Polymer DOE",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# =============================================================================
-# 🔒 인증 체크
-# =============================================================================
+# ===========================================================================
+# 🔍 인증 확인
+# ===========================================================================
 if 'authenticated' not in st.session_state or not st.session_state.authenticated:
     st.warning("🔒 로그인이 필요합니다.")
-    st.switch_page("pages/0_🔐_Login.py")
+    st.markdown("""
+        <meta http-equiv="refresh" content="0; url='/0_🔐_Login'">
+    """, unsafe_allow_html=True)
     st.stop()
 
-# 게스트 모드 체크
-is_guest = st.session_state.get('user_role') == UserRole.GUEST
+# ===========================================================================
+# 📦 모듈 임포트
+# ===========================================================================
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 
-# =============================================================================
-# 🎨 커스텀 CSS
-# =============================================================================
-CUSTOM_CSS = """
-<style>
-    /* 메트릭 카드 스타일 */
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        border-left: 4px solid;
-        transition: all 0.3s ease;
-        height: 100%;
-    }
-    
-    .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-    }
-    
-    .metric-value {
-        font-size: 2.5rem;
-        font-weight: 700;
-        margin: 0.5rem 0;
-    }
-    
-    .metric-delta {
-        font-size: 0.875rem;
-        padding: 0.25rem 0.75rem;
-        border-radius: 20px;
-        display: inline-block;
-    }
-    
-    .delta-positive {
-        background: #e6f7e6;
-        color: #0d9e0d;
-    }
-    
-    .delta-negative {
-        background: #fee;
-        color: #c33;
-    }
-    
-    /* 활동 타임라인 */
-    .activity-item {
-        padding: 1rem;
-        margin: 0.5rem 0;
-        background: #f8f9fa;
-        border-radius: 8px;
-        border-left: 3px solid #667eea;
-        transition: all 0.2s ease;
-    }
-    
-    .activity-item:hover {
-        background: #e9ecef;
-        transform: translateX(2px);
-    }
-    
-    /* 프로젝트 카드 */
-    .project-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
-        margin-bottom: 1rem;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .project-card:hover {
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        transform: translateY(-1px);
-    }
-    
-    /* 진행률 바 */
-    .progress-bar {
-        height: 8px;
-        background: #e9ecef;
-        border-radius: 4px;
-        overflow: hidden;
-        margin: 0.5rem 0;
-    }
-    
-    .progress-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        border-radius: 4px;
-        transition: width 0.5s ease;
-    }
-    
-    /* 알림 배지 */
-    .notification-badge {
-        background: #ff4757;
-        color: white;
-        font-size: 0.75rem;
-        padding: 0.2rem 0.5rem;
-        border-radius: 10px;
-        position: absolute;
-        top: -5px;
-        right: -5px;
-    }
-    
-    /* 동기화 상태 */
-    .sync-status {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.5rem 1rem;
-        background: #f8f9fa;
-        border-radius: 20px;
-        font-size: 0.875rem;
-    }
-    
-    .sync-online {
-        color: #10b981;
-    }
-    
-    .sync-offline {
-        color: #6b7280;
-    }
-    
-    .sync-pending {
-        color: #f59e0b;
-    }
-    
-    /* 차트 컨테이너 */
-    .chart-container {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
-        margin-bottom: 1rem;
-    }
-    
-    /* 레벨 프로그레스 */
-    .level-progress {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-        padding: 1rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 10px;
-        color: white;
-    }
-    
-    .level-icon {
-        font-size: 2rem;
-    }
-    
-    .level-info {
-        flex: 1;
-    }
-    
-    .level-bar {
-        height: 10px;
-        background: rgba(255,255,255,0.3);
-        border-radius: 5px;
-        overflow: hidden;
-        margin-top: 0.5rem;
-    }
-    
-    .level-fill {
-        height: 100%;
-        background: white;
-        border-radius: 5px;
-        transition: width 0.5s ease;
-    }
-</style>
-"""
+try:
+    from utils.database_manager import DatabaseManager
+    from utils.common_ui import CommonUI
+    from utils.notification_manager import NotificationManager
+    from utils.data_processor import DataProcessor
+    from utils.sync_manager import SyncManager
+    from config.app_config import APP_CONFIG
+    from config.theme_config import THEME_CONFIG, COLORS
+    from config.local_config import LOCAL_CONFIG
+except ImportError as e:
+    st.error(f"필요한 모듈을 불러올 수 없습니다: {e}")
+    st.stop()
 
-# =============================================================================
+# ===========================================================================
 # 🔧 설정 및 상수
-# =============================================================================
+# ===========================================================================
+
+logger = logging.getLogger(__name__)
 
 # 대시보드 설정
-REFRESH_INTERVAL = 300  # 5분
+REFRESH_INTERVAL = 300  # 5분 (초)
 CACHE_TTL = 300  # 5분
 
 # 메트릭 카드 설정
@@ -243,827 +76,872 @@ METRIC_CARDS = {
     'total_projects': {
         'title': '전체 프로젝트',
         'icon': '📁',
-        'color': '#667eea',
+        'color': COLORS['primary'],
+        'delta_prefix': '지난달 대비',
         'suffix': '개'
     },
     'active_experiments': {
         'title': '진행중인 실험',
         'icon': '🧪',
-        'color': '#f59e0b',
+        'color': COLORS['warning'],
+        'delta_prefix': '이번주',
         'suffix': '개'
     },
     'success_rate': {
         'title': '실험 성공률',
         'icon': '📈',
-        'color': '#10b981',
-        'suffix': '%'
+        'color': COLORS['success'],
+        'suffix': '%',
+        'delta_prefix': '평균 대비'
     },
-    'collaboration_count': {
+    'collaborations': {
         'title': '협업 프로젝트',
         'icon': '👥',
-        'color': '#3b82f6',
+        'color': COLORS['info'],
+        'delta_prefix': '새로운',
         'suffix': '개'
     }
 }
 
 # 활동 타입
 ACTIVITY_TYPES = {
-    'project_created': {'icon': '🆕', 'text': '새 프로젝트 생성'},
-    'experiment_started': {'icon': '🧪', 'text': '실험 시작'},
-    'experiment_completed': {'icon': '✅', 'text': '실험 완료'},
-    'data_analyzed': {'icon': '📊', 'text': '데이터 분석'},
-    'report_generated': {'icon': '📄', 'text': '보고서 생성'},
-    'collaboration_joined': {'icon': '🤝', 'text': '협업 참여'},
-    'module_installed': {'icon': '📦', 'text': '모듈 설치'},
-    'achievement_earned': {'icon': '🏆', 'text': '업적 달성'}
+    'project_created': {'icon': '🆕', 'color': COLORS['primary'], 'label': '프로젝트 생성'},
+    'experiment_completed': {'icon': '✅', 'color': COLORS['success'], 'label': '실험 완료'},
+    'collaboration_joined': {'icon': '🤝', 'color': COLORS['info'], 'label': '협업 참여'},
+    'file_uploaded': {'icon': '📎', 'color': COLORS['muted'], 'label': '파일 업로드'},
+    'comment_added': {'icon': '💬', 'color': COLORS['warning'], 'label': '댓글 작성'},
+    'achievement_earned': {'icon': '🏆', 'color': '#FFD700', 'label': '업적 달성'},
+    'ai_analysis': {'icon': '🤖', 'color': COLORS['secondary'], 'label': 'AI 분석'}
 }
 
 # 레벨 시스템
 LEVEL_SYSTEM = {
-    'beginner': {'min_points': 0, 'icon': '🌱', 'name': '초보 연구원'},
-    'intermediate': {'min_points': 100, 'icon': '🌿', 'name': '중급 연구원'},
-    'advanced': {'min_points': 500, 'icon': '🌳', 'name': '고급 연구원'},
-    'expert': {'min_points': 1500, 'icon': '🏆', 'name': '전문 연구원'}
+    'beginner': {'min': 0, 'max': 99, 'label': '초급 연구원', 'icon': '🌱'},
+    'intermediate': {'min': 100, 'max': 499, 'label': '중급 연구원', 'icon': '🌿'},
+    'advanced': {'min': 500, 'max': 1499, 'label': '고급 연구원', 'icon': '🌳'},
+    'expert': {'min': 1500, 'max': None, 'label': '전문 연구원', 'icon': '🏆'}
 }
 
-# =============================================================================
-# 🔧 유틸리티 함수
-# =============================================================================
-
-def init_session_state():
-    """세션 상태 초기화"""
-    defaults = {
-        'dashboard_cache': {},
-        'last_refresh': datetime.now(),
-        'sync_status': 'checking',
-        'selected_project': None,
-        'show_ai_details': st.session_state.get('show_ai_details', False)
+# 업적 정의
+ACHIEVEMENTS = {
+    'first_project': {
+        'name': '첫 프로젝트',
+        'description': '첫 번째 프로젝트를 생성했습니다',
+        'icon': '🎯',
+        'points': 10,
+        'category': 'project'
+    },
+    'team_player': {
+        'name': '팀 플레이어',
+        'description': '5개 이상의 협업 프로젝트에 참여',
+        'icon': '🤝',
+        'points': 30,
+        'category': 'collaboration'
+    },
+    'data_master': {
+        'name': '데이터 마스터',
+        'description': '100개 이상의 실험 데이터 분석',
+        'icon': '📊',
+        'points': 50,
+        'category': 'analysis'
+    },
+    'early_bird': {
+        'name': '얼리버드',
+        'description': '30일 연속 로그인했습니다',
+        'icon': '🌅',
+        'points': 20,
+        'category': 'activity'
+    },
+    'innovator': {
+        'name': '혁신가',
+        'description': '새로운 실험 모듈을 개발했습니다',
+        'icon': '💡',
+        'points': 100,
+        'category': 'contribution'
     }
-    
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+}
 
-def check_cache(cache_key: str) -> Optional[Any]:
-    """캐시 확인"""
-    if cache_key in st.session_state.dashboard_cache:
-        cache_data = st.session_state.dashboard_cache[cache_key]
-        if datetime.now() - cache_data['timestamp'] < timedelta(seconds=CACHE_TTL):
-            return cache_data['data']
-    return None
+# ===========================================================================
+# 📊 대시보드 클래스
+# ===========================================================================
 
-def update_cache(cache_key: str, data: Any):
-    """캐시 업데이트"""
-    st.session_state.dashboard_cache[cache_key] = {
-        'data': data,
-        'timestamp': datetime.now()
-    }
-
-def check_sync_status() -> str:
-    """동기화 상태 확인"""
-    db_manager = get_database_manager()
+class DashboardPage:
+    """개인 대시보드 페이지"""
     
-    # 오프라인 모드 확인
-    if not st.session_state.get('online_status', False):
-        return 'offline'
+    def __init__(self):
+        """초기화"""
+        self.db_manager = DatabaseManager()
+        self.ui = CommonUI()
+        self.notification_manager = NotificationManager()
+        self.data_processor = DataProcessor()
+        self.sync_manager = SyncManager(self.db_manager)
+        
+        # 사용자 정보
+        self.user = st.session_state.get('user', {})
+        self.user_id = self.user.get('user_id') or st.session_state.get('user_email')
+        
+        # 캐시 초기화
+        self._initialize_cache()
+        
+        # 차트 테마 설정
+        self._setup_chart_theme()
     
-    # 동기화 대기 중인 변경사항 확인
-    pending_changes = db_manager.count('sync_queue', {'status': 'pending'})
-    if pending_changes > 0:
-        return 'pending'
+    def _initialize_cache(self):
+        """캐시 초기화"""
+        if 'dashboard_cache' not in st.session_state:
+            st.session_state.dashboard_cache = {
+                'metrics': {'data': None, 'timestamp': None},
+                'projects': {'data': None, 'timestamp': None},
+                'activities': {'data': None, 'timestamp': None},
+                'charts': {'data': None, 'timestamp': None}
+            }
     
-    return 'synced'
-
-def get_user_level(points: int) -> Dict[str, Any]:
-    """사용자 레벨 계산"""
-    current_level = None
-    next_level = None
+    def _setup_chart_theme(self):
+        """Plotly 차트 테마 설정"""
+        import plotly.io as pio
+        
+        # 커스텀 테마 생성
+        pio.templates["custom_theme"] = go.layout.Template(
+            layout=dict(
+                font=dict(family="Pretendard, sans-serif"),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                colorway=[COLORS['primary'], COLORS['secondary'], 
+                         COLORS['success'], COLORS['warning'], COLORS['danger']]
+            )
+        )
+        pio.templates.default = "custom_theme"
     
-    for level_key, level_info in LEVEL_SYSTEM.items():
-        if points >= level_info['min_points']:
-            current_level = level_key
-        else:
-            if next_level is None:
-                next_level = level_key
-                break
+    def _check_cache_validity(self, cache_item: dict) -> bool:
+        """캐시 유효성 확인"""
+        if not cache_item['data'] or not cache_item['timestamp']:
+            return False
+        
+        elapsed = (datetime.now() - cache_item['timestamp']).total_seconds()
+        return elapsed < CACHE_TTL
     
-    if current_level is None:
-        current_level = 'beginner'
+    def _update_cache(self, key: str, data: Any):
+        """캐시 업데이트"""
+        st.session_state.dashboard_cache[key] = {
+            'data': data,
+            'timestamp': datetime.now()
+        }
     
-    return {
-        'current': current_level,
-        'next': next_level,
-        'current_info': LEVEL_SYSTEM[current_level],
-        'next_info': LEVEL_SYSTEM.get(next_level),
-        'progress': calculate_level_progress(points, current_level, next_level)
-    }
-
-def calculate_level_progress(points: int, current_level: str, next_level: Optional[str]) -> float:
-    """레벨 진행률 계산"""
-    if next_level is None:
-        return 100.0
+    # ===========================================================================
+    # 📊 메트릭 데이터 처리
+    # ===========================================================================
     
-    current_min = LEVEL_SYSTEM[current_level]['min_points']
-    next_min = LEVEL_SYSTEM[next_level]['min_points']
+    def _get_metrics_data(self) -> Dict[str, Dict]:
+        """메트릭 데이터 조회"""
+        cache = st.session_state.dashboard_cache['metrics']
+        if self._check_cache_validity(cache):
+            return cache['data']
+        
+        metrics = {}
+        
+        # 전체 프로젝트
+        total_projects = self.db_manager.count_user_projects(self.user_id)
+        last_month_projects = self.db_manager.count_user_projects(
+            self.user_id, 
+            since=datetime.now() - timedelta(days=30)
+        )
+        
+        metrics['total_projects'] = {
+            'value': total_projects,
+            'delta': total_projects - last_month_projects
+        }
+        
+        # 진행중인 실험
+        active_experiments = self.db_manager.count_active_experiments(self.user_id)
+        last_week_experiments = self.db_manager.count_active_experiments(
+            self.user_id,
+            since=datetime.now() - timedelta(days=7)
+        )
+        
+        metrics['active_experiments'] = {
+            'value': active_experiments,
+            'delta': active_experiments - last_week_experiments
+        }
+        
+        # 실험 성공률
+        success_rate = self.db_manager.calculate_success_rate(self.user_id)
+        avg_success_rate = self.db_manager.get_average_success_rate()
+        
+        metrics['success_rate'] = {
+            'value': round(success_rate * 100, 1),
+            'delta': round((success_rate - avg_success_rate) * 100, 1)
+        }
+        
+        # 협업 프로젝트
+        collab_projects = self.db_manager.count_collaboration_projects(self.user_id)
+        new_collabs = self.db_manager.count_collaboration_projects(
+            self.user_id,
+            since=datetime.now() - timedelta(days=7)
+        )
+        
+        metrics['collaborations'] = {
+            'value': collab_projects,
+            'delta': new_collabs
+        }
+        
+        self._update_cache('metrics', metrics)
+        return metrics
     
-    progress = (points - current_min) / (next_min - current_min) * 100
-    return min(max(progress, 0), 100)
-
-# =============================================================================
-# 📊 데이터 로드 함수
-# =============================================================================
-
-def load_metrics_data() -> Dict[str, Any]:
-    """메트릭 데이터 로드"""
-    # 캐시 확인
-    cached_data = check_cache('metrics')
-    if cached_data:
-        return cached_data
+    # ===========================================================================
+    # 🎨 UI 렌더링
+    # ===========================================================================
     
-    db_manager = get_database_manager()
-    user_id = st.session_state.user['id']
-    
-    metrics = {}
-    
-    # 전체 프로젝트 수
-    metrics['total_projects'] = {
-        'value': db_manager.count('projects', {'user_id': user_id}),
-        'delta': calculate_monthly_change('projects', user_id)
-    }
-    
-    # 진행중인 실험
-    metrics['active_experiments'] = {
-        'value': db_manager.count('experiments', {
-            'user_id': user_id,
-            'status': 'active'
-        }),
-        'delta': calculate_weekly_change('experiments', user_id)
-    }
-    
-    # 성공률 계산
-    completed = db_manager.count('experiments', {
-        'user_id': user_id,
-        'status': 'completed'
-    })
-    successful = db_manager.count('experiments', {
-        'user_id': user_id,
-        'status': 'completed',
-        'result': 'success'
-    })
-    
-    success_rate = (successful / completed * 100) if completed > 0 else 0
-    metrics['success_rate'] = {
-        'value': round(success_rate, 1),
-        'delta': success_rate - 75.0  # 평균 대비
-    }
-    
-    # 협업 프로젝트
-    metrics['collaboration_count'] = {
-        'value': db_manager.count('project_collaborators', {
-            'user_id': user_id
-        }),
-        'delta': calculate_monthly_change('project_collaborators', user_id)
-    }
-    
-    # 캐시 업데이트
-    update_cache('metrics', metrics)
-    
-    return metrics
-
-def calculate_monthly_change(table: str, user_id: str) -> int:
-    """월간 변화량 계산"""
-    db_manager = get_database_manager()
-    
-    # 이번 달
-    this_month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0)
-    this_month_count = db_manager.count(table, {
-        'user_id': user_id,
-        'created_at': f'>= "{this_month_start.isoformat()}"'
-    })
-    
-    # 지난 달
-    last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
-    last_month_end = this_month_start - timedelta(seconds=1)
-    last_month_count = db_manager.count(table, {
-        'user_id': user_id,
-        'created_at': f'BETWEEN "{last_month_start.isoformat()}" AND "{last_month_end.isoformat()}"'
-    })
-    
-    return this_month_count - last_month_count
-
-def calculate_weekly_change(table: str, user_id: str) -> int:
-    """주간 변화량 계산"""
-    db_manager = get_database_manager()
-    
-    # 이번 주
-    this_week_start = datetime.now() - timedelta(days=datetime.now().weekday())
-    this_week_start = this_week_start.replace(hour=0, minute=0, second=0)
-    
-    this_week_count = db_manager.count(table, {
-        'user_id': user_id,
-        'created_at': f'>= "{this_week_start.isoformat()}"'
-    })
-    
-    return this_week_count
-
-def load_recent_activities(limit: int = 10) -> List[Dict[str, Any]]:
-    """최근 활동 로드"""
-    cached_data = check_cache('activities')
-    if cached_data:
-        return cached_data
-    
-    db_manager = get_database_manager()
-    user_id = st.session_state.user['id']
-    
-    # 활동 로그 조회
-    activities = db_manager.query("""
-        SELECT * FROM activity_logs 
-        WHERE user_id = ? 
-        ORDER BY created_at DESC 
-        LIMIT ?
-    """, (user_id, limit))
-    
-    # 활동 데이터 처리
-    processed_activities = []
-    for activity in activities:
-        activity_type = activity['activity_type']
-        if activity_type in ACTIVITY_TYPES:
-            processed_activities.append({
-                'id': activity['id'],
-                'type': activity_type,
-                'icon': ACTIVITY_TYPES[activity_type]['icon'],
-                'text': ACTIVITY_TYPES[activity_type]['text'],
-                'details': json.loads(activity.get('details', '{}')),
-                'created_at': datetime.fromisoformat(activity['created_at'])
-            })
-    
-    update_cache('activities', processed_activities)
-    return processed_activities
-
-def load_projects_data(status: Optional[str] = None) -> List[Dict[str, Any]]:
-    """프로젝트 데이터 로드"""
-    db_manager = get_database_manager()
-    user_id = st.session_state.user['id']
-    
-    # 쿼리 조건
-    conditions = {'user_id': user_id}
-    if status:
-        conditions['status'] = status
-    
-    # 프로젝트 조회
-    projects = db_manager.query("""
-        SELECT p.*, 
-               COUNT(DISTINCT e.id) as experiment_count,
-               COUNT(DISTINCT c.user_id) as collaborator_count
-        FROM projects p
-        LEFT JOIN experiments e ON p.id = e.project_id
-        LEFT JOIN project_collaborators c ON p.id = c.project_id
-        WHERE p.user_id = ?
-        GROUP BY p.id
-        ORDER BY p.updated_at DESC
-    """, (user_id,))
-    
-    return projects
-
-def load_chart_data() -> Dict[str, Any]:
-    """차트 데이터 로드"""
-    cached_data = check_cache('charts')
-    if cached_data:
-        return cached_data
-    
-    db_manager = get_database_manager()
-    user_id = st.session_state.user['id']
-    
-    chart_data = {}
-    
-    # 프로젝트 상태 분포
-    chart_data['project_status'] = db_manager.query("""
-        SELECT status, COUNT(*) as count
-        FROM projects
-        WHERE user_id = ?
-        GROUP BY status
-    """, (user_id,))
-    
-    # 월별 실험 추이
-    chart_data['monthly_experiments'] = db_manager.query("""
-        SELECT strftime('%Y-%m', created_at) as month,
-               COUNT(*) as count,
-               COUNT(CASE WHEN result = 'success' THEN 1 END) as success_count
-        FROM experiments
-        WHERE user_id = ?
-        AND created_at >= date('now', '-6 months')
-        GROUP BY month
-        ORDER BY month
-    """, (user_id,))
-    
-    # 실험 모듈별 사용 통계
-    chart_data['module_usage'] = db_manager.query("""
-        SELECT module_type, COUNT(*) as count
-        FROM experiments
-        WHERE user_id = ?
-        GROUP BY module_type
-        ORDER BY count DESC
-        LIMIT 5
-    """, (user_id,))
-    
-    update_cache('charts', chart_data)
-    return chart_data
-
-# =============================================================================
-# 🎨 UI 렌더링 함수
-# =============================================================================
-
-def render_header():
-    """헤더 렌더링"""
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([3, 1, 1])
-    
-    with col1:
-        user = st.session_state.user
-        st.markdown(f"## 👋 안녕하세요, {user['name']}님!")
-        st.caption(f"오늘도 멋진 실험을 설계해보세요 🚀")
-    
-    with col2:
-        # 동기화 상태
-        sync_status = check_sync_status()
-        if sync_status == 'synced':
-            st.markdown("""
-                <div class="sync-status sync-online">
-                    <span>🟢 동기화됨</span>
-                </div>
-            """, unsafe_allow_html=True)
-        elif sync_status == 'pending':
-            st.markdown("""
-                <div class="sync-status sync-pending">
-                    <span>🟡 동기화 대기중</span>
-                </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-                <div class="sync-status sync-offline">
-                    <span>🔴 오프라인</span>
-                </div>
-            """, unsafe_allow_html=True)
-    
-    with col3:
-        if st.button("🔄 새로고침"):
-            st.session_state.dashboard_cache.clear()
-            st.session_state.last_refresh = datetime.now()
-            st.rerun()
-
-def render_metrics_section():
-    """메트릭 카드 섹션"""
-    st.markdown("### 📊 주요 지표")
-    
-    metrics = load_metrics_data()
-    cols = st.columns(4)
-    
-    for i, (key, config) in enumerate(METRIC_CARDS.items()):
-        with cols[i]:
-            metric_data = metrics.get(key, {'value': 0, 'delta': 0})
+    def render(self):
+        """메인 렌더링 함수"""
+        # CSS 적용
+        self.ui.apply_theme()
+        
+        # 헤더
+        self._render_header()
+        
+        # 메트릭 카드
+        self._render_metrics_section()
+        
+        # 메인 컨텐츠
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # 프로젝트 섹션
+            self._render_projects_section()
             
-            # 카드 HTML
-            delta_class = 'delta-positive' if metric_data['delta'] >= 0 else 'delta-negative'
-            delta_symbol = '+' if metric_data['delta'] >= 0 else ''
+            # 차트 섹션
+            self._render_charts_section()
+        
+        with col2:
+            # 활동 타임라인
+            self._render_activity_timeline()
+            
+            # 레벨 & 업적
+            self._render_progress_section()
+        
+        # 알림 & 추천
+        self._render_notifications_section()
+        
+        # 동기화 상태
+        self._render_sync_status()
+        
+        # AI 설명 모드 설정 (전역)
+        self._render_ai_explanation_mode()
+    
+    def _render_header(self):
+        """헤더 렌더링"""
+        col1, col2, col3 = st.columns([3, 1, 1])
+        
+        with col1:
+            # 시간대별 인사
+            hour = datetime.now().hour
+            if hour < 12:
+                greeting = "좋은 아침입니다"
+                emoji = "🌅"
+            elif hour < 18:
+                greeting = "좋은 오후입니다"
+                emoji = "☀️"
+            else:
+                greeting = "좋은 저녁입니다"
+                emoji = "🌙"
+            
+            st.markdown(f"# {emoji} {greeting}, {self.user.get('name', '연구원')}님!")
+            st.caption(f"오늘도 멋진 실험을 설계해보세요 🚀")
+        
+        with col2:
+            # 현재 레벨 표시
+            user_points = self.user.get('points', 0)
+            user_level = self._get_user_level(user_points)
             
             st.markdown(f"""
-                <div class="metric-card" style="border-color: {config['color']}">
-                    <div style="color: #6b7280; font-size: 0.875rem;">
-                        {config['icon']} {config['title']}
+                <div style='text-align: center; padding: 10px; 
+                     background-color: {COLORS['light']}; border-radius: 10px;'>
+                    <div style='font-size: 24px;'>{user_level['icon']}</div>
+                    <div style='font-size: 14px; font-weight: bold;'>{user_level['label']}</div>
+                    <div style='font-size: 12px; color: {COLORS['muted']};'>{user_points} 포인트</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            # 빠른 액션
+            if st.button("🆕 새 프로젝트", use_container_width=True, type="primary"):
+                st.switch_page("pages/2_📝_Project_Setup.py")
+            
+            if st.button("🔔 알림", use_container_width=True):
+                st.session_state.show_notifications = not st.session_state.get('show_notifications', False)
+    
+    def _render_metrics_section(self):
+        """메트릭 카드 섹션"""
+        st.markdown("### 📊 주요 지표")
+        
+        metrics = self._get_metrics_data()
+        cols = st.columns(4)
+        
+        for idx, (key, config) in enumerate(METRIC_CARDS.items()):
+            with cols[idx]:
+                metric_data = metrics.get(key, {'value': 0, 'delta': 0})
+                
+                # 메트릭 카드 HTML
+                st.markdown(f"""
+                    <div style='
+                        background: linear-gradient(135deg, {config['color']}20 0%, {config['color']}10 100%);
+                        border-radius: 12px;
+                        padding: 20px;
+                        border: 1px solid {config['color']}30;
+                        height: 140px;
+                    '>
+                        <div style='display: flex; align-items: center; margin-bottom: 10px;'>
+                            <span style='font-size: 24px; margin-right: 10px;'>{config['icon']}</span>
+                            <span style='color: {COLORS['muted']}; font-size: 14px;'>{config['title']}</span>
+                        </div>
+                        <div style='font-size: 32px; font-weight: bold; color: {config['color']};'>
+                            {metric_data['value']}{config['suffix']}
+                        </div>
+                        <div style='font-size: 14px; color: {"#10B981" if metric_data["delta"] > 0 else "#EF4444"}; margin-top: 5px;'>
+                            {"↑" if metric_data["delta"] > 0 else "↓" if metric_data["delta"] < 0 else "─"} 
+                            {abs(metric_data["delta"])}{config['suffix']} {config['delta_prefix']}
+                        </div>
                     </div>
-                    <div class="metric-value" style="color: {config['color']}">
-                        {metric_data['value']}{config['suffix']}
+                """, unsafe_allow_html=True)
+    
+    def _render_projects_section(self):
+        """프로젝트 섹션"""
+        st.markdown("### 📁 최근 프로젝트")
+        
+        # 프로젝트 목록 조회
+        cache = st.session_state.dashboard_cache['projects']
+        if self._check_cache_validity(cache):
+            projects = cache['data']
+        else:
+            projects = self.db_manager.get_user_projects(self.user_id, limit=5)
+            self._update_cache('projects', projects)
+        
+        if not projects:
+            st.info("아직 프로젝트가 없습니다. 새 프로젝트를 시작해보세요!")
+            if st.button("🚀 첫 프로젝트 만들기"):
+                st.switch_page("pages/2_📝_Project_Setup.py")
+        else:
+            # 프로젝트 카드 그리드
+            for project in projects:
+                with st.container():
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        st.markdown(f"""
+                            <div style='
+                                background-color: {COLORS['surface']};
+                                border-radius: 8px;
+                                padding: 15px;
+                                border: 1px solid {COLORS['light']};
+                            '>
+                                <h4 style='margin: 0;'>{project['name']}</h4>
+                                <p style='color: {COLORS['muted']}; margin: 5px 0;'>
+                                    {project.get('description', '설명 없음')}
+                                </p>
+                                <div style='display: flex; gap: 10px; margin-top: 10px;'>
+                                    <span style='font-size: 12px; background-color: {COLORS['primary']}20; 
+                                          color: {COLORS['primary']}; padding: 4px 8px; border-radius: 4px;'>
+                                        {project.get('field', '일반')}
+                                    </span>
+                                    <span style='font-size: 12px; color: {COLORS['muted']}'>
+                                        실험: {project.get('experiment_count', 0)}개
+                                    </span>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        # 프로젝트 상태
+                        status = project.get('status', 'active')
+                        status_color = COLORS['success'] if status == 'active' else COLORS['muted']
+                        status_text = '진행중' if status == 'active' else '완료'
+                        
+                        st.markdown(f"""
+                            <div style='text-align: center; padding-top: 20px;'>
+                                <span style='color: {status_color}; font-weight: bold;'>
+                                    ● {status_text}
+                                </span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col3:
+                        # 액션 버튼
+                        if st.button("열기", key=f"open_project_{project['id']}"):
+                            st.session_state.current_project = project
+                            st.switch_page("pages/3_🧪_Experiment_Design.py")
+    
+    def _render_charts_section(self):
+        """차트 섹션"""
+        st.markdown("### 📈 실험 분석")
+        
+        # 탭 생성
+        tab1, tab2, tab3 = st.tabs(["실험 추이", "성공률 분석", "모듈별 사용"])
+        
+        with tab1:
+            self._render_experiment_trend_chart()
+        
+        with tab2:
+            self._render_success_rate_chart()
+        
+        with tab3:
+            self._render_module_usage_chart()
+    
+    def _render_experiment_trend_chart(self):
+        """실험 추이 차트"""
+        # 데이터 준비
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=30)
+        
+        dates = pd.date_range(start_date, end_date, freq='D')
+        
+        # 실제 데이터 조회 (여기서는 시뮬레이션)
+        experiments_per_day = []
+        for date in dates:
+            count = self.db_manager.count_experiments_on_date(self.user_id, date)
+            experiments_per_day.append(count or np.random.randint(0, 5))
+        
+        # Plotly 차트
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=experiments_per_day,
+            mode='lines+markers',
+            name='실험 수',
+            line=dict(color=COLORS['primary'], width=3),
+            marker=dict(size=6),
+            fill='tozeroy',
+            fillcolor=f"rgba(124, 58, 237, 0.1)"
+        ))
+        
+        fig.update_layout(
+            title="최근 30일 실험 추이",
+            xaxis_title="날짜",
+            yaxis_title="실험 수",
+            hovermode='x unified',
+            height=350,
+            margin=dict(l=0, r=0, t=40, b=0)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_success_rate_chart(self):
+        """성공률 분석 차트"""
+        # 데이터 준비
+        success_data = self.db_manager.get_success_rate_by_month(self.user_id, months=6)
+        
+        if not success_data:
+            # 시뮬레이션 데이터
+            months = pd.date_range(end=datetime.now(), periods=6, freq='M')
+            success_rates = [70 + np.random.randint(-10, 20) for _ in range(6)]
+            avg_rate = 75
+        else:
+            months = [d['month'] for d in success_data]
+            success_rates = [d['rate'] * 100 for d in success_data]
+            avg_rate = sum(success_rates) / len(success_rates)
+        
+        # Plotly 차트
+        fig = go.Figure()
+        
+        # 성공률 바
+        fig.add_trace(go.Bar(
+            x=months,
+            y=success_rates,
+            name='성공률',
+            marker_color=[COLORS['success'] if r >= avg_rate else COLORS['warning'] 
+                         for r in success_rates]
+        ))
+        
+        # 평균선
+        fig.add_hline(
+            y=avg_rate,
+            line_dash="dash",
+            line_color=COLORS['muted'],
+            annotation_text=f"평균: {avg_rate:.1f}%"
+        )
+        
+        fig.update_layout(
+            title="월별 실험 성공률",
+            xaxis_title="월",
+            yaxis_title="성공률 (%)",
+            height=350,
+            margin=dict(l=0, r=0, t=40, b=0),
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_module_usage_chart(self):
+        """모듈별 사용 차트"""
+        # 데이터 준비
+        module_data = self.db_manager.get_module_usage_stats(self.user_id)
+        
+        if not module_data:
+            # 시뮬레이션 데이터
+            modules = ['화학합성', '재료특성', '바이오고분자', '복합재료', '기타']
+            values = [30, 25, 20, 15, 10]
+        else:
+            modules = [d['module'] for d in module_data]
+            values = [d['count'] for d in module_data]
+        
+        # Plotly 도넛 차트
+        fig = go.Figure(data=[go.Pie(
+            labels=modules,
+            values=values,
+            hole=.4,
+            marker_colors=[COLORS['primary'], COLORS['secondary'], 
+                          COLORS['success'], COLORS['warning'], COLORS['info']]
+        )])
+        
+        fig.update_layout(
+            title="실험 모듈 사용 비율",
+            height=350,
+            margin=dict(l=0, r=0, t=40, b=0),
+            showlegend=True,
+            legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_activity_timeline(self):
+        """활동 타임라인"""
+        st.markdown("### 🕐 최근 활동")
+        
+        # 활동 데이터 조회
+        activities = self.db_manager.get_user_activities(self.user_id, limit=10)
+        
+        if not activities:
+            st.info("아직 활동 기록이 없습니다.")
+        else:
+            for activity in activities:
+                activity_type = ACTIVITY_TYPES.get(activity['type'], {})
+                
+                # 시간 포맷
+                time_diff = datetime.now() - activity['timestamp']
+                if time_diff.days > 0:
+                    time_str = f"{time_diff.days}일 전"
+                elif time_diff.seconds > 3600:
+                    time_str = f"{time_diff.seconds // 3600}시간 전"
+                else:
+                    time_str = f"{time_diff.seconds // 60}분 전"
+                
+                # 활동 카드
+                st.markdown(f"""
+                    <div style='
+                        background-color: {COLORS['surface']};
+                        border-left: 3px solid {activity_type.get('color', COLORS['muted'])};
+                        padding: 10px 15px;
+                        margin-bottom: 10px;
+                        border-radius: 0 8px 8px 0;
+                    '>
+                        <div style='display: flex; justify-content: space-between; align-items: center;'>
+                            <div>
+                                <span style='font-size: 18px; margin-right: 8px;'>
+                                    {activity_type.get('icon', '📌')}
+                                </span>
+                                <span style='font-weight: bold;'>
+                                    {activity_type.get('label', activity['type'])}
+                                </span>
+                            </div>
+                            <span style='font-size: 12px; color: {COLORS['muted']};'>
+                                {time_str}
+                            </span>
+                        </div>
+                        <div style='margin-top: 5px; font-size: 14px; color: {COLORS['text_secondary']};'>
+                            {activity.get('description', '')}
+                        </div>
                     </div>
-                    <div class="metric-delta {delta_class}">
-                        {delta_symbol}{metric_data['delta']}
+                """, unsafe_allow_html=True)
+    
+    def _render_progress_section(self):
+        """레벨 & 업적 섹션"""
+        st.markdown("### 🏆 성장 현황")
+        
+        # 레벨 진행률
+        user_points = self.user.get('points', 0)
+        current_level = self._get_user_level(user_points)
+        next_level = self._get_next_level(user_points)
+        
+        if next_level:
+            progress = (user_points - current_level['min']) / (next_level['min'] - current_level['min'])
+            points_needed = next_level['min'] - user_points
+            
+            st.markdown(f"""
+                <div style='margin-bottom: 20px;'>
+                    <div style='display: flex; justify-content: space-between; margin-bottom: 5px;'>
+                        <span>{current_level['label']}</span>
+                        <span>{next_level['label']}</span>
+                    </div>
+                    <div style='background-color: {COLORS['light']}; border-radius: 10px; height: 20px;'>
+                        <div style='
+                            background: linear-gradient(90deg, {COLORS['primary']} 0%, {COLORS['secondary']} 100%);
+                            width: {progress * 100}%;
+                            height: 100%;
+                            border-radius: 10px;
+                            transition: width 0.5s ease;
+                        '></div>
+                    </div>
+                    <div style='text-align: center; margin-top: 5px; font-size: 12px; color: {COLORS['muted']};'>
+                        {points_needed} 포인트 더 필요
                     </div>
                 </div>
             """, unsafe_allow_html=True)
-
-def render_level_progress():
-    """레벨 진행률 섹션"""
-    user = st.session_state.user
-    points = user.get('points', 0)
-    level_info = get_user_level(points)
-    
-    current = level_info['current_info']
-    next_info = level_info['next_info']
-    progress = level_info['progress']
-    
-    st.markdown(f"""
-        <div class="level-progress">
-            <div class="level-icon">{current['icon']}</div>
-            <div class="level-info">
-                <div style="font-weight: 600; font-size: 1.1rem;">
-                    {current['name']}
-                </div>
-                <div style="font-size: 0.875rem; opacity: 0.9;">
-                    {points} 포인트
-                    {f" / 다음 레벨까지 {next_info['min_points'] - points}점" if next_info else " (최고 레벨)"}
-                </div>
-                <div class="level-bar">
-                    <div class="level-fill" style="width: {progress}%"></div>
-                </div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-def render_activity_timeline():
-    """활동 타임라인"""
-    st.markdown("### 🕒 최근 활동")
-    
-    activities = load_recent_activities()
-    
-    if not activities:
-        st.info("아직 활동 내역이 없습니다. 첫 프로젝트를 시작해보세요!")
-        return
-    
-    for activity in activities[:5]:
-        time_diff = datetime.now() - activity['created_at']
         
-        if time_diff.days > 0:
-            time_str = f"{time_diff.days}일 전"
-        elif time_diff.seconds > 3600:
-            time_str = f"{time_diff.seconds // 3600}시간 전"
-        elif time_diff.seconds > 60:
-            time_str = f"{time_diff.seconds // 60}분 전"
+        # 최근 획득 업적
+        st.markdown("#### 최근 업적")
+        
+        recent_achievements = self.db_manager.get_user_achievements(self.user_id, limit=3)
+        
+        if not recent_achievements:
+            st.info("아직 획득한 업적이 없습니다. 계속 활동하면 업적을 얻을 수 있어요!")
         else:
-            time_str = "방금 전"
-        
-        st.markdown(f"""
-            <div class="activity-item">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <span style="font-size: 1.2rem; margin-right: 0.5rem;">
-                            {activity['icon']}
-                        </span>
-                        <span style="font-weight: 500;">
-                            {activity['text']}
-                        </span>
-                    </div>
-                    <div style="color: #6b7280; font-size: 0.875rem;">
-                        {time_str}
-                    </div>
-                </div>
-                {f"<div style='color: #6b7280; font-size: 0.875rem; margin-top: 0.5rem; margin-left: 2rem;'>{activity['details'].get('description', '')}</div>" if activity['details'].get('description') else ""}
-            </div>
-        """, unsafe_allow_html=True)
-    
-    if len(activities) > 5:
-        if st.button("더 보기"):
-            st.session_state.show_all_activities = True
-
-def render_charts_section():
-    """차트 섹션"""
-    st.markdown("### 📈 데이터 분석")
-    
-    chart_data = load_chart_data()
-    
-    col1, col2 = st.columns(2)
-    
-    # 프로젝트 상태 분포
-    with col1:
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        st.markdown("#### 프로젝트 상태")
-        
-        if chart_data['project_status']:
-            df = pd.DataFrame(chart_data['project_status'])
-            
-            fig = go.Figure(data=[go.Pie(
-                labels=df['status'].map({
-                    'active': '진행중',
-                    'completed': '완료',
-                    'archived': '보관됨'
-                }),
-                values=df['count'],
-                hole=0.3,
-                marker_colors=['#10b981', '#3b82f6', '#6b7280']
-            )])
-            
-            fig.update_layout(
-                height=300,
-                margin=dict(l=0, r=0, t=0, b=0),
-                showlegend=True
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("아직 프로젝트가 없습니다.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # 월별 실험 추이
-    with col2:
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        st.markdown("#### 월별 실험 추이")
-        
-        if chart_data['monthly_experiments']:
-            df = pd.DataFrame(chart_data['monthly_experiments'])
-            
-            fig = go.Figure()
-            
-            # 전체 실험
-            fig.add_trace(go.Scatter(
-                x=df['month'],
-                y=df['count'],
-                mode='lines+markers',
-                name='전체',
-                line=dict(color='#3b82f6', width=3),
-                marker=dict(size=8)
-            ))
-            
-            # 성공 실험
-            fig.add_trace(go.Scatter(
-                x=df['month'],
-                y=df['success_count'],
-                mode='lines+markers',
-                name='성공',
-                line=dict(color='#10b981', width=3),
-                marker=dict(size=8)
-            ))
-            
-            fig.update_layout(
-                height=300,
-                margin=dict(l=0, r=0, t=0, b=0),
-                xaxis_title="월",
-                yaxis_title="실험 수",
-                showlegend=True
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("아직 실험 데이터가 없습니다.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-
-def render_projects_section():
-    """프로젝트 섹션"""
-    st.markdown("### 📁 내 프로젝트")
-    
-    # 탭
-    tab1, tab2, tab3 = st.tabs(["진행중", "완료", "전체"])
-    
-    with tab1:
-        projects = load_projects_data(status='active')
-        render_project_list(projects)
-    
-    with tab2:
-        projects = load_projects_data(status='completed')
-        render_project_list(projects)
-    
-    with tab3:
-        projects = load_projects_data()
-        render_project_list(projects)
-
-def render_project_list(projects: List[Dict[str, Any]]):
-    """프로젝트 목록 렌더링"""
-    if not projects:
-        st.info("프로젝트가 없습니다. 새 프로젝트를 시작해보세요!")
-        if st.button("➕ 새 프로젝트 만들기"):
-            st.switch_page("pages/2_📝_Project_Setup.py")
-        return
-    
-    for project in projects[:5]:
-        # 진행률 계산
-        total_experiments = project.get('experiment_count', 0)
-        completed_experiments = project.get('completed_count', 0)
-        progress = (completed_experiments / total_experiments * 100) if total_experiments > 0 else 0
-        
-        # 상태 색상
-        status_colors = {
-            'active': '#10b981',
-            'completed': '#3b82f6',
-            'archived': '#6b7280'
-        }
-        
-        st.markdown(f"""
-            <div class="project-card">
-                <div style="display: flex; justify-content: space-between; align-items: start;">
-                    <div style="flex: 1;">
-                        <h4 style="margin: 0; color: #1f2937;">
-                            {project['name']}
-                        </h4>
-                        <p style="color: #6b7280; font-size: 0.875rem; margin: 0.5rem 0;">
-                            {project.get('description', '설명 없음')}
-                        </p>
-                        <div style="display: flex; gap: 1rem; margin-top: 0.5rem;">
-                            <span style="font-size: 0.875rem; color: #6b7280;">
-                                🧪 실험 {total_experiments}개
-                            </span>
-                            <span style="font-size: 0.875rem; color: #6b7280;">
-                                👥 협업자 {project.get('collaborator_count', 0)}명
-                            </span>
-                        </div>
-                    </div>
-                    <div style="text-align: right;">
-                        <span style="
-                            display: inline-block;
-                            padding: 0.25rem 0.75rem;
-                            background: {status_colors.get(project['status'], '#6b7280')}20;
-                            color: {status_colors.get(project['status'], '#6b7280')};
-                            border-radius: 20px;
-                            font-size: 0.75rem;
-                            font-weight: 500;
-                        ">
-                            {{'active': '진행중', 'completed': '완료', 'archived': '보관됨'}.get(project['status'], project['status'])}
-                        </span>
-                    </div>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" style="width: {progress}%"></div>
-                </div>
-                <div style="text-align: right; font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem;">
-                    진행률 {progress:.0f}%
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        # 프로젝트 선택
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            if st.button("열기", key=f"open_{project['id']}"):
-                st.session_state.selected_project = project
-                st.switch_page("pages/3_🧪_Experiment_Design.py")
-
-def render_ai_recommendations():
-    """AI 추천 섹션"""
-    st.markdown("### 🤖 AI 추천")
-    
-    # AI 설명 모드 확인
-    show_details = st.session_state.get('show_ai_details', False)
-    
-    # 추천 카드
-    recommendations = [
-        {
-            'title': '다음 실험 제안',
-            'icon': '🔬',
-            'content': '최근 PLA 복합재료 실험 결과를 바탕으로, 강화제 함량을 5% 증가시킨 추가 실험을 권장합니다.',
-            'reasoning': '이전 실험에서 강화제 3%일 때 인장강도가 15% 향상되었으며, 선형 관계를 고려할 때 5%에서 더 좋은 결과가 예상됩니다.'
-        },
-        {
-            'title': '데이터 분석 인사이트',
-            'icon': '📊',
-            'content': '지난 달 실험 성공률이 85%로 평균보다 10% 높습니다. 현재 실험 설계 방법을 계속 유지하세요.',
-            'reasoning': '통계적 분석 결과, 현재 사용 중인 Central Composite Design이 귀하의 실험 목적에 최적화되어 있습니다.'
-        },
-        {
-            'title': '협업 기회',
-            'icon': '🤝',
-            'content': '비슷한 연구를 진행 중인 김박사님과의 협업을 추천합니다. 시너지 효과가 기대됩니다.',
-            'reasoning': '두 분의 연구 키워드 매칭률이 78%이며, 상호 보완적인 전문 분야를 보유하고 있습니다.'
-        }
-    ]
-    
-    for rec in recommendations:
-        with st.container():
-            col1, col2 = st.columns([10, 1])
-            
-            with col1:
+            for achievement in recent_achievements:
+                ach_data = ACHIEVEMENTS.get(achievement['type'], {})
+                
                 st.markdown(f"""
-                    <div style="
-                        background: #f8f9fa;
-                        padding: 1rem;
+                    <div style='
+                        background-color: {COLORS['warning']}20;
+                        border: 1px solid {COLORS['warning']}40;
                         border-radius: 8px;
-                        border-left: 3px solid #667eea;
-                        margin-bottom: 0.5rem;
-                    ">
-                        <div style="font-weight: 600; margin-bottom: 0.5rem;">
-                            {rec['icon']} {rec['title']}
-                        </div>
-                        <div style="color: #4b5563;">
-                            {rec['content']}
+                        padding: 10px;
+                        margin-bottom: 10px;
+                    '>
+                        <div style='display: flex; align-items: center;'>
+                            <span style='font-size: 24px; margin-right: 10px;'>
+                                {ach_data.get('icon', '🏅')}
+                            </span>
+                            <div>
+                                <div style='font-weight: bold;'>{ach_data.get('name', '업적')}</div>
+                                <div style='font-size: 12px; color: {COLORS['muted']};'>
+                                    {ach_data.get('description', '')}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
-            
-            with col2:
-                if st.button("🔍", key=f"detail_{rec['title']}", help="상세 설명"):
-                    st.session_state[f"show_detail_{rec['title']}"] = not st.session_state.get(f"show_detail_{rec['title']}", False)
-            
-            # 상세 설명 (토글)
-            if show_details or st.session_state.get(f"show_detail_{rec['title']}", False):
-                st.markdown(f"""
-                    <div style="
-                        background: #e5e7eb;
-                        padding: 1rem;
-                        border-radius: 8px;
-                        margin-bottom: 1rem;
-                        font-size: 0.875rem;
-                        color: #374151;
-                    ">
-                        <strong>🤔 AI 추론 과정:</strong><br>
-                        {rec['reasoning']}
-                    </div>
-                """, unsafe_allow_html=True)
-
-def render_quick_actions():
-    """빠른 실행 버튼"""
-    st.markdown("### ⚡ 빠른 실행")
     
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if st.button("🆕 새 프로젝트", use_container_width=True):
-            st.switch_page("pages/2_📝_Project_Setup.py")
-    
-    with col2:
-        if st.button("🧪 실험 설계", use_container_width=True):
-            st.switch_page("pages/3_🧪_Experiment_Design.py")
-    
-    with col3:
-        if st.button("📊 데이터 분석", use_container_width=True):
-            st.switch_page("pages/4_📈_Data_Analysis.py")
-    
-    with col4:
-        if st.button("🔍 문헌 검색", use_container_width=True):
-            st.switch_page("pages/5_🔍_Literature_Search.py")
-
-# =============================================================================
-# 🎯 메인 함수
-# =============================================================================
-
-def main():
-    """메인 함수"""
-    # 초기화
-    init_session_state()
-    
-    # 헤더
-    render_header()
-    
-    # 게스트 모드 안내
-    if is_guest:
-        st.info("👋 게스트 모드로 둘러보는 중입니다. 일부 기능이 제한될 수 있습니다.")
-    
-    # 메인 레이아웃
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # 메트릭 카드
-        render_metrics_section()
-        
-        # 차트 섹션
-        render_charts_section()
-        
-        # 프로젝트 섹션
-        render_projects_section()
-    
-    with col2:
-        # 레벨 진행률
-        render_level_progress()
-        
-        # 활동 타임라인
-        render_activity_timeline()
+    def _render_notifications_section(self):
+        """알림 & 추천 섹션"""
+        if st.session_state.get('show_notifications', False):
+            with st.container():
+                st.markdown("### 🔔 알림")
+                
+                notifications = self.notification_manager.get_unread_notifications(self.user_id)
+                
+                if not notifications:
+                    st.info("새로운 알림이 없습니다.")
+                else:
+                    for notif in notifications[:5]:
+                        col1, col2 = st.columns([10, 1])
+                        
+                        with col1:
+                            st.markdown(f"""
+                                <div style='
+                                    background-color: {COLORS['info']}10;
+                                    border-left: 3px solid {COLORS['info']};
+                                    padding: 10px;
+                                    margin-bottom: 10px;
+                                    border-radius: 0 8px 8px 0;
+                                '>
+                                    <div style='font-weight: bold;'>{notif['title']}</div>
+                                    <div style='font-size: 14px; margin-top: 5px;'>{notif['message']}</div>
+                                    <div style='font-size: 12px; color: {COLORS['muted']}; margin-top: 5px;'>
+                                        {self._format_time(notif['created_at'])}
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                        
+                        with col2:
+                            if st.button("✓", key=f"mark_read_{notif['id']}"):
+                                self.notification_manager.mark_as_read(notif['id'])
+                                st.rerun()
         
         # AI 추천
-        render_ai_recommendations()
+        st.markdown("### 💡 AI 추천")
+        
+        recommendations = self._get_ai_recommendations()
+        
+        cols = st.columns(len(recommendations))
+        for idx, rec in enumerate(recommendations):
+            with cols[idx]:
+                st.markdown(f"""
+                    <div style='
+                        background: linear-gradient(135deg, {COLORS['secondary']}10 0%, {COLORS['primary']}10 100%);
+                        border-radius: 12px;
+                        padding: 15px;
+                        height: 150px;
+                        border: 1px solid {COLORS['light']};
+                    '>
+                        <div style='font-size: 24px; margin-bottom: 10px;'>{rec['icon']}</div>
+                        <div style='font-weight: bold; margin-bottom: 5px;'>{rec['title']}</div>
+                        <div style='font-size: 12px; color: {COLORS['text_secondary']};'>
+                            {rec['description']}
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(rec['action_text'], key=f"rec_{idx}", use_container_width=True):
+                    rec['action']()
     
-    # 빠른 실행
-    st.divider()
-    render_quick_actions()
+    def _render_sync_status(self):
+        """동기화 상태 표시"""
+        sync_status = self.sync_manager.get_sync_status()
+        
+        if sync_status['is_online']:
+            status_color = COLORS['success']
+            status_text = "온라인"
+            status_icon = "🟢"
+        else:
+            status_color = COLORS['muted']
+            status_text = "오프라인"
+            status_icon = "⚫"
+        
+        # 우측 하단 고정 위치
+        st.markdown(f"""
+            <div style='
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background-color: {COLORS['surface']};
+                border: 1px solid {status_color};
+                border-radius: 20px;
+                padding: 8px 16px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                z-index: 999;
+            '>
+                <span>{status_icon}</span>
+                <span style='font-size: 14px; color: {status_color};'>{status_text}</span>
+            </div>
+        """, unsafe_allow_html=True)
     
-    # 사이드바 - AI 설명 모드
-    with st.sidebar:
-        st.divider()
-        st.markdown("### ⚙️ 대시보드 설정")
+    def _render_ai_explanation_mode(self):
+        """AI 설명 모드 설정 (전역)"""
+        with st.sidebar.expander("🤖 AI 설명 설정", expanded=False):
+            st.markdown("AI 응답의 상세도를 조절할 수 있습니다.")
+            
+            explanation_mode = st.radio(
+                "설명 모드",
+                ["자동 (레벨 기반)", "항상 간단히", "항상 상세히"],
+                index=0,
+                key="ai_explanation_mode"
+            )
+            
+            st.info("""
+                💡 **팁**: 언제든지 AI 응답 옆의 '🔍' 버튼을 클릭하여 
+                상세 설명을 보거나 숨길 수 있습니다.
+            """)
+    
+    # ===========================================================================
+    # 🔧 헬퍼 함수
+    # ===========================================================================
+    
+    def _get_user_level(self, points: int) -> Dict:
+        """사용자 레벨 계산"""
+        for level_key, level_data in LEVEL_SYSTEM.items():
+            if level_data['max'] is None or points <= level_data['max']:
+                return {
+                    'key': level_key,
+                    'label': level_data['label'],
+                    'icon': level_data['icon'],
+                    'min': level_data['min'],
+                    'max': level_data['max']
+                }
+        return LEVEL_SYSTEM['expert']
+    
+    def _get_next_level(self, points: int) -> Optional[Dict]:
+        """다음 레벨 정보"""
+        levels = list(LEVEL_SYSTEM.items())
+        for i, (level_key, level_data) in enumerate(levels):
+            if level_data['max'] and points <= level_data['max']:
+                if i + 1 < len(levels):
+                    next_key, next_data = levels[i + 1]
+                    return {
+                        'key': next_key,
+                        'label': next_data['label'],
+                        'icon': next_data['icon'],
+                        'min': next_data['min'],
+                        'max': next_data['max']
+                    }
+        return None
+    
+    def _format_time(self, timestamp: datetime) -> str:
+        """시간 포맷팅"""
+        diff = datetime.now() - timestamp
         
-        # AI 설명 모드
-        show_details = st.checkbox(
-            "🤖 AI 상세 설명 표시",
-            value=st.session_state.get('show_ai_details', False),
-            help="AI의 추천 이유와 분석 과정을 자세히 볼 수 있습니다"
-        )
-        st.session_state.show_ai_details = show_details
+        if diff.days > 0:
+            return f"{diff.days}일 전"
+        elif diff.seconds > 3600:
+            return f"{diff.seconds // 3600}시간 전"
+        elif diff.seconds > 60:
+            return f"{diff.seconds // 60}분 전"
+        else:
+            return "방금 전"
+    
+    def _get_ai_recommendations(self) -> List[Dict]:
+        """AI 추천 생성"""
+        recommendations = []
         
-        # 자동 새로고침
-        auto_refresh = st.checkbox(
-            "🔄 자동 새로고침",
-            value=False,
-            help="5분마다 대시보드를 자동으로 새로고침합니다"
-        )
+        # 프로젝트가 없는 경우
+        if self.db_manager.count_user_projects(self.user_id) == 0:
+            recommendations.append({
+                'icon': '🚀',
+                'title': '첫 프로젝트 시작',
+                'description': 'AI가 도와드릴게요!',
+                'action_text': '시작하기',
+                'action': lambda: st.switch_page("pages/2_📝_Project_Setup.py")
+            })
         
-        if auto_refresh:
-            time_passed = (datetime.now() - st.session_state.last_refresh).seconds
-            if time_passed >= REFRESH_INTERVAL:
-                st.rerun()
+        # 오랫동안 실험하지 않은 경우
+        last_experiment = self.db_manager.get_last_experiment_date(self.user_id)
+        if last_experiment and (datetime.now() - last_experiment).days > 7:
+            recommendations.append({
+                'icon': '🧪',
+                'title': '실험 재개하기',
+                'description': '일주일간 쉬셨네요!',
+                'action_text': '실험 설계',
+                'action': lambda: st.switch_page("pages/3_🧪_Experiment_Design.py")
+            })
         
-        # 동기화 설정
-        st.divider()
-        st.markdown("### 🔄 동기화 설정")
+        # 분석하지 않은 데이터가 있는 경우
+        unanalyzed_count = self.db_manager.count_unanalyzed_experiments(self.user_id)
+        if unanalyzed_count > 0:
+            recommendations.append({
+                'icon': '📊',
+                'title': '데이터 분석하기',
+                'description': f'{unanalyzed_count}개의 미분석 데이터',
+                'action_text': '분석하기',
+                'action': lambda: st.switch_page("pages/4_📈_Data_Analysis.py")
+            })
         
-        sync_enabled = st.checkbox(
-            "자동 동기화 활성화",
-            value=True,
-            help="온라인 상태에서 자동으로 데이터를 동기화합니다"
-        )
+        # 기본 추천
+        if len(recommendations) < 3:
+            recommendations.append({
+                'icon': '📚',
+                'title': '문헌 검색',
+                'description': '최신 연구 동향 확인',
+                'action_text': '검색하기',
+                'action': lambda: st.switch_page("pages/6_🔍_Literature_Search.py")
+            })
         
-        if st.button("지금 동기화", use_container_width=True):
-            with st.spinner("동기화 중..."):
-                time.sleep(2)  # 실제로는 동기화 로직 실행
-                st.success("✅ 동기화 완료!")
+        return recommendations[:3]
+
+# ===========================================================================
+# 🚀 메인 실행
+# ===========================================================================
+
+def main():
+    """메인 실행 함수"""
+    try:
+        dashboard = DashboardPage()
+        dashboard.render()
+    except Exception as e:
+        logger.error(f"대시보드 렌더링 오류: {e}")
+        st.error(f"페이지 로드 중 오류가 발생했습니다: {str(e)}")
         
-        # 마지막 동기화 시간
-        st.caption("마지막 동기화: 5분 전")
+        if st.button("🔄 새로고침"):
+            st.rerun()
 
 if __name__ == "__main__":
     main()
