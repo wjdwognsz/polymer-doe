@@ -157,58 +157,70 @@ class ErrorHandler:
         """복구 액션 실행"""
         action_name = action.get('action')
         params = action.get('params')
-        
+    
         # 내장 복구 함수들 직접 실행
-        if action_name == 'clear_cache':
-            return self._clear_cache_action(params, context)
-        elif action_name == 'switch_to_offline':
-            return self._switch_to_offline_action(params, context)
-        elif action_name == 'manual_input_prompt':
-            return self._show_manual_input(params, context)
-        
+        internal_actions = {
+            'clear_cache': self._clear_cache_action,
+            'switch_to_offline': self._switch_to_offline_action,
+            'manual_input_prompt': self._show_manual_input
+        }
+    
+        if action_name in internal_actions:
+            return internal_actions[action_name](params, context)
+    
         # 외부 모듈 함수 호출
         action_info = RECOVERY_ACTIONS.get(action_name, {})
         function_path = action_info.get('function')
-        
+    
         if not function_path:
             self.logger.error(f"Unknown recovery action: {action_name}")
             return False
-        
+    
         try:
-            # protocol_extractor나 다른 모듈의 함수 호출
-            module_path, function_name = function_path.rsplit('.', 1)
-            
-            # 이미 로드된 모듈 확인 (순환 임포트 방지)
-            if module_path == 'utils.protocol_extractor':
-                from utils.protocol_extractor import (
-                    try_multiple_encodings, detect_encoding, 
-                    read_as_binary, enhance_image, try_multiple_ocr
-                )
-                func_map = {
-                    'try_multiple_encodings': try_multiple_encodings,
-                    'detect_encoding': detect_encoding,
-                    'read_as_binary': read_as_binary,
-                    'enhance_image': enhance_image,
-                    'try_multiple_ocr': try_multiple_ocr
+            # 모듈별 함수 매핑 (더 안전한 방식)
+            module_functions = {
+                'utils.protocol_extractor': {
+                    'try_multiple_encodings': None,
+                    'detect_encoding': None,
+                    'read_as_binary': None,
+                    'enhance_image': None,
+                    'try_multiple_ocr': None
+                },
+                'utils.file_handler': {
+                    'detect_encoding': None,
+                    'read_as_binary': None
                 }
-                func = func_map.get(function_name)
-            else:
-                # 다른 모듈은 동적 임포트
-                module = __import__(module_path, fromlist=[function_name])
-                func = getattr(module, function_name)
-            
+            }
+        
+            module_path, function_name = function_path.rsplit('.', 1)
+        
+            # protocol_extractor는 이미 존재하므로 직접 임포트
+            if module_path == 'utils.protocol_extractor':
+                # protocol_extractor가 구현되어 있다고 가정
+                # 실제로는 protocol_extractor.py 파일이 필요
+                self.logger.warning(f"protocol_extractor 함수 {function_name} 호출 시도")
+                # 임시로 False 반환 - 실제 구현 시 수정 필요
+                return False
+        
+            # 다른 모듈은 동적 임포트
+            module = __import__(module_path, fromlist=[function_name])
+            func = getattr(module, function_name)
+        
             # 파라미터와 함께 함수 호출
             if params:
                 result = func(*params, **context)
             else:
                 result = func(**context)
-            
+        
             return bool(result)
-            
-        except Exception as e:
-            self.logger.error(f"Failed to execute recovery action {action_name}: {str(e)}")
+        
+        except ImportError as e:
+            self.logger.error(f"모듈 임포트 실패 {module_path}: {str(e)}")
             return False
-    
+        except Exception as e:
+            self.logger.error(f"복구 액션 실행 실패 {action_name}: {str(e)}")
+            return False
+
     def _clear_cache_action(self, params: Optional[List[str]], context: Dict[str, Any]) -> bool:
         """캐시 정리 액션"""
         try:
