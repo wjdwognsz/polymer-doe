@@ -1,6 +1,6 @@
 """
-0_🔐_Login.py - Universal DOE Platform 인증 페이지
-로컬 우선 인증 시스템 with 선택적 클라우드 동기화
+🔐 로그인 페이지 - Universal DOE Platform
+오프라인 우선 인증 시스템 with 선택적 클라우드 동기화
 """
 import streamlit as st
 import sys
@@ -9,13 +9,16 @@ from datetime import datetime, timedelta
 import re
 import time
 from typing import Optional, Dict, Any
+import bcrypt
+import json
+import os
 
 # 프로젝트 루트 경로 추가
 sys.path.append(str(Path(__file__).parent.parent))
 
 # 페이지 설정 (필수 - 최상단)
 st.set_page_config(
-    page_title="Login - Universal DOE Platform",
+    page_title="로그인 - Universal DOE Platform",
     page_icon="🔐",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -26,126 +29,176 @@ try:
     from utils.auth_manager import get_auth_manager
     from utils.common_ui import get_common_ui
     from utils.database_manager import get_database_manager
+    from utils.error_handler import handle_error
     from config.app_config import SECURITY_CONFIG, APP_INFO
     from config.theme_config import apply_theme
+    from config.error_config import ERROR_CODES
 except ImportError as e:
     st.error(f"필수 모듈을 찾을 수 없습니다: {e}")
     st.info("프로젝트 루트에서 실행 중인지 확인해주세요.")
     st.stop()
 
-# 테마 적용
-apply_theme()
+# 전역 인스턴스
+auth_manager = get_auth_manager()
+ui = get_common_ui()
+db_manager = get_database_manager()
 
-# 전역 변수
-AUTH_MANAGER = get_auth_manager()
-UI = get_common_ui()
-DB_MANAGER = get_database_manager()
+# 상수 정의
+MAX_LOGIN_ATTEMPTS = SECURITY_CONFIG.get('max_login_attempts', 5)
+LOCKOUT_DURATION = timedelta(minutes=SECURITY_CONFIG.get('lockout_minutes', 30))
+PASSWORD_MIN_LENGTH = SECURITY_CONFIG.get('password_min_length', 8)
+
+# UI 텍스트
+UI_TEXTS = {
+    'ko': {
+        'login_title': '🔐 로그인',
+        'signup_title': '👤 회원가입',
+        'forgot_password': '🔑 비밀번호 찾기',
+        'email_placeholder': '이메일 주소를 입력하세요',
+        'password_placeholder': '비밀번호를 입력하세요',
+        'name_placeholder': '이름을 입력하세요',
+        'organization_placeholder': '소속 기관 (선택)',
+        'login_button': '로그인',
+        'signup_button': '회원가입',
+        'reset_button': '비밀번호 재설정',
+        'guest_button': '게스트로 둘러보기',
+        'login_keep': '로그인 상태 유지',
+        'terms_agree': '이용약관에 동의합니다',
+        'privacy_agree': '개인정보처리방침에 동의합니다'
+    },
+    'en': {
+        'login_title': '🔐 Login',
+        'signup_title': '👤 Sign Up',
+        'forgot_password': '🔑 Forgot Password',
+        'email_placeholder': 'Enter your email',
+        'password_placeholder': 'Enter your password',
+        'name_placeholder': 'Enter your name',
+        'organization_placeholder': 'Organization (optional)',
+        'login_button': 'Login',
+        'signup_button': 'Sign Up',
+        'reset_button': 'Reset Password',
+        'guest_button': 'Browse as Guest',
+        'login_keep': 'Keep me logged in',
+        'terms_agree': 'I agree to the Terms of Service',
+        'privacy_agree': 'I agree to the Privacy Policy'
+    }
+}
 
 def initialize_session_state():
     """세션 상태 초기화"""
     defaults = {
-        'login_attempts': 0,
-        'lockout_until': None,
+        'auth_tab': 'login',
+        'login_attempts': {},
         'show_password': False,
-        'show_password_confirm': False,
-        'password_strength': 0,
-        'terms_accepted': False,
-        'remember_me': False,
-        'selected_tab': 0,
-        'show_reset_form': False,
-        'online_status': False
+        'verification_pending': False,
+        'temp_email': None,
+        'language': 'ko',
+        'theme': 'light'
     }
     
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    
-    # 온라인 상태 체크 (비동기적으로)
-    check_online_status()
 
-def check_online_status():
-    """온라인 상태 확인"""
-    try:
-        import requests
-        response = requests.get('https://www.google.com', timeout=2)
-        st.session_state.online_status = response.status_code == 200
-    except:
-        st.session_state.online_status = False
+def get_ui_text(key: str) -> str:
+    """현재 언어에 맞는 UI 텍스트 반환"""
+    lang = st.session_state.get('language', 'ko')
+    return UI_TEXTS[lang].get(key, key)
 
 def validate_email(email: str) -> bool:
     """이메일 형식 검증"""
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
-def calculate_password_strength(password: str) -> Dict[str, Any]:
-    """비밀번호 강도 계산"""
-    strength = 0
-    feedback = []
-    
-    # 길이 체크
-    if len(password) >= SECURITY_CONFIG['password_min_length']:
-        strength += 25
-    else:
-        feedback.append(f"최소 {SECURITY_CONFIG['password_min_length']}자 이상")
-    
-    # 대문자 체크
-    if re.search(r'[A-Z]', password):
-        strength += 25
-    elif SECURITY_CONFIG['password_require_uppercase']:
-        feedback.append("대문자 포함 필요")
-    
-    # 숫자 체크
-    if re.search(r'\d', password):
-        strength += 25
-    elif SECURITY_CONFIG['password_require_number']:
-        feedback.append("숫자 포함 필요")
-    
-    # 특수문자 체크
-    if re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
-        strength += 25
-    elif SECURITY_CONFIG['password_require_special']:
-        feedback.append("특수문자 포함 필요")
-    
-    # 강도별 색상
-    if strength < 50:
-        color = "red"
-        label = "약함"
-    elif strength < 75:
-        color = "orange"
-        label = "보통"
-    else:
-        color = "green"
-        label = "강함"
-    
-    return {
-        'strength': strength,
-        'color': color,
-        'label': label,
-        'feedback': feedback
+def validate_password(password: str) -> Dict[str, Any]:
+    """비밀번호 강도 검증"""
+    result = {
+        'valid': True,
+        'score': 0,
+        'feedback': []
     }
+    
+    # 최소 길이
+    if len(password) < PASSWORD_MIN_LENGTH:
+        result['feedback'].append(f"최소 {PASSWORD_MIN_LENGTH}자 이상")
+        result['valid'] = False
+    else:
+        result['score'] += 1
+    
+    # 대문자
+    if not re.search(r'[A-Z]', password):
+        result['feedback'].append("대문자 포함 필요")
+    else:
+        result['score'] += 1
+    
+    # 소문자
+    if not re.search(r'[a-z]', password):
+        result['feedback'].append("소문자 포함 필요")
+    else:
+        result['score'] += 1
+    
+    # 숫자
+    if not re.search(r'\d', password):
+        result['feedback'].append("숫자 포함 필요")
+    else:
+        result['score'] += 1
+    
+    # 특수문자
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        result['feedback'].append("특수문자 포함 필요")
+    else:
+        result['score'] += 1
+    
+    # 길이 보너스
+    if len(password) >= 12:
+        result['score'] += 1
+    
+    # 강도 레벨
+    if result['score'] <= 2:
+        result['strength'] = 'weak'
+        result['color'] = 'red'
+    elif result['score'] <= 4:
+        result['strength'] = 'medium'
+        result['color'] = 'orange'
+    else:
+        result['strength'] = 'strong'
+        result['color'] = 'green'
+    
+    return result
+
+def check_lockout(email: str) -> bool:
+    """계정 잠금 상태 확인"""
+    attempts = st.session_state.login_attempts.get(email, {})
+    if attempts.get('count', 0) >= MAX_LOGIN_ATTEMPTS:
+        last_attempt = attempts.get('last_attempt')
+        if last_attempt:
+            lockout_end = last_attempt + LOCKOUT_DURATION
+            if datetime.now() < lockout_end:
+                return True
+            else:
+                # 잠금 해제
+                st.session_state.login_attempts[email] = {'count': 0}
+    return False
+
+def record_failed_attempt(email: str):
+    """실패한 로그인 시도 기록"""
+    if email not in st.session_state.login_attempts:
+        st.session_state.login_attempts[email] = {'count': 0}
+    
+    st.session_state.login_attempts[email]['count'] += 1
+    st.session_state.login_attempts[email]['last_attempt'] = datetime.now()
 
 def render_login_tab():
     """로그인 탭 렌더링"""
-    # 잠금 상태 확인
-    if st.session_state.lockout_until:
-        if datetime.now() < st.session_state.lockout_until:
-            remaining = (st.session_state.lockout_until - datetime.now()).seconds
-            st.error(f"🔒 너무 많은 로그인 시도가 있었습니다. {remaining//60}분 {remaining%60}초 후에 다시 시도해주세요.")
-            return
-        else:
-            # 잠금 해제
-            st.session_state.lockout_until = None
-            st.session_state.login_attempts = 0
-    
-    # 로그인 폼
     with st.form("login_form", clear_on_submit=False):
-        st.markdown("### 🔑 로그인")
+        st.markdown(f"### {get_ui_text('login_title')}")
         
         # 이메일 입력
         email = st.text_input(
             "이메일",
-            placeholder="your.email@example.com",
-            help="가입 시 사용한 이메일을 입력하세요"
+            placeholder=get_ui_text('email_placeholder'),
+            key="login_email",
+            help="가입하신 이메일 주소를 입력하세요"
         )
         
         # 비밀번호 입력
@@ -154,374 +207,709 @@ def render_login_tab():
             password = st.text_input(
                 "비밀번호",
                 type="password" if not st.session_state.show_password else "text",
-                placeholder="비밀번호 입력"
+                placeholder=get_ui_text('password_placeholder'),
+                key="login_password"
             )
         with col2:
             st.write("")  # 간격 맞추기
-            if st.button("👁️" if not st.session_state.show_password else "🙈", 
-                        help="비밀번호 표시/숨기기"):
+            if st.button("👁️" if not st.session_state.show_password else "🙈"):
                 st.session_state.show_password = not st.session_state.show_password
                 st.rerun()
         
-        # 옵션
+        # 추가 옵션
         col1, col2 = st.columns(2)
         with col1:
-            remember_me = st.checkbox("로그인 상태 유지", value=st.session_state.remember_me)
+            remember_me = st.checkbox(get_ui_text('login_keep'), value=True)
         with col2:
-            if st.button("비밀번호를 잊으셨나요?", type="secondary"):
-                st.session_state.show_reset_form = True
-                st.rerun()
+            st.empty()  # 정렬용
         
         # 로그인 버튼
-        submitted = st.form_submit_button("🚀 로그인", type="primary", use_container_width=True)
+        submitted = st.form_submit_button(
+            get_ui_text('login_button'),
+            use_container_width=True,
+            type="primary"
+        )
         
         if submitted:
-            # 입력 검증
-            if not email or not password:
-                st.error("이메일과 비밀번호를 모두 입력해주세요.")
-            elif not validate_email(email):
-                st.error("올바른 이메일 형식이 아닙니다.")
-            else:
-                # 로그인 시도
-                with st.spinner("로그인 중..."):
-                    result = AUTH_MANAGER.login(email, password, remember_me)
-                
-                if result['success']:
-                    st.success("✅ 로그인 성공!")
-                    st.balloons()
-                    
-                    # 세션 설정
-                    st.session_state.authenticated = True
-                    st.session_state.user = result['user']
-                    st.session_state.user_email = email
-                    st.session_state.user_role = result['user'].get('role', 'user')
-                    
-                    # 온라인이면 동기화 시도
-                    if st.session_state.online_status:
-                        with st.spinner("클라우드 동기화 중..."):
-                            AUTH_MANAGER.sync_user_data(email)
-                    
-                    time.sleep(1)  # 성공 메시지 표시
-                    st.switch_page("pages/1_📊_Dashboard.py")
-                else:
-                    # 로그인 실패
-                    st.session_state.login_attempts += 1
-                    
-                    if st.session_state.login_attempts >= SECURITY_CONFIG['max_login_attempts']:
-                        st.session_state.lockout_until = datetime.now() + SECURITY_CONFIG['lockout_duration']
-                        st.error(f"🔒 로그인 시도 횟수를 초과했습니다. {SECURITY_CONFIG['lockout_duration'].seconds//60}분 후에 다시 시도해주세요.")
-                    else:
-                        remaining = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
-                        st.error(f"❌ {result.get('message', '로그인에 실패했습니다.')} (남은 시도: {remaining}회)")
+            handle_login(email, password, remember_me)
     
-    # 소셜 로그인 (온라인 시만)
-    if st.session_state.online_status:
-        st.divider()
-        st.markdown("### 또는")
+    # 추가 버튼들
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("비밀번호 찾기", use_container_width=True):
+            st.session_state.auth_tab = 'forgot'
+            st.rerun()
+    
+    with col2:
+        if st.button("회원가입", use_container_width=True):
+            st.session_state.auth_tab = 'signup'
+            st.rerun()
+    
+    with col3:
+        if st.button(get_ui_text('guest_button'), use_container_width=True):
+            handle_guest_login()
+    
+    # 소셜 로그인 (온라인 시)
+    if check_online_status():
+        st.markdown("---")
+        st.markdown("### 소셜 로그인")
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
+        col1, col2 = st.columns(2)
+        with col1:
             if st.button("🔷 Google로 로그인", use_container_width=True):
-                auth_url = AUTH_MANAGER.get_google_auth_url()
-                st.markdown(f'<meta http-equiv="refresh" content="0; url={auth_url}">', 
-                          unsafe_allow_html=True)
-    
-    # 게스트 모드
-    st.divider()
-    if st.button("👀 게스트로 둘러보기", use_container_width=True, type="secondary"):
-        st.session_state.authenticated = True
-        st.session_state.user = {
-            'name': 'Guest User',
-            'email': 'guest@universaldoe.com',
-            'role': 'guest'
-        }
-        st.session_state.guest_mode = True
-        st.info("게스트 모드로 접속합니다. 일부 기능이 제한됩니다.")
-        time.sleep(1)
-        st.switch_page("pages/1_📊_Dashboard.py")
+                handle_google_login()
+        
+        with col2:
+            if st.button("🐙 GitHub로 로그인", use_container_width=True):
+                handle_github_login()
 
 def render_signup_tab():
     """회원가입 탭 렌더링"""
+    st.markdown(f"### {get_ui_text('signup_title')}")
+    
     with st.form("signup_form", clear_on_submit=False):
-        st.markdown("### 🎉 회원가입")
+        # 기본 정보
+        st.markdown("#### 📝 기본 정보")
         
-        # 이름 입력
-        name = st.text_input(
-            "이름",
-            placeholder="홍길동",
-            help="프로필에 표시될 이름입니다"
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input(
+                "이름 *",
+                placeholder=get_ui_text('name_placeholder'),
+                help="실명을 입력해주세요"
+            )
+        
+        with col2:
+            email = st.text_input(
+                "이메일 *",
+                placeholder=get_ui_text('email_placeholder'),
+                help="로그인에 사용할 이메일 주소"
+            )
+        
+        organization = st.text_input(
+            "소속 기관",
+            placeholder=get_ui_text('organization_placeholder'),
+            help="선택사항입니다"
         )
         
-        # 이메일 입력
-        email = st.text_input(
-            "이메일",
-            placeholder="your.email@example.com",
-            help="로그인 시 사용할 이메일입니다"
-        )
+        # 비밀번호
+        st.markdown("#### 🔒 비밀번호 설정")
         
-        # 이메일 유효성 표시
-        if email:
-            if validate_email(email):
-                st.success("✅ 사용 가능한 이메일 형식입니다")
-                # 중복 체크 (실시간)
-                if DB_MANAGER.check_email_exists(email):
-                    st.error("❌ 이미 사용 중인 이메일입니다")
-            else:
-                st.error("❌ 올바른 이메일 형식이 아닙니다")
-        
-        # 비밀번호 입력
-        col1, col2 = st.columns([5, 1])
+        col1, col2 = st.columns(2)
         with col1:
             password = st.text_input(
-                "비밀번호",
-                type="password" if not st.session_state.show_password else "text",
-                placeholder="안전한 비밀번호 입력",
-                help="대소문자, 숫자, 특수문자를 포함해주세요"
+                "비밀번호 *",
+                type="password",
+                help=f"최소 {PASSWORD_MIN_LENGTH}자 이상, 영문/숫자/특수문자 포함"
             )
+            
+            # 비밀번호 강도 표시
+            if password:
+                pw_result = validate_password(password)
+                progress = pw_result['score'] / 6.0
+                st.progress(progress)
+                
+                color_map = {'weak': '🔴', 'medium': '🟡', 'strong': '🟢'}
+                st.write(f"비밀번호 강도: {color_map.get(pw_result['strength'], '')} {pw_result['strength']}")
+                
+                if pw_result['feedback']:
+                    with st.expander("개선 사항"):
+                        for feedback in pw_result['feedback']:
+                            st.write(f"• {feedback}")
+        
         with col2:
-            st.write("")
-            if st.button("👁️" if not st.session_state.show_password else "🙈",
-                        key="pwd_toggle_signup",
-                        help="비밀번호 표시/숨기기"):
-                st.session_state.show_password = not st.session_state.show_password
-                st.rerun()
-        
-        # 비밀번호 강도 표시
-        if password:
-            pwd_info = calculate_password_strength(password)
-            st.progress(pwd_info['strength'] / 100)
-            st.markdown(f"비밀번호 강도: **:{pwd_info['color']}[{pwd_info['label']}]**")
-            if pwd_info['feedback']:
-                st.warning("개선사항: " + ", ".join(pwd_info['feedback']))
-        
-        # 비밀번호 확인
-        col1, col2 = st.columns([5, 1])
-        with col1:
             password_confirm = st.text_input(
-                "비밀번호 확인",
-                type="password" if not st.session_state.show_password_confirm else "text",
-                placeholder="비밀번호 재입력"
+                "비밀번호 확인 *",
+                type="password",
+                help="동일한 비밀번호를 다시 입력하세요"
             )
-        with col2:
-            st.write("")
-            if st.button("👁️" if not st.session_state.show_password_confirm else "🙈",
-                        key="pwd_confirm_toggle",
-                        help="비밀번호 확인 표시/숨기기"):
-                st.session_state.show_password_confirm = not st.session_state.show_password_confirm
-                st.rerun()
-        
-        # 비밀번호 일치 확인
-        if password and password_confirm:
-            if password == password_confirm:
-                st.success("✅ 비밀번호가 일치합니다")
-            else:
-                st.error("❌ 비밀번호가 일치하지 않습니다")
         
         # 약관 동의
-        st.divider()
-        terms_accepted = st.checkbox(
-            "서비스 이용약관 및 개인정보 처리방침에 동의합니다",
-            value=st.session_state.terms_accepted
-        )
+        st.markdown("#### 📋 약관 동의")
         
-        if st.button("이용약관 보기", type="secondary"):
-            with st.expander("서비스 이용약관", expanded=True):
-                st.markdown("""
-                **Universal DOE Platform 이용약관**
-                
-                1. 본 플랫폼은 연구 목적으로 무료로 제공됩니다.
-                2. 사용자의 데이터는 안전하게 보호됩니다.
-                3. 부적절한 사용 시 서비스 이용이 제한될 수 있습니다.
-                4. 자세한 내용은 [GitHub 페이지](https://github.com/universaldoe)를 참조하세요.
-                """)
+        col1, col2 = st.columns(2)
+        with col1:
+            terms_agree = st.checkbox(get_ui_text('terms_agree'))
+            if st.button("이용약관 보기", key="view_terms"):
+                show_terms_modal()
+        
+        with col2:
+            privacy_agree = st.checkbox(get_ui_text('privacy_agree'))
+            if st.button("개인정보처리방침 보기", key="view_privacy"):
+                show_privacy_modal()
         
         # 가입 버튼
-        submitted = st.form_submit_button("🚀 가입하기", type="primary", use_container_width=True)
+        submitted = st.form_submit_button(
+            get_ui_text('signup_button'),
+            use_container_width=True,
+            type="primary"
+        )
         
         if submitted:
-            # 입력 검증
-            errors = []
-            
-            if not name:
-                errors.append("이름을 입력해주세요")
-            if not email:
-                errors.append("이메일을 입력해주세요")
-            elif not validate_email(email):
-                errors.append("올바른 이메일 형식이 아닙니다")
-            elif DB_MANAGER.check_email_exists(email):
-                errors.append("이미 사용 중인 이메일입니다")
-            
-            if not password:
-                errors.append("비밀번호를 입력해주세요")
-            else:
-                pwd_info = calculate_password_strength(password)
-                if pwd_info['strength'] < 50:
-                    errors.append("더 안전한 비밀번호를 사용해주세요")
-            
-            if password != password_confirm:
-                errors.append("비밀번호가 일치하지 않습니다")
-            
-            if not terms_accepted:
-                errors.append("이용약관에 동의해주세요")
-            
-            if errors:
-                for error in errors:
-                    st.error(f"❌ {error}")
-            else:
-                # 회원가입 처리
-                with st.spinner("계정을 생성하는 중..."):
-                    result = AUTH_MANAGER.register(
-                        email=email,
-                        password=password,
-                        name=name
-                    )
-                
-                if result['success']:
-                    st.success("✅ 회원가입이 완료되었습니다!")
-                    st.info("이제 로그인할 수 있습니다.")
-                    
-                    # 온라인이면 환영 이메일 발송 시도
-                    if st.session_state.online_status:
-                        AUTH_MANAGER.send_welcome_email(email, name)
-                    
-                    # 로그인 탭으로 전환
-                    time.sleep(2)
-                    st.session_state.selected_tab = 0
-                    st.rerun()
-                else:
-                    st.error(f"❌ 가입 중 오류가 발생했습니다: {result.get('message', '알 수 없는 오류')}")
-
-def render_reset_password():
-    """비밀번호 재설정 폼"""
-    st.markdown("### 🔓 비밀번호 재설정")
+            handle_signup(name, email, organization, password, password_confirm, 
+                        terms_agree, privacy_agree)
     
-    if st.session_state.online_status:
-        # 온라인: 이메일로 재설정 링크 발송
-        with st.form("reset_form"):
-            email = st.text_input(
-                "가입한 이메일 주소",
-                placeholder="your.email@example.com"
-            )
-            
-            submitted = st.form_submit_button("재설정 링크 받기", use_container_width=True)
-            
-            if submitted:
-                if not email:
-                    st.error("이메일을 입력해주세요")
-                elif not validate_email(email):
-                    st.error("올바른 이메일 형식이 아닙니다")
-                else:
-                    with st.spinner("처리 중..."):
-                        result = AUTH_MANAGER.send_reset_email(email)
-                    
-                    if result['success']:
-                        st.success("✅ 재설정 링크를 이메일로 발송했습니다. 메일함을 확인해주세요.")
-                        st.session_state.show_reset_form = False
-                    else:
-                        st.error(f"❌ {result.get('message', '재설정 링크 발송에 실패했습니다')}")
-    else:
-        # 오프라인: 보안 질문 방식
-        st.info("오프라인 모드에서는 보안 질문을 통해 비밀번호를 재설정합니다.")
-        
-        with st.form("reset_offline_form"):
-            email = st.text_input(
-                "가입한 이메일 주소",
-                placeholder="your.email@example.com"
-            )
-            
-            # 보안 질문 (실제로는 DB에서 가져와야 함)
-            security_answer = st.text_input(
-                "보안 질문: 가장 좋아하는 색은?",
-                placeholder="답변 입력"
-            )
-            
-            new_password = st.text_input(
-                "새 비밀번호",
-                type="password",
-                placeholder="새로운 비밀번호 입력"
-            )
-            
-            submitted = st.form_submit_button("비밀번호 변경", use_container_width=True)
-            
-            if submitted:
-                # 오프라인 재설정 로직
-                st.info("오프라인 비밀번호 재설정 기능은 준비 중입니다.")
-    
-    if st.button("← 로그인으로 돌아가기", type="secondary"):
-        st.session_state.show_reset_form = False
+    # 로그인으로 돌아가기
+    if st.button("← 로그인으로 돌아가기"):
+        st.session_state.auth_tab = 'login'
         st.rerun()
 
-def render_login_page():
-    """메인 로그인 페이지"""
-    # 헤더
-    st.markdown("""
-    <div style="text-align: center; margin-bottom: 2rem;">
-        <h1 style="font-size: 3rem; margin-bottom: 0.5rem;">
-            🧬 Universal DOE Platform
-        </h1>
-        <p style="font-size: 1.2rem; color: #666;">
-            모든 연구자를 위한 AI 기반 실험 설계 플랫폼
-        </p>
-    </div>
+def render_forgot_password_tab():
+    """비밀번호 찾기 탭 렌더링"""
+    st.markdown(f"### {get_ui_text('forgot_password')}")
+    
+    # 온라인/오프라인 확인
+    is_online = check_online_status()
+    
+    if is_online:
+        st.info("📧 가입하신 이메일로 비밀번호 재설정 링크를 보내드립니다.")
+        
+        with st.form("forgot_form"):
+            email = st.text_input(
+                "이메일",
+                placeholder=get_ui_text('email_placeholder'),
+                help="가입하신 이메일 주소를 입력하세요"
+            )
+            
+            submitted = st.form_submit_button(
+                "재설정 링크 전송",
+                use_container_width=True,
+                type="primary"
+            )
+            
+            if submitted:
+                handle_password_reset(email, method='email')
+    else:
+        st.warning("🔌 오프라인 모드에서는 보안 질문으로 비밀번호를 재설정합니다.")
+        
+        with st.form("security_question_form"):
+            email = st.text_input(
+                "이메일",
+                placeholder=get_ui_text('email_placeholder')
+            )
+            
+            security_answer = st.text_input(
+                "가입 시 설정한 보안 질문의 답변",
+                placeholder="예: 첫 반려동물의 이름"
+            )
+            
+            submitted = st.form_submit_button(
+                "비밀번호 재설정",
+                use_container_width=True,
+                type="primary"
+            )
+            
+            if submitted:
+                handle_password_reset(email, method='security', answer=security_answer)
+    
+    # 로그인으로 돌아가기
+    if st.button("← 로그인으로 돌아가기"):
+        st.session_state.auth_tab = 'login'
+        st.rerun()
+
+def handle_login(email: str, password: str, remember_me: bool):
+    """로그인 처리"""
+    # 입력값 검증
+    if not email or not password:
+        ui.show_error("이메일과 비밀번호를 모두 입력해주세요.")
+        return
+    
+    if not validate_email(email):
+        ui.show_error("올바른 이메일 형식이 아닙니다.")
+        return
+    
+    # 계정 잠금 확인
+    if check_lockout(email):
+        remaining_time = LOCKOUT_DURATION.seconds // 60
+        ui.show_error(f"너무 많은 로그인 시도로 계정이 잠겼습니다. {remaining_time}분 후 다시 시도해주세요.")
+        return
+    
+    # 로그인 시도
+    with st.spinner("로그인 중..."):
+        try:
+            success, message, user_info = auth_manager.login(email, password, remember_me)
+            
+            if success:
+                # 세션 설정
+                st.session_state.authenticated = True
+                st.session_state.user = user_info
+                st.session_state.login_attempts.pop(email, None)
+                
+                # 환영 메시지 (애니메이션 효과)
+                placeholder = st.empty()
+                for i in range(3):
+                    placeholder.success(f"환영합니다, {user_info['name']}님! {'🎉' * (i+1)}")
+                    time.sleep(0.3)
+                
+                # 대시보드로 이동
+                time.sleep(0.5)
+                st.switch_page("pages/1_📊_Dashboard.py")
+            else:
+                # 로그인 실패
+                record_failed_attempt(email)
+                attempts_left = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts[email]['count']
+                
+                if attempts_left > 0:
+                    ui.show_error(f"{message} (남은 시도: {attempts_left}회)")
+                else:
+                    ui.show_error(f"계정이 잠겼습니다. {LOCKOUT_DURATION.seconds//60}분 후 다시 시도해주세요.")
+                    
+        except Exception as e:
+            handle_error(e, "로그인 처리 중 오류가 발생했습니다.")
+
+def handle_signup(name: str, email: str, organization: str, password: str, 
+                 password_confirm: str, terms_agree: bool, privacy_agree: bool):
+    """회원가입 처리"""
+    # 입력값 검증
+    errors = []
+    
+    if not name:
+        errors.append("이름을 입력해주세요.")
+    
+    if not email:
+        errors.append("이메일을 입력해주세요.")
+    elif not validate_email(email):
+        errors.append("올바른 이메일 형식이 아닙니다.")
+    
+    if not password:
+        errors.append("비밀번호를 입력해주세요.")
+    else:
+        pw_result = validate_password(password)
+        if not pw_result['valid']:
+            errors.extend(pw_result['feedback'])
+    
+    if password != password_confirm:
+        errors.append("비밀번호가 일치하지 않습니다.")
+    
+    if not terms_agree:
+        errors.append("이용약관에 동의해주세요.")
+    
+    if not privacy_agree:
+        errors.append("개인정보처리방침에 동의해주세요.")
+    
+    if errors:
+        for error in errors:
+            ui.show_error(f"• {error}")
+        return
+    
+    # 회원가입 처리
+    with st.spinner("회원가입 처리 중..."):
+        try:
+            success, message, user_id = auth_manager.register(
+                email=email,
+                password=password,
+                name=name,
+                organization=organization
+            )
+            
+            if success:
+                # 성공 메시지
+                st.balloons()
+                ui.show_success("🎉 회원가입이 완료되었습니다!")
+                
+                # 이메일 인증 필요 시
+                if check_online_status():
+                    st.session_state.verification_pending = True
+                    st.session_state.temp_email = email
+                    ui.show_info("📧 이메일 인증을 위해 메일을 확인해주세요.")
+                    time.sleep(2)
+                
+                # 로그인 탭으로 이동
+                st.session_state.auth_tab = 'login'
+                st.rerun()
+            else:
+                ui.show_error(message)
+                
+        except Exception as e:
+            handle_error(e, "회원가입 처리 중 오류가 발생했습니다.")
+
+def handle_guest_login():
+    """게스트 로그인 처리"""
+    with st.spinner("게스트 모드로 접속 중..."):
+        # 게스트 세션 생성
+        st.session_state.authenticated = True
+        st.session_state.guest_mode = True
+        st.session_state.user = {
+            'id': f'guest_{datetime.now().timestamp()}',
+            'name': '게스트',
+            'email': 'guest@local',
+            'role': 'guest',
+            'permissions': ['read_only', 'local_save']
+        }
+        
+        ui.show_info("📚 게스트 모드로 접속했습니다. 일부 기능이 제한됩니다.")
+        time.sleep(1)
+        
+        # 대시보드로 이동
+        st.switch_page("pages/1_📊_Dashboard.py")
+
+def handle_google_login():
+    """Google OAuth 로그인 실제 구현"""
+    import webbrowser
+    from urllib.parse import urlencode
+    
+    # Google OAuth 설정 (config에서 가져오기)
+    client_id = os.getenv('GOOGLE_OAUTH_CLIENT_ID')
+    redirect_uri = "http://localhost:8501/auth/callback"
+    
+    if not client_id:
+        ui.show_error("Google OAuth가 설정되지 않았습니다. 관리자에게 문의하세요.")
+        return
+    
+    # OAuth URL 생성
+    oauth_params = {
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'response_type': 'code',
+        'scope': 'openid email profile',
+        'access_type': 'offline',
+        'prompt': 'consent'
+    }
+    
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(oauth_params)}"
+    
+    # 세션에 상태 저장
+    st.session_state.oauth_state = 'google_pending'
+    
+    # 사용자를 Google 로그인 페이지로 리다이렉트
+    st.markdown(f"""
+    <meta http-equiv="refresh" content="0; url={auth_url}">
+    <script>window.location.href = "{auth_url}";</script>
     """, unsafe_allow_html=True)
     
-    # 온라인 상태 표시
-    if st.session_state.online_status:
-        st.success("🟢 온라인 모드 - 모든 기능 사용 가능")
-    else:
-        st.warning("🟡 오프라인 모드 - 로컬 기능만 사용 가능")
+    ui.show_info("Google 로그인 페이지로 이동합니다...")
+
+def handle_github_login():
+    """GitHub OAuth 로그인 실제 구현"""
+    from urllib.parse import urlencode
+    import secrets
     
-    # 비밀번호 재설정 폼 표시
-    if st.session_state.show_reset_form:
-        render_reset_password()
-    else:
-        # 탭 선택
-        tab1, tab2 = st.tabs(["🔑 로그인", "🎉 회원가입"])
-        
-        with tab1:
-            render_login_tab()
-        
-        with tab2:
-            render_signup_tab()
+    # GitHub OAuth 설정
+    client_id = os.getenv('GITHUB_CLIENT_ID')
     
-    # 푸터
-    st.divider()
-    st.markdown(
-        f"""
-        <div style="text-align: center; color: #888; font-size: 0.9rem;">
-            {APP_INFO['name']} v{APP_INFO['version']} | 
-            <a href="{APP_INFO['github']}" target="_blank">GitHub</a> | 
-            <a href="#" onclick="alert('도움말 준비 중')">도움말</a>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    if not client_id:
+        ui.show_error("GitHub OAuth가 설정되지 않았습니다. 관리자에게 문의하세요.")
+        return
+    
+    # 상태 토큰 생성 (CSRF 방지)
+    state = secrets.token_urlsafe(32)
+    st.session_state.oauth_state = state
+    
+    # OAuth URL 생성
+    oauth_params = {
+        'client_id': client_id,
+        'redirect_uri': "http://localhost:8501/auth/github/callback",
+        'scope': 'user:email',
+        'state': state
+    }
+    
+    auth_url = f"https://github.com/login/oauth/authorize?{urlencode(oauth_params)}"
+    
+    # GitHub 로그인 페이지로 리다이렉트
+    st.markdown(f"""
+    <meta http-equiv="refresh" content="0; url={auth_url}">
+    <script>window.location.href = "{auth_url}";</script>
+    """, unsafe_allow_html=True)
+    
+    ui.show_info("GitHub 로그인 페이지로 이동합니다...")
+
+def handle_oauth_callback():
+    """OAuth 콜백 처리 (URL 파라미터 확인)"""
+    # URL 파라미터 가져오기
+    params = st.experimental_get_query_params()
+    
+    if 'code' in params and 'state' in params:
+        code = params['code'][0]
+        state = params['state'][0] if 'state' in params else None
+        
+        # Google OAuth 콜백
+        if st.session_state.get('oauth_state') == 'google_pending':
+            process_google_callback(code)
+        
+        # GitHub OAuth 콜백
+        elif st.session_state.get('oauth_state') == state:
+            process_github_callback(code, state)
+    
+    elif 'error' in params:
+        ui.show_error(f"OAuth 로그인 실패: {params['error'][0]}")
+        st.session_state.pop('oauth_state', None)
+
+def process_google_callback(code: str):
+    """Google OAuth 콜백 처리"""
+    import requests
+    
+    try:
+        # 액세스 토큰 요청
+        token_url = "https://oauth2.googleapis.com/token"
+        token_data = {
+            'code': code,
+            'client_id': os.getenv('GOOGLE_OAUTH_CLIENT_ID'),
+            'client_secret': os.getenv('GOOGLE_OAUTH_CLIENT_SECRET'),
+            'redirect_uri': "http://localhost:8501/auth/callback",
+            'grant_type': 'authorization_code'
+        }
+        
+        token_response = requests.post(token_url, data=token_data)
+        token_json = token_response.json()
+        
+        if 'access_token' in token_json:
+            # 사용자 정보 가져오기
+            user_info_url = "https://www.googleapis.com/oauth2/v2/userinfo"
+            headers = {'Authorization': f"Bearer {token_json['access_token']}"}
+            user_response = requests.get(user_info_url, headers=headers)
+            user_info = user_response.json()
+            
+            # 사용자 등록 또는 로그인
+            email = user_info.get('email')
+            name = user_info.get('name')
+            picture = user_info.get('picture')
+            
+            # auth_manager를 통해 소셜 로그인 처리
+            success, message, user_data = auth_manager.social_login(
+                provider='google',
+                email=email,
+                name=name,
+                profile_picture=picture,
+                oauth_id=user_info.get('id')
+            )
+            
+            if success:
+                st.session_state.authenticated = True
+                st.session_state.user = user_data
+                st.session_state.pop('oauth_state', None)
+                
+                # URL 파라미터 제거
+                st.experimental_set_query_params()
+                
+                ui.show_success(f"환영합니다, {name}님! 🎉")
+                time.sleep(1)
+                st.switch_page("pages/1_📊_Dashboard.py")
+            else:
+                ui.show_error(message)
+        else:
+            ui.show_error("Google 로그인에 실패했습니다.")
+            
+    except Exception as e:
+        handle_error(e, "Google OAuth 처리 중 오류가 발생했습니다.")
+    finally:
+        st.session_state.pop('oauth_state', None)
+
+def process_github_callback(code: str, state: str):
+    """GitHub OAuth 콜백 처리"""
+    import requests
+    
+    # CSRF 검증
+    if state != st.session_state.get('oauth_state'):
+        ui.show_error("보안 검증 실패: 잘못된 상태 토큰")
+        return
+    
+    try:
+        # 액세스 토큰 요청
+        token_url = "https://github.com/login/oauth/access_token"
+        token_data = {
+            'client_id': os.getenv('GITHUB_CLIENT_ID'),
+            'client_secret': os.getenv('GITHUB_CLIENT_SECRET'),
+            'code': code,
+            'state': state
+        }
+        headers = {'Accept': 'application/json'}
+        
+        token_response = requests.post(token_url, data=token_data, headers=headers)
+        token_json = token_response.json()
+        
+        if 'access_token' in token_json:
+            # 사용자 정보 가져오기
+            user_url = "https://api.github.com/user"
+            headers = {'Authorization': f"token {token_json['access_token']}"}
+            user_response = requests.get(user_url, headers=headers)
+            user_info = user_response.json()
+            
+            # 이메일 가져오기 (별도 요청 필요)
+            email_url = "https://api.github.com/user/emails"
+            email_response = requests.get(email_url, headers=headers)
+            emails = email_response.json()
+            primary_email = next((e['email'] for e in emails if e['primary']), None)
+            
+            # 사용자 등록 또는 로그인
+            success, message, user_data = auth_manager.social_login(
+                provider='github',
+                email=primary_email or f"{user_info['login']}@github.local",
+                name=user_info.get('name') or user_info['login'],
+                profile_picture=user_info.get('avatar_url'),
+                oauth_id=str(user_info['id'])
+            )
+            
+            if success:
+                st.session_state.authenticated = True
+                st.session_state.user = user_data
+                st.session_state.pop('oauth_state', None)
+                
+                # URL 파라미터 제거
+                st.experimental_set_query_params()
+                
+                ui.show_success(f"환영합니다, {user_data['name']}님! 🐙")
+                time.sleep(1)
+                st.switch_page("pages/1_📊_Dashboard.py")
+            else:
+                ui.show_error(message)
+        else:
+            ui.show_error(f"GitHub 로그인 실패: {token_json.get('error_description', 'Unknown error')}")
+            
+    except Exception as e:
+        handle_error(e, "GitHub OAuth 처리 중 오류가 발생했습니다.")
+    finally:
+        st.session_state.pop('oauth_state', None)
+
+def handle_password_reset(email: str, method: str = 'email', answer: str = None):
+    """비밀번호 재설정 처리"""
+    if not email:
+        ui.show_error("이메일을 입력해주세요.")
+        return
+    
+    if not validate_email(email):
+        ui.show_error("올바른 이메일 형식이 아닙니다.")
+        return
+    
+    with st.spinner("처리 중..."):
+        try:
+            if method == 'email':
+                # 이메일로 재설정 링크 전송
+                success, message = auth_manager.send_password_reset_email(email)
+            else:
+                # 보안 질문으로 재설정
+                success, message = auth_manager.reset_password_with_security(email, answer)
+            
+            if success:
+                ui.show_success(message)
+                time.sleep(2)
+                st.session_state.auth_tab = 'login'
+                st.rerun()
+            else:
+                ui.show_error(message)
+                
+        except Exception as e:
+            handle_error(e, "비밀번호 재설정 중 오류가 발생했습니다.")
+
+def check_online_status() -> bool:
+    """온라인 상태 확인"""
+    try:
+        import requests
+        response = requests.get('https://www.google.com', timeout=3)
+        return response.status_code == 200
+    except:
+        return False
+
+def show_terms_modal():
+    """이용약관 모달"""
+    with st.expander("서비스 이용약관", expanded=True):
+        st.markdown("""
+        ### Universal DOE Platform 이용약관
+        
+        **제 1조 (목적)**
+        이 약관은 Universal DOE Platform(이하 "서비스")의 이용에 관한 조건 및 절차를 규정함을 목적으로 합니다.
+        
+        **제 2조 (정의)**
+        1. "서비스"란 회사가 제공하는 실험 설계 플랫폼을 의미합니다.
+        2. "회원"이란 이 약관에 동의하고 회원가입을 한 자를 의미합니다.
+        3. "게스트"란 회원가입 없이 제한된 기능을 이용하는 자를 의미합니다.
+        
+        **제 3조 (약관의 효력 및 변경)**
+        1. 이 약관은 서비스를 이용하고자 하는 모든 회원에게 적용됩니다.
+        2. 회사는 필요한 경우 약관을 변경할 수 있으며, 변경사항은 서비스 내 공지합니다.
+        
+        [이하 약관 내용...]
+        """)
+
+def show_privacy_modal():
+    """개인정보처리방침 모달"""
+    with st.expander("개인정보처리방침", expanded=True):
+        st.markdown("""
+        ### Universal DOE Platform 개인정보처리방침
+        
+        **1. 수집하는 개인정보**
+        - 필수: 이메일, 비밀번호, 이름
+        - 선택: 소속 기관, 연구 분야
+        
+        **2. 개인정보의 이용목적**
+        - 회원 관리 및 본인 확인
+        - 서비스 제공 및 개선
+        - 중요한 공지사항 전달
+        
+        **3. 개인정보의 보관 및 파기**
+        - 회원 탈퇴 시 즉시 파기
+        - 단, 법령에 따라 보관이 필요한 경우 해당 기간 동안 보관
+        
+        **4. 개인정보의 제3자 제공**
+        - 원칙적으로 외부에 제공하지 않음
+        - 단, 법령에 의한 경우 예외
+        
+        [이하 개인정보처리방침 내용...]
+        """)
 
 def main():
     """메인 함수"""
-    # 세션 초기화
+    # 테마 적용
+    apply_theme()
+    
+    # 세션 상태 초기화
     initialize_session_state()
     
-    # 이미 인증된 경우 대시보드로 리다이렉트
+    # 이미 로그인된 경우 대시보드로 리다이렉트
     if st.session_state.get('authenticated', False):
         st.switch_page("pages/1_📊_Dashboard.py")
         return
     
-    # Google OAuth 콜백 처리
-    query_params = st.query_params
-    if 'code' in query_params:
-        with st.spinner("Google 로그인 처리 중..."):
-            result = AUTH_MANAGER.handle_google_callback(query_params['code'])
-            if result['success']:
-                st.session_state.authenticated = True
-                st.session_state.user = result['user']
-                st.success("✅ Google 로그인 성공!")
-                st.switch_page("pages/1_📊_Dashboard.py")
-            else:
-                st.error(f"❌ Google 로그인 실패: {result.get('message')}")
+    # 헤더
+    st.markdown("""
+    <div style='text-align: center; padding: 2rem 0;'>
+        <h1 style='font-size: 3rem; font-weight: bold; 
+                   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                   -webkit-background-clip: text;
+                   -webkit-text-fill-color: transparent;
+                   margin-bottom: 0.5rem;'>
+            Universal DOE Platform
+        </h1>
+        <p style='font-size: 1.2rem; color: #666;'>
+            모든 과학자를 위한 AI 기반 실험 설계 플랫폼
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # 로그인 페이지 렌더링
-    render_login_page()
+    # 탭 선택
+    tabs = ["로그인", "회원가입", "비밀번호 찾기"]
+    tab_map = {'login': 0, 'signup': 1, 'forgot': 2}
+    
+    selected_tab = st.tabs(tabs)[tab_map.get(st.session_state.auth_tab, 0)]
+    
+    # 탭 컨테이너
+    tab1, tab2, tab3 = st.tabs(tabs)
+    
+    with tab1:
+        if st.session_state.auth_tab == 'login':
+            render_login_tab()
+    
+    with tab2:
+        if st.session_state.auth_tab == 'signup':
+            render_signup_tab()
+    
+    with tab3:
+        if st.session_state.auth_tab == 'forgot':
+            render_forgot_password_tab()
+    
+    # 푸터
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; color: #888; font-size: 0.9rem;'>
+        <p>© 2024 Universal DOE Platform. All rights reserved.</p>
+        <p>
+            <a href='#' style='color: #667eea; text-decoration: none; margin: 0 10px;'>도움말</a> |
+            <a href='#' style='color: #667eea; text-decoration: none; margin: 0 10px;'>문의하기</a> |
+            <a href='#' style='color: #667eea; text-decoration: none; margin: 0 10px;'>개인정보처리방침</a>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
+# 실행
 if __name__ == "__main__":
     main()
