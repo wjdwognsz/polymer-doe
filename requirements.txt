@@ -26,7 +26,7 @@ streamlit==1.39.0
 # Streamlit 확장 컴포넌트
 streamlit-option-menu==0.3.13      # 향상된 사이드바 메뉴
 streamlit-elements==0.1.0          # 고급 UI 요소 (드래그앤드롭)
-streamlit-aggrid==0.3.5            # 고급 데이터 그리드
+streamlit-aggrid==1.0.5            # 고급 데이터 그리드
 streamlit-extras==0.4.7            # 추가 유틸리티 컴포넌트
 streamlit-authenticator==0.3.3     # 인증 시스템
 streamlit-cookies-controller==0.0.4 # 쿠키 관리
