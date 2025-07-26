@@ -80,7 +80,7 @@ tokenizers==0.20.3                 # 고속 토크나이저
 
 # LangChain (AI 오케스트레이션)
 langchain==0.3.9                   # LLM 체인 구성
-langchain-community==0.3.7         # 커뮤니티 통합
+langchain-community==0.3.9         # 커뮤니티 통합
 langchain-google-genai==2.0.7      # Google 통합
 
 # ML 유틸리티
@@ -105,7 +105,7 @@ gspread-dataframe==4.0.0           # DataFrame 지원
 # Database & Storage
 # ==========================================
 # SQLite (내장 - 추가 패키지 불필요)
-sqlalchemy==2.0.36                 # ORM 지원
+sqlalchemy>=2.0.0,<2.0.36                 # ORM 지원
 alembic==1.14.0                    # DB 마이그레이션
 
 # 캐싱 & 세션
