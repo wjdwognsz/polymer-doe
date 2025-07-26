@@ -9,16 +9,14 @@
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union, Tuple, Literal
+from typing import Dict, List, Any, Optional, Union, Tuple, Literal, Set
 from datetime import timedelta
 from enum import Enum
 import platform
 import json
 import logging
-from dataclasses import dataclass
-from functools import lru_cache
-from typing import Dict, List, Any, Optional, Union, Tuple, Literal, Set
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 # ============================================================================
 # 🔧 환경 설정
@@ -1544,7 +1542,7 @@ def validate_config() -> Tuple[bool, List[str]]:
     # 필수 디렉토리 생성
     required_dirs = [
         DATA_DIR, LOGS_DIR, TEMP_DIR, CACHE_DIR, 
-        DB_DIR, MODULES_DIR, BACKUP_DIR, EXPORTS_DIR
+        DB_DIR, MODULES_DIR, BACKUP_DIR, EXPORTS_DIR, PROTOCOLS_DIR  # PROTOCOLS_DIR 추가
     ]
     
     for dir_path in required_dirs:
@@ -1553,9 +1551,6 @@ def validate_config() -> Tuple[bool, List[str]]:
         except Exception as e:
             messages.append(f"ERROR: {dir_path} 디렉토리 생성 실패: {e}")
             is_valid = False
-
-    for dir_path in [..., PROTOCOLS_DIR]:
-        dir_path.mkdir(parents=True, exist_ok=True)
     
     # 보안 키 확인 (프로덕션)
     if IS_PRODUCTION:
