@@ -140,9 +140,23 @@ RECOVERY_ACTIONS = {
         'function': 'config.offline_config.enable_offline_mode',
         'params': None,
         'description': '오프라인 모드로 전환'
+    },
+    'read_as_binary': {
+        'function': 'utils.protocol_extractor.read_as_binary',
+        'params': None,
+        'description': '바이너리 모드로 파일 읽기'
+    },
+    'try_multiple_ocr': {
+        'function': 'utils.protocol_extractor.try_multiple_ocr',  
+        'params': ['tesseract', 'easyocr'],
+        'description': '여러 OCR 엔진 시도'
+    },
+    'enhance_image': {
+        'function': 'utils.protocol_extractor.enhance_image',
+        'params': ['contrast', 'sharpness'],
+        'description': '이미지 품질 개선'
     }
 }
-
 
 # ============================================================================
 # 1️⃣ 시스템 에러 (1000-1999)
@@ -714,6 +728,38 @@ MODULE_ERRORS = {
     )
 }
 
+# 고분자 특화 에러 추가 (9000번대 활용)
+POLYMER_SPECIFIC_ERRORS = {
+    '9100': ErrorDefinition(
+        code='9100',
+        name='용매 시스템 설계 실패',
+        category=ErrorCategory.MODULE,
+        severity=ErrorSeverity.ERROR,
+        user_message="🧪 용매 시스템을 설계할 수 없습니다. 고분자와 용매의 호환성을 확인하세요.",
+        technical_message="Solvent system design failed: {polymer} incompatible with {solvents}",
+        recovery_strategy=RecoveryStrategy.FALLBACK,
+        recovery_suggestions=[
+            "한센 용해도 매개변수를 확인하세요",
+            "다른 용매 조합을 시도하세요",
+            "온도를 조절해보세요"
+        ]
+    ),
+    '9101': ErrorDefinition(
+        code='9101',
+        name='상 분리 예측 오류',
+        category=ErrorCategory.CALCULATION,
+        severity=ErrorSeverity.WARNING,
+        user_message="📊 상 분리 예측에 실패했습니다. 실험 조건을 재검토하세요.",
+        technical_message="Phase separation prediction error: {error_detail}",
+        recovery_strategy=RecoveryStrategy.DEFAULT,
+        recovery_suggestions=[
+            "농도 범위를 조정하세요",
+            "온도 조건을 변경하세요",
+            "기본 단상 시스템으로 진행하세요"
+        ]
+    )
+}
+
 # ============================================================================
 # 🔧 에러 처리 설정
 # ============================================================================
@@ -728,7 +774,8 @@ ERROR_CODES = {
     **DATABASE_ERRORS,
     **CALCULATION_ERRORS,
     **AUTH_ERRORS,
-    **MODULE_ERRORS
+    **MODULE_ERRORS,
+    **POLYMER_SPECIFIC_ERRORS
 }
 
 # 카테고리별 에러 분류
