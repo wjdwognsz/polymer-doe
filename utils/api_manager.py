@@ -313,6 +313,58 @@ JSON 형식으로 구조화하여 반환하세요.
 }
 
 # ===========================================================================
+# 🧬 고분자 특화 프롬프트 템플릿 (신규 추가)
+# ===========================================================================
+POLYMER_PROMPTS = {
+    'solvent_design': """
+고분자 용매 시스템 설계 전문가로서 다음을 분석하세요:
+
+고분자: {polymer_name} (분자량: {mw})
+목적: {purpose}
+
+다음을 포함하여 답변하세요:
+1. 추천 용매 시스템 (단일/이성분/삼성분)
+2. 한센 용해도 매개변수 분석
+3. 용해 조건 (온도, 시간, 농도)
+4. 상 거동 예측
+5. 안전 고려사항
+
+JSON 형식으로 응답하세요.
+""",
+    
+    'processing_optimization': """
+고분자 가공 조건을 최적화하세요:
+
+고분자: {polymer_name}
+가공 방법: {process_type}
+목표 특성: {target_properties}
+
+다음 파라미터를 최적화하세요:
+1. 온도 프로파일
+2. 압력/전압 조건
+3. 유속/이송 속도
+4. 환경 조건 (습도, 분위기)
+5. 예상 문제점 및 해결방안
+""",
+    
+    'nanostructure_design': """
+고분자 나노구조 설계:
+
+재료: {materials}
+목표 구조: {target_structure}
+응용 분야: {application}
+
+설계 제안:
+1. 합성/제조 방법
+2. 자기조립 조건
+3. 형태 제어 파라미터
+4. 특성 평가 방법
+5. 스케일업 고려사항
+"""
+}
+
+
+# ===========================================================================
 # 📊 데이터 클래스
 # ===========================================================================
 
@@ -1818,6 +1870,86 @@ JSON 형식으로 프로토콜 정보를 추출하세요.
         
         return consensus
 
+    async def design_solvent_system(self, polymer_name: str, mw: str = None,
+                                   purpose: str = "dissolution",
+                                   user_id: str = "anonymous") -> APIResponse:
+        """고분자 용매 시스템 설계"""
+        prompt = POLYMER_PROMPTS['solvent_design'].format(
+            polymer_name=polymer_name,
+            mw=mw or "unknown",
+            purpose=purpose
+        )
+        
+        # Gemini 우선 사용 (고분자 지식이 풍부)
+        response = await self.generate_text('gemini', prompt, user_id)
+        
+        if response.status == ResponseStatus.SUCCESS:
+            try:
+                # JSON 파싱 시도
+                solvent_data = json.loads(response.data)
+                response.data = {
+                    'solvent_system': solvent_data,
+                    'confidence': 0.85,
+                    'source': 'AI recommendation'
+                }
+            except json.JSONDecodeError:
+                # 텍스트 그대로 반환
+                pass
+        
+        return response
+    
+    async def optimize_processing(self, polymer_name: str, process_type: str,
+                                target_properties: Dict[str, Any],
+                                user_id: str = "anonymous") -> APIResponse:
+        """고분자 가공 조건 최적화"""
+        prompt = POLYMER_PROMPTS['processing_optimization'].format(
+            polymer_name=polymer_name,
+            process_type=process_type,
+            target_properties=json.dumps(target_properties, ensure_ascii=False)
+        )
+        
+        return await self.generate_text('gemini', prompt, user_id)
+    
+    async def compare_with_literature(self, experiment_data: Dict,
+                                    search_keywords: List[str],
+                                    user_id: str = "anonymous") -> APIResponse:
+        """실험 결과와 문헌 비교"""
+        # 1. 문헌 검색
+        literature = await self.search_benchmark_data(
+            " ".join(search_keywords), 
+            limit=10
+        )
+        
+        # 2. AI 분석 요청
+        prompt = f"""
+실험 결과와 문헌을 비교 분석하세요:
+
+내 실험 결과:
+{json.dumps(experiment_data, indent=2, ensure_ascii=False)}
+
+관련 문헌:
+{json.dumps(literature[:5], indent=2, ensure_ascii=False)}
+
+비교 분석:
+1. 성능 수준 평가 (백분위)
+2. 주요 차이점
+3. 개선 가능 영역
+4. 혁신성 평가
+5. 추가 실험 제안
+"""
+        
+        response = await self.generate_text('gemini', prompt, user_id)
+        
+        return APIResponse(
+            status=ResponseStatus.SUCCESS,
+            data={
+                'comparison': response.data,
+                'literature_found': len(literature),
+                'keywords': search_keywords
+            },
+            metadata={'benchmark_completed': True}
+        )
+
 # ===========================================================================
 # 🔧 싱글톤 인스턴스
 # ===========================================================================
@@ -1887,6 +2019,29 @@ async def search_literature(query: str, sources: List[str] = None,
         all_results.extend(results)
     
     return all_results
+
+# 고분자 특화 헬퍼 함수 추가
+async def design_polymer_solvent(polymer: str, mw: str = None,
+                                purpose: str = "dissolution") -> Dict:
+    """고분자 용매 시스템 설계 헬퍼"""
+    manager = get_api_manager()
+    response = await manager.design_solvent_system(polymer, mw, purpose)
+    
+    if response.status in [ResponseStatus.SUCCESS, ResponseStatus.CACHED]:
+        return response.data
+    else:
+        return {"error": response.error}
+
+async def optimize_polymer_processing(polymer: str, process: str,
+                                    targets: Dict) -> str:
+    """고분자 가공 최적화 헬퍼"""
+    manager = get_api_manager()
+    response = await manager.optimize_processing(polymer, process, targets)
+    
+    if response.status in [ResponseStatus.SUCCESS, ResponseStatus.CACHED]:
+        return response.data
+    else:
+        return f"오류: {response.error}"
 
 # ===========================================================================
 # 🧪 테스트 코드
