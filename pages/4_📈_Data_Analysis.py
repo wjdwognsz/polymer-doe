@@ -1,70 +1,83 @@
 """
-데이터 분석 페이지
-- 실험 데이터 수집, 분석, 시각화
-- AI 기반 인사이트 도출
-- 협업 분석 기능
+4_📈_Data_Analysis.py - 데이터 분석
+실험 결과를 분석하고 AI 기반 인사이트를 제공하는 핵심 분석 페이지
 """
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple
 import json
-import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
-import asyncio
+import io
+from pathlib import Path
+import sys
 from scipy import stats
-from scipy.optimize import minimize
-import statsmodels.api as sm
-from statsmodels.formula.api import ols
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import cross_val_score
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
 import warnings
 warnings.filterwarnings('ignore')
 
-# 내부 모듈 임포트
+# 프로젝트 루트 경로 추가
+sys.path.append(str(Path(__file__).parent.parent))
+
+# 필수 모듈 임포트
 try:
-    from utils.sheets_manager import GoogleSheetsManager
-    from utils.api_manager import APIManager
+    from utils.database_manager import get_database_manager
+    from utils.auth_manager import get_auth_manager
     from utils.common_ui import get_common_ui
-    from utils.data_processor import DataProcessor
-    from utils.notification_manager import NotificationManager
+    from utils.api_manager import get_api_manager
+    from utils.data_processor import get_data_processor
+    from config.app_config import EXPERIMENT_DEFAULTS
+    from config.theme_config import COLORS
 except ImportError as e:
-    st.error(f"필요한 모듈을 찾을 수 없습니다: {e}")
+    st.error(f"필수 모듈 임포트 오류: {e}")
+    st.stop()
+
+# 페이지 설정
+st.set_page_config(
+    page_title="데이터 분석 - Universal DOE",
+    page_icon="📈",
+    layout="wide"
+)
+
+# 인증 확인
+auth_manager = get_auth_manager()
+if not auth_manager.check_authentication():
+    st.warning("로그인이 필요합니다")
+    st.switch_page("pages/0_🔐_Login.py")
     st.stop()
 
 class DataAnalysisPage:
     """데이터 분석 페이지 클래스"""
     
     def __init__(self):
-        """초기화"""
-        self.sheets_manager = GoogleSheetsManager()
-        self.api_manager = APIManager()
         self.ui = get_common_ui()
-        self.data_processor = DataProcessor()
-        self.notifier = NotificationManager() if 'NotificationManager' in globals() else None
+        self.db_manager = get_database_manager()
+        self.api_manager = get_api_manager()
+        self.data_processor = get_data_processor()
         
         # 세션 상태 초기화
         self._initialize_session_state()
-        
+    
     def _initialize_session_state(self):
         """세션 상태 초기화"""
         defaults = {
-            'current_analysis': None,
             'analysis_data': None,
             'processed_data': None,
             'analysis_results': {},
-            'ai_insights': {},
-            'selected_variables': {},
-            'active_tab': 'data',
-            'show_ai_details': False,  # AI 설명 상세도
-            'ai_detail_level': 'auto',
-            'annotations': [],
-            'shared_analyses': []
+            'ai_insights': [],
+            'show_ai_details': False,
+            'current_analysis': None,
+            'selected_factors': [],
+            'selected_responses': [],
+            'analysis_type': 'descriptive'
         }
         
         for key, value in defaults.items():
@@ -72,205 +85,287 @@ class DataAnalysisPage:
                 st.session_state[key] = value
     
     def render(self):
-        """페이지 렌더링"""
-        # 헤더
-        self.ui.render_header(
-            "데이터 분석",
-            "실험 결과를 분석하고 AI 기반 인사이트를 도출합니다",
-            "📈"
-        )
+        """메인 렌더링"""
+        self.ui.render_header("📈 데이터 분석", "실험 결과를 분석하고 인사이트를 발견합니다")
         
-        # 현재 프로젝트 확인
-        if 'current_project' not in st.session_state:
-            st.warning("먼저 프로젝트를 선택해주세요.")
-            if st.button("프로젝트 선택하기"):
-                st.session_state.current_page = 'project_setup'
-                st.rerun()
+        # 데이터 업로드 섹션
+        with st.expander("📤 데이터 업로드", expanded=not bool(st.session_state.analysis_data)):
+            self._render_data_upload()
+        
+        # 데이터가 업로드된 경우에만 분석 섹션 표시
+        if st.session_state.analysis_data is not None:
+            # 메인 분석 탭
+            tabs = st.tabs([
+                "📊 기술통계",
+                "🔬 통계 분석", 
+                "🤖 AI 인사이트",
+                "📈 시각화",
+                "🎯 최적화",
+                "📋 보고서"
+            ])
+            
+            with tabs[0]:
+                self._render_descriptive_stats()
+            
+            with tabs[1]:
+                self._render_statistical_analysis()
+            
+            with tabs[2]:
+                self._render_ai_insights()
+            
+            with tabs[3]:
+                self._render_visualizations()
+            
+            with tabs[4]:
+                self._render_optimization()
+            
+            with tabs[5]:
+                self._render_report()
+    
+    def _render_data_upload(self):
+        """데이터 업로드 렌더링"""
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            # 파일 업로더
+            uploaded_file = st.file_uploader(
+                "실험 데이터 파일 선택",
+                type=['csv', 'xlsx', 'xls', 'json', 'parquet'],
+                help="CSV, Excel, JSON 또는 Parquet 형식의 파일을 업로드하세요"
+            )
+            
+            if uploaded_file is not None:
+                try:
+                    # 파일 형식에 따른 데이터 로드
+                    if uploaded_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_file)
+                    elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(uploaded_file)
+                    elif uploaded_file.name.endswith('.json'):
+                        df = pd.read_json(uploaded_file)
+                    elif uploaded_file.name.endswith('.parquet'):
+                        df = pd.read_parquet(uploaded_file)
+                    
+                    # 데이터 검증
+                    if df.empty:
+                        st.error("업로드된 파일이 비어있습니다")
+                        return
+                    
+                    # 세션에 저장
+                    st.session_state.analysis_data = df
+                    st.success(f"✅ 데이터 로드 완료: {len(df)}행 × {len(df.columns)}열")
+                    
+                    # 데이터 미리보기
+                    st.subheader("데이터 미리보기")
+                    st.dataframe(df.head(10), use_container_width=True)
+                    
+                    # 컬럼 정보
+                    col_info = pd.DataFrame({
+                        '컬럼명': df.columns,
+                        '데이터 타입': df.dtypes.astype(str),
+                        '결측치': df.isnull().sum(),
+                        '고유값': df.nunique()
+                    })
+                    
+                    with st.expander("컬럼 정보"):
+                        st.dataframe(col_info, use_container_width=True)
+                    
+                except Exception as e:
+                    st.error(f"파일 로드 중 오류 발생: {str(e)}")
+        
+        with col2:
+            # 예제 데이터 로드
+            st.subheader("예제 데이터")
+            if st.button("샘플 데이터 로드", use_container_width=True):
+                self._load_sample_data()
+            
+            # 프로젝트 데이터 로드
+            if st.button("프로젝트 데이터 로드", use_container_width=True):
+                self._load_project_data()
+        
+        # 데이터 전처리 옵션
+        if st.session_state.analysis_data is not None:
+            st.divider()
+            self._render_preprocessing_options()
+    
+    def _render_preprocessing_options(self):
+        """데이터 전처리 옵션"""
+        st.subheader("🔧 데이터 전처리")
+        
+        df = st.session_state.analysis_data
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # 요인 선택
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            st.session_state.selected_factors = st.multiselect(
+                "요인 변수 선택",
+                numeric_cols,
+                default=st.session_state.selected_factors if st.session_state.selected_factors else numeric_cols[:3]
+            )
+        
+        with col2:
+            # 반응변수 선택
+            st.session_state.selected_responses = st.multiselect(
+                "반응 변수 선택",
+                numeric_cols,
+                default=st.session_state.selected_responses if st.session_state.selected_responses else [numeric_cols[-1]] if numeric_cols else []
+            )
+        
+        with col3:
+            # 전처리 옵션
+            preprocess_options = st.multiselect(
+                "전처리 옵션",
+                ["결측치 제거", "이상치 제거", "정규화", "표준화"],
+                default=["결측치 제거"]
+            )
+        
+        # 전처리 실행
+        if st.button("전처리 실행", type="primary", use_container_width=True):
+            processed_df = self._preprocess_data(df, preprocess_options)
+            st.session_state.processed_data = processed_df
+            st.success("✅ 데이터 전처리 완료")
+            
+            # 전처리 결과 요약
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("원본 행 수", len(df))
+            with col2:
+                st.metric("처리 후 행 수", len(processed_df))
+            with col3:
+                st.metric("제거된 행", len(df) - len(processed_df))
+            with col4:
+                removal_rate = ((len(df) - len(processed_df)) / len(df) * 100) if len(df) > 0 else 0
+                st.metric("제거율", f"{removal_rate:.1f}%")
+    
+    def _render_descriptive_stats(self):
+        """기술통계 렌더링"""
+        st.subheader("📊 기술통계")
+        
+        df = st.session_state.processed_data if st.session_state.processed_data is not None else st.session_state.analysis_data
+        
+        if df is None:
+            st.warning("데이터를 먼저 업로드해주세요")
             return
         
-        # 메인 탭
-        tabs = st.tabs([
-            "📊 데이터 관리",
-            "📈 통계 분석", 
-            "🤖 AI 분석",
-            "🎯 최적화",
-            "👥 협업"
-        ])
-        
-        with tabs[0]:
-            self._render_data_management()
-            
-        with tabs[1]:
-            self._render_statistical_analysis()
-            
-        with tabs[2]:
-            self._render_ai_analysis()
-            
-        with tabs[3]:
-            self._render_optimization()
-            
-        with tabs[4]:
-            self._render_collaboration()
-    
-    def _render_data_management(self):
-        """데이터 관리 탭"""
-        st.subheader("📊 데이터 관리")
-        
+        # 전체 데이터 요약
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            # 데이터 업로드
-            uploaded_file = st.file_uploader(
-                "실험 데이터 업로드",
-                type=['csv', 'xlsx', 'xls'],
-                help="CSV 또는 Excel 파일을 업로드하세요"
-            )
+            st.markdown("#### 📈 통계 요약")
             
-            if uploaded_file:
-                try:
-                    # 파일 읽기
-                    if uploaded_file.name.endswith('.csv'):
-                        df = pd.read_csv(uploaded_file)
-                    else:
-                        df = pd.read_excel(uploaded_file)
-                    
-                    st.session_state.analysis_data = df
-                    st.success(f"데이터 로드 완료: {len(df)}개 행, {len(df.columns)}개 열")
-                    
-                except Exception as e:
-                    st.error(f"파일 읽기 오류: {str(e)}")
-        
-        with col2:
-            # 기존 데이터 불러오기
-            st.write("**기존 실험 데이터**")
-            
-            # 프로젝트의 실험 목록
-            experiments = self._get_project_experiments()
-            
-            if experiments:
-                selected_exp = st.selectbox(
-                    "실험 선택",
-                    options=experiments,
-                    format_func=lambda x: f"{x['name']} ({x['date']})"
-                )
+            # 선택된 변수들의 기술통계
+            selected_cols = st.session_state.selected_factors + st.session_state.selected_responses
+            if selected_cols:
+                stats_df = df[selected_cols].describe().T
+                stats_df['CV(%)'] = (stats_df['std'] / stats_df['mean'] * 100).round(2)
                 
-                if st.button("데이터 불러오기", type="primary"):
-                    self._load_experiment_data(selected_exp['id'])
+                st.dataframe(
+                    stats_df.style.format({
+                        'mean': '{:.3f}',
+                        'std': '{:.3f}',
+                        'min': '{:.3f}',
+                        'max': '{:.3f}',
+                        '25%': '{:.3f}',
+                        '50%': '{:.3f}',
+                        '75%': '{:.3f}',
+                        'CV(%)': '{:.1f}'
+                    }),
+                    use_container_width=True
+                )
             else:
-                st.info("저장된 실험 데이터가 없습니다.")
-        
-        # 데이터 미리보기
-        if st.session_state.analysis_data is not None:
-            self._render_data_preview()
-            
-            # 데이터 전처리
-            with st.expander("🔧 데이터 전처리", expanded=False):
-                self._render_data_preprocessing()
-    
-    def _render_data_preview(self):
-        """데이터 미리보기"""
-        df = st.session_state.analysis_data
-        
-        st.subheader("데이터 미리보기")
-        
-        # 기본 정보
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            self.ui.render_metric_card("행 수", f"{len(df):,}")
-        with col2:
-            self.ui.render_metric_card("열 수", f"{len(df.columns):,}")
-        with col3:
-            self.ui.render_metric_card("결측치", f"{df.isna().sum().sum():,}")
-        with col4:
-            self.ui.render_metric_card("데이터 타입", f"{df.dtypes.nunique()}")
-        
-        # 데이터 테이블
-        st.dataframe(
-            df.head(100),
-            use_container_width=True,
-            height=400
-        )
-        
-        # 기초 통계
-        with st.expander("📊 기초 통계", expanded=True):
-            st.dataframe(
-                df.describe(),
-                use_container_width=True
-            )
-    
-    def _render_data_preprocessing(self):
-        """데이터 전처리 옵션"""
-        df = st.session_state.analysis_data
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # 결측치 처리
-            st.write("**결측치 처리**")
-            missing_method = st.selectbox(
-                "처리 방법",
-                ["제거", "평균값", "중앙값", "보간법", "그대로 유지"]
-            )
-            
-            # 이상치 처리
-            st.write("**이상치 처리**")
-            outlier_method = st.selectbox(
-                "처리 방법",
-                ["없음", "IQR", "Z-score", "분위수"]
-            )
+                st.info("변수를 선택해주세요")
         
         with col2:
-            # 변수 변환
-            st.write("**변수 변환**")
-            transformations = st.multiselect(
-                "적용할 변환",
-                ["정규화", "표준화", "로그 변환", "제곱근 변환"]
-            )
+            st.markdown("#### 📊 데이터 품질")
             
-            # 변수 선택
-            st.write("**분석할 변수 선택**")
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            selected_cols = st.multiselect(
-                "변수 선택",
-                numeric_cols,
-                default=numeric_cols
-            )
+            # 데이터 품질 메트릭
+            total_cells = df.shape[0] * df.shape[1]
+            missing_cells = df.isnull().sum().sum()
+            completeness = (1 - missing_cells / total_cells) * 100 if total_cells > 0 else 0
+            
+            st.metric("완전성", f"{completeness:.1f}%")
+            st.metric("결측치", f"{missing_cells:,}")
+            
+            # 이상치 탐지
+            if selected_cols:
+                outliers = 0
+                for col in selected_cols:
+                    if df[col].dtype in [np.float64, np.int64]:
+                        Q1 = df[col].quantile(0.25)
+                        Q3 = df[col].quantile(0.75)
+                        IQR = Q3 - Q1
+                        outliers += ((df[col] < (Q1 - 1.5 * IQR)) | (df[col] > (Q3 + 1.5 * IQR))).sum()
+                
+                st.metric("이상치", f"{outliers}")
         
-        if st.button("전처리 적용", type="primary"):
-            with st.spinner("데이터 전처리 중..."):
-                processed_df = self.data_processor.preprocess_data(
-                    df,
-                    missing_method=missing_method,
-                    outlier_method=outlier_method,
-                    transformations=transformations,
-                    selected_columns=selected_cols
+        # 분포 시각화
+        st.divider()
+        st.markdown("#### 📉 변수 분포")
+        
+        if selected_cols:
+            # 히스토그램
+            n_cols = min(3, len(selected_cols))
+            cols = st.columns(n_cols)
+            
+            for i, col in enumerate(selected_cols[:6]):  # 최대 6개까지만 표시
+                with cols[i % n_cols]:
+                    fig = px.histogram(
+                        df, x=col,
+                        nbins=30,
+                        title=f"{col} 분포",
+                        marginal="box"
+                    )
+                    fig.update_layout(height=300, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # 상관관계 히트맵
+            if len(selected_cols) > 1:
+                st.markdown("#### 🔗 상관관계 분석")
+                
+                corr_matrix = df[selected_cols].corr()
+                
+                fig = px.imshow(
+                    corr_matrix,
+                    text_auto=True,
+                    color_continuous_scale='RdBu',
+                    range_color=[-1, 1],
+                    title="변수 간 상관관계"
                 )
+                fig.update_layout(height=500)
+                st.plotly_chart(fig, use_container_width=True)
                 
-                st.session_state.processed_data = processed_df
-                st.success("전처리 완료!")
+                # 높은 상관관계 쌍 표시
+                high_corr = []
+                for i in range(len(corr_matrix.columns)):
+                    for j in range(i+1, len(corr_matrix.columns)):
+                        corr_value = corr_matrix.iloc[i, j]
+                        if abs(corr_value) > 0.7:
+                            high_corr.append({
+                                '변수 1': corr_matrix.columns[i],
+                                '변수 2': corr_matrix.columns[j],
+                                '상관계수': corr_value
+                            })
                 
-                # 전처리 결과 요약
-                st.info(f"""
-                전처리 결과:
-                - 원본 데이터: {len(df)} 행
-                - 처리된 데이터: {len(processed_df)} 행
-                - 제거된 행: {len(df) - len(processed_df)} 행
-                """)
+                if high_corr:
+                    st.warning("⚠️ 높은 상관관계 발견")
+                    st.dataframe(pd.DataFrame(high_corr), use_container_width=True)
     
     def _render_statistical_analysis(self):
-        """통계 분석 탭"""
-        st.subheader("📈 통계 분석")
+        """통계 분석 렌더링"""
+        st.subheader("🔬 통계 분석")
         
-        if st.session_state.processed_data is None:
-            st.warning("먼저 데이터를 로드하고 전처리해주세요.")
+        df = st.session_state.processed_data if st.session_state.processed_data is not None else st.session_state.analysis_data
+        
+        if df is None or not st.session_state.selected_responses:
+            st.warning("데이터와 반응변수를 먼저 선택해주세요")
             return
-        
-        df = st.session_state.processed_data
         
         # 분석 유형 선택
         analysis_type = st.selectbox(
             "분석 유형",
-            ["분산분석 (ANOVA)", "회귀분석", "반응표면분석 (RSM)", "상관분석", "주성분분석 (PCA)"]
+            ["분산분석 (ANOVA)", "회귀분석", "반응표면분석 (RSM)", "주성분분석 (PCA)"]
         )
         
         if analysis_type == "분산분석 (ANOVA)":
@@ -279,1042 +374,420 @@ class DataAnalysisPage:
             self._render_regression_analysis(df)
         elif analysis_type == "반응표면분석 (RSM)":
             self._render_rsm_analysis(df)
-        elif analysis_type == "상관분석":
-            self._render_correlation_analysis(df)
         elif analysis_type == "주성분분석 (PCA)":
             self._render_pca_analysis(df)
     
     def _render_anova_analysis(self, df: pd.DataFrame):
         """ANOVA 분석"""
-        st.write("### 분산분석 (ANOVA)")
+        st.markdown("#### 분산분석 (ANOVA)")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # 반응변수 선택
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            response = st.selectbox("반응변수", numeric_cols)
-            
-            # 요인 선택
-            categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
-            numeric_cols_as_factor = st.multiselect(
-                "숫자형 요인 (범주형으로 처리)",
-                numeric_cols
-            )
-            
-            all_factors = categorical_cols + numeric_cols_as_factor
-            
-            if not all_factors:
-                st.warning("범주형 요인이 없습니다. 숫자형 변수를 요인으로 선택하세요.")
-                return
-                
-            factors = st.multiselect("요인", all_factors, default=all_factors[:2])
-        
-        with col2:
-            # ANOVA 옵션
-            include_interactions = st.checkbox("교호작용 포함", value=True)
-            confidence_level = st.slider("신뢰수준", 0.90, 0.99, 0.95, 0.01)
-            
-        if st.button("ANOVA 실행", type="primary"):
-            with st.spinner("분석 중..."):
-                try:
-                    # ANOVA 수행
-                    results = self._perform_anova(
-                        df, response, factors, 
-                        include_interactions, confidence_level
-                    )
-                    
-                    # 결과 저장
-                    st.session_state.analysis_results['anova'] = results
-                    
-                    # 결과 표시
-                    self._display_anova_results(results)
-                    
-                except Exception as e:
-                    st.error(f"분석 오류: {str(e)}")
-    
-    def _perform_anova(self, df: pd.DataFrame, response: str, 
-                      factors: List[str], include_interactions: bool,
-                      confidence_level: float) -> Dict:
-        """ANOVA 수행"""
-        # 모델 수식 생성
-        formula = f"{response} ~ " + " + ".join(factors)
-        
-        if include_interactions and len(factors) >= 2:
-            # 2차 교호작용 추가
-            for i in range(len(factors)):
-                for j in range(i+1, len(factors)):
-                    formula += f" + {factors[i]}:{factors[j]}"
-        
-        # 모델 적합
-        model = ols(formula, data=df).fit()
-        
-        # ANOVA 테이블
-        anova_table = sm.stats.anova_lm(model, typ=2)
-        
-        # 결과 구성
-        results = {
-            'model': model,
-            'anova_table': anova_table,
-            'formula': formula,
-            'r_squared': model.rsquared,
-            'adj_r_squared': model.rsquared_adj,
-            'significant_factors': [],
-            'post_hoc': {}
-        }
-        
-        # 유의한 요인 찾기
-        alpha = 1 - confidence_level
-        for factor in anova_table.index[:-1]:  # Residual 제외
-            if anova_table.loc[factor, 'PR(>F)'] < alpha:
-                results['significant_factors'].append({
-                    'factor': factor,
-                    'f_value': anova_table.loc[factor, 'F'],
-                    'p_value': anova_table.loc[factor, 'PR(>F)']
-                })
-        
-        return results
-    
-    def _display_anova_results(self, results: Dict):
-        """ANOVA 결과 표시"""
-        st.success("분석 완료!")
-        
-        # 모델 요약
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            self.ui.render_metric_card("R²", f"{results['r_squared']:.4f}")
-        with col2:
-            self.ui.render_metric_card("Adjusted R²", f"{results['adj_r_squared']:.4f}")
-        with col3:
-            self.ui.render_metric_card("유의한 요인", len(results['significant_factors']))
-        
-        # ANOVA 테이블
-        st.write("**ANOVA 테이블**")
-        st.dataframe(
-            results['anova_table'].round(4),
-            use_container_width=True
+        # 반응변수 선택
+        response = st.selectbox(
+            "반응변수",
+            st.session_state.selected_responses,
+            key="anova_response"
         )
         
-        # 유의한 요인
-        if results['significant_factors']:
-            st.write("**유의한 요인**")
-            for factor in results['significant_factors']:
-                st.write(f"- {factor['factor']}: F={factor['f_value']:.3f}, p={factor['p_value']:.4f}")
+        # 요인 선택 (범주형 또는 이산형)
+        categorical_factors = []
+        for col in st.session_state.selected_factors:
+            if df[col].nunique() <= 10:  # 10개 이하의 고유값은 범주형으로 간주
+                categorical_factors.append(col)
         
-        # 잔차 플롯
-        self._render_residual_plots(results['model'])
-    
-    def _render_ai_analysis(self):
-        """AI 분석 탭"""
-        st.subheader("🤖 AI 기반 분석")
-        
-        # AI 설명 상세도 제어
-        self._render_ai_detail_control()
-        
-        if st.session_state.processed_data is None:
-            st.warning("먼저 데이터를 로드하고 전처리해주세요.")
+        if not categorical_factors:
+            st.warning("범주형 요인이 없습니다. 연속형 변수를 범주화하시겠습니까?")
+            if st.button("연속형 변수 범주화"):
+                # 연속형 변수를 범주화하는 로직
+                pass
             return
         
-        df = st.session_state.processed_data
-        
-        # AI 분석 유형
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            analysis_types = st.multiselect(
-                "AI 분석 유형",
-                [
-                    "패턴 인식",
-                    "이상치 탐지",
-                    "예측 모델링",
-                    "인사이트 도출",
-                    "최적화 제안"
-                ],
-                default=["인사이트 도출"]
-            )
-        
-        with col2:
-            # AI 엔진 선택
-            available_engines = self.api_manager.get_available_engines()
-            selected_engine = st.selectbox(
-                "AI 엔진",
-                available_engines,
-                help="사용 가능한 AI 엔진 중 선택"
-            )
-        
-        # 추가 컨텍스트
-        context = st.text_area(
-            "추가 정보 (선택사항)",
-            placeholder="실험 목적, 특별히 주목할 점 등을 입력하세요",
-            height=100
+        selected_factors = st.multiselect(
+            "요인 선택",
+            categorical_factors,
+            default=categorical_factors[:2] if len(categorical_factors) >= 2 else categorical_factors
         )
         
-        if st.button("AI 분석 시작", type="primary"):
-            with st.spinner("AI가 데이터를 분석 중입니다..."):
-                try:
-                    # AI 분석 수행
-                    ai_results = self._perform_ai_analysis(
-                        df, analysis_types, selected_engine, context
-                    )
-                    
-                    # 결과 저장
-                    st.session_state.ai_insights = ai_results
-                    
-                    # 결과 표시
-                    self._display_ai_results(ai_results)
-                    
-                except Exception as e:
-                    st.error(f"AI 분석 오류: {str(e)}")
-                    # 오프라인 폴백
-                    if st.checkbox("오프라인 기본 분석 사용"):
-                        basic_results = self._perform_basic_analysis(df)
-                        self._display_ai_results(basic_results)
-    
-    def _render_ai_detail_control(self):
-        """AI 설명 상세도 제어 UI"""
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            st.write("**AI 설명 상세도**")
-        
-        with col2:
-            detail_mode = st.selectbox(
-                "모드",
-                ["자동", "간단히", "상세히", "사용자 정의"],
-                key="ai_detail_mode",
-                label_visibility="collapsed"
-            )
-            st.session_state.ai_detail_level = detail_mode
-        
-        with col3:
-            # 즉시 토글 버튼
-            if st.button(
-                "🔍 상세" if not st.session_state.show_ai_details else "📝 간단",
-                key="toggle_ai_details"
-            ):
-                st.session_state.show_ai_details = not st.session_state.show_ai_details
-    
-    def _perform_ai_analysis(self, df: pd.DataFrame, analysis_types: List[str],
-                           engine: str, context: str) -> Dict:
-        """AI 분석 수행"""
-        # 데이터 요약 생성
-        data_summary = self._create_data_summary(df)
-        
-        # 프롬프트 구성
-        prompt = self._build_ai_prompt(data_summary, analysis_types, context)
-        
-        # AI API 호출
-        response = self.api_manager.get_ai_response(
-            prompt=prompt,
-            engine=engine,
-            detail_level=st.session_state.ai_detail_level,
-            include_reasoning=st.session_state.show_ai_details
-        )
-        
-        # 응답 파싱
-        results = self._parse_ai_response(response, analysis_types)
-        
-        return results
-    
-    def _build_ai_prompt(self, data_summary: Dict, analysis_types: List[str], 
-                        context: str) -> str:
-        """AI 프롬프트 구성"""
-        prompt = f"""
-        고분자 실험 데이터 분석 전문가로서 다음 데이터를 분석해주세요.
-        
-        데이터 개요:
-        - 샘플 수: {data_summary['n_samples']}
-        - 변수: {', '.join(data_summary['variables'])}
-        - 데이터 유형: {data_summary['data_types']}
-        
-        기초 통계:
-        {json.dumps(data_summary['statistics'], indent=2, ensure_ascii=False)}
-        
-        {f"추가 정보: {context}" if context else ""}
-        
-        다음 분석을 수행해주세요:
-        {chr(10).join(f"- {t}" for t in analysis_types)}
-        """
-        
-        # 상세도에 따른 추가 지시
-        if st.session_state.show_ai_details:
-            prompt += """
+        if selected_factors and response:
+            # ANOVA 수행
+            formula = f"{response} ~ " + " + ".join(selected_factors)
+            if len(selected_factors) > 1:
+                formula += " + " + ":".join(selected_factors)  # 교호작용 추가
             
-            각 분석에 대해:
-            1. 핵심 발견사항 (필수)
-            2. 분석 과정과 근거 (상세히)
-            3. 대안적 해석
-            4. 신뢰도와 한계점
-            5. 추가 분석 제안
-            
-            JSON 형식으로 구조화하여 응답하세요.
-            """
-        else:
-            prompt += """
-            
-            핵심 발견사항만 간단명료하게 제시하세요.
-            불필요한 설명은 제외하고 실용적인 정보만 포함하세요.
-            """
-        
-        return prompt
-    
-    def _display_ai_results(self, results: Dict):
-        """AI 분석 결과 표시"""
-        st.success("AI 분석 완료!")
-        
-        # 핵심 인사이트 (항상 표시)
-        st.write("### 🎯 핵심 인사이트")
-        
-        for insight in results.get('key_insights', []):
-            self.ui.render_info_card(
-                insight['title'],
-                insight['description'],
-                insight.get('importance', 'info')
-            )
-        
-        # 상세 설명 (조건부 표시)
-        if st.session_state.show_ai_details and 'detailed_analysis' in results:
-            tabs = st.tabs(["추론 과정", "대안 분석", "신뢰도 평가", "추가 제안"])
-            
-            with tabs[0]:
-                st.write("**분석 과정**")
-                for step in results['detailed_analysis'].get('reasoning_steps', []):
-                    st.write(f"- {step}")
-            
-            with tabs[1]:
-                st.write("**대안적 해석**")
-                for alt in results['detailed_analysis'].get('alternatives', []):
-                    st.info(alt)
-            
-            with tabs[2]:
-                st.write("**신뢰도 평가**")
-                confidence = results['detailed_analysis'].get('confidence', {})
-                col1, col2 = st.columns(2)
+            try:
+                model = ols(formula, data=df).fit()
+                anova_table = sm.stats.anova_lm(model, typ=2)
+                
+                # ANOVA 테이블 표시
+                st.markdown("##### ANOVA 테이블")
+                anova_display = anova_table.copy()
+                anova_display['F-value'] = anova_display['F'].round(3)
+                anova_display['p-value'] = anova_display['PR(>F)'].round(4)
+                anova_display['유의성'] = anova_display['PR(>F)'].apply(
+                    lambda p: '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns'
+                )
+                
+                st.dataframe(
+                    anova_display[['sum_sq', 'df', 'F-value', 'p-value', '유의성']],
+                    use_container_width=True
+                )
+                
+                # 모델 요약
+                col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("전체 신뢰도", f"{confidence.get('overall', 0)}%")
+                    st.metric("R-squared", f"{model.rsquared:.3f}")
                 with col2:
-                    st.write("**제한사항**")
-                    for limitation in confidence.get('limitations', []):
-                        st.write(f"- {limitation}")
-            
-            with tabs[3]:
-                st.write("**추가 분석 제안**")
-                for suggestion in results['detailed_analysis'].get('next_steps', []):
-                    st.write(f"✓ {suggestion}")
-        
-        # AI 시각화
-        if 'visualizations' in results:
-            st.write("### 📊 AI 생성 시각화")
-            for viz in results['visualizations']:
-                if viz['type'] == 'plotly':
-                    st.plotly_chart(viz['figure'], use_container_width=True)
-                elif viz['type'] == 'explanation':
-                    st.caption(viz['description'])
-    
-    def _render_optimization(self):
-        """최적화 탭"""
-        st.subheader("🎯 최적화")
-        
-        if not st.session_state.analysis_results:
-            st.warning("먼저 통계 분석을 수행해주세요.")
-            return
-        
-        # 최적화 설정
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # 목적함수 설정
-            st.write("**최적화 목표**")
-            
-            # 반응변수 선택
-            if 'responses' in st.session_state:
-                responses = st.session_state.responses
-            else:
-                responses = st.session_state.processed_data.select_dtypes(
-                    include=[np.number]
-                ).columns.tolist()
-            
-            objective_response = st.selectbox("목표 반응변수", responses)
-            objective_type = st.radio(
-                "최적화 방향",
-                ["최대화", "최소화", "목표값"],
-                horizontal=True
-            )
-            
-            if objective_type == "목표값":
-                target_value = st.number_input("목표값", value=0.0)
-            
-        with col2:
-            # 제약조건
-            st.write("**제약조건**")
-            
-            constraints = []
-            if st.checkbox("제약조건 추가"):
-                num_constraints = st.number_input("제약조건 수", 1, 5, 1)
-                
-                for i in range(num_constraints):
-                    with st.expander(f"제약조건 {i+1}"):
-                        const_var = st.selectbox(
-                            f"변수 {i+1}",
-                            responses,
-                            key=f"const_var_{i}"
-                        )
-                        const_type = st.selectbox(
-                            f"유형 {i+1}",
-                            ["≥", "≤", "="],
-                            key=f"const_type_{i}"
-                        )
-                        const_value = st.number_input(
-                            f"값 {i+1}",
-                            key=f"const_val_{i}"
-                        )
-                        
-                        constraints.append({
-                            'variable': const_var,
-                            'type': const_type,
-                            'value': const_value
-                        })
-        
-        # 최적화 알고리즘
-        algorithm = st.selectbox(
-            "최적화 알고리즘",
-            ["Sequential Quadratic Programming (SQP)", 
-             "Genetic Algorithm (GA)",
-             "Particle Swarm Optimization (PSO)",
-             "Nelder-Mead Simplex"]
-        )
-        
-        if st.button("최적화 실행", type="primary"):
-            with st.spinner("최적 조건을 찾는 중..."):
-                try:
-                    # 최적화 수행
-                    opt_results = self._perform_optimization(
-                        objective_response,
-                        objective_type,
-                        target_value if objective_type == "목표값" else None,
-                        constraints,
-                        algorithm
-                    )
-                    
-                    # 결과 표시
-                    self._display_optimization_results(opt_results)
-                    
-                except Exception as e:
-                    st.error(f"최적화 오류: {str(e)}")
-    
-    def _perform_optimization(self, objective: str, obj_type: str,
-                            target: Optional[float], constraints: List[Dict],
-                            algorithm: str) -> Dict:
-        """최적화 수행"""
-        # 회귀 모델이 있는지 확인
-        if 'regression' not in st.session_state.analysis_results:
-            raise ValueError("회귀 모델이 필요합니다. 먼저 회귀분석을 수행하세요.")
-        
-        model = st.session_state.analysis_results['regression']['model']
-        
-        # 목적함수 정의
-        def objective_function(x):
-            pred = model.predict(pd.DataFrame([x], columns=model.feature_names_in_))
-            
-            if obj_type == "최대화":
-                return -pred[0]  # 최소화 문제로 변환
-            elif obj_type == "최소화":
-                return pred[0]
-            else:  # 목표값
-                return (pred[0] - target) ** 2
-        
-        # 변수 범위
-        bounds = []
-        for var in model.feature_names_in_:
-            data = st.session_state.processed_data[var]
-            bounds.append((data.min(), data.max()))
-        
-        # 초기값
-        x0 = [st.session_state.processed_data[var].mean() 
-              for var in model.feature_names_in_]
-        
-        # 최적화 실행
-        result = minimize(
-            objective_function,
-            x0,
-            method='SLSQP',
-            bounds=bounds,
-            options={'disp': True}
-        )
-        
-        # 최적값에서 예측
-        optimal_x = result.x
-        optimal_pred = model.predict(
-            pd.DataFrame([optimal_x], columns=model.feature_names_in_)
-        )[0]
-        
-        return {
-            'success': result.success,
-            'optimal_conditions': dict(zip(model.feature_names_in_, optimal_x)),
-            'optimal_response': optimal_pred,
-            'convergence_info': {
-                'iterations': result.nit,
-                'function_evals': result.nfev,
-                'message': result.message
-            },
-            'objective_type': obj_type,
-            'target_value': target
-        }
-    
-    def _display_optimization_results(self, results: Dict):
-        """최적화 결과 표시"""
-        if results['success']:
-            st.success("최적화 성공!")
-        else:
-            st.warning("최적화가 수렴하지 못했습니다.")
-        
-        # 최적 조건
-        st.write("### 🎯 최적 조건")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**최적 변수값**")
-            for var, value in results['optimal_conditions'].items():
-                st.write(f"- {var}: {value:.4f}")
-        
-        with col2:
-            st.write("**예측 결과**")
-            self.ui.render_metric_card(
-                "최적 반응값",
-                f"{results['optimal_response']:.4f}"
-            )
-            
-            if results['objective_type'] == "목표값":
-                error = abs(results['optimal_response'] - results['target_value'])
-                st.metric("목표값과의 차이", f"{error:.4f}")
-        
-        # 수렴 정보
-        with st.expander("🔍 수렴 정보"):
-            info = results['convergence_info']
-            st.write(f"- 반복 횟수: {info['iterations']}")
-            st.write(f"- 함수 평가 횟수: {info['function_evals']}")
-            st.write(f"- 메시지: {info['message']}")
-        
-        # 민감도 분석
-        if st.checkbox("민감도 분석 수행"):
-            sensitivity = self._perform_sensitivity_analysis(
-                results['optimal_conditions']
-            )
-            self._display_sensitivity_plot(sensitivity)
-    
-    def _render_collaboration(self):
-        """협업 탭"""
-        st.subheader("👥 협업 분석")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # 분석 공유
-            st.write("### 📤 분석 공유")
-            
-            if st.session_state.analysis_results:
-                # 공유할 분석 선택
-                analyses_to_share = st.multiselect(
-                    "공유할 분석",
-                    list(st.session_state.analysis_results.keys()),
-                    default=list(st.session_state.analysis_results.keys())
-                )
-                
-                # 공유 대상
-                team_members = self._get_team_members()
-                share_with = st.multiselect(
-                    "공유 대상",
-                    team_members,
-                    format_func=lambda x: f"{x['name']} ({x['email']})"
-                )
-                
-                # 공유 메시지
-                message = st.text_area(
-                    "메시지 (선택사항)",
-                    placeholder="분석 결과에 대한 설명이나 의견을 남겨주세요"
-                )
-                
-                if st.button("분석 공유", type="primary"):
-                    self._share_analysis(analyses_to_share, share_with, message)
-            else:
-                st.info("공유할 분석 결과가 없습니다.")
-        
-        with col2:
-            # 공유받은 분석
-            st.write("### 📥 공유받은 분석")
-            
-            shared_analyses = self._get_shared_analyses()
-            
-            if shared_analyses:
-                for analysis in shared_analyses:
-                    with st.expander(
-                        f"{analysis['title']} - {analysis['shared_by']} "
-                        f"({analysis['date']})"
-                    ):
-                        st.write(analysis['message'])
-                        if st.button(
-                            "분석 보기",
-                            key=f"view_{analysis['id']}"
-                        ):
-                            self._load_shared_analysis(analysis['id'])
-            else:
-                st.info("공유받은 분석이 없습니다.")
-        
-        # 팀 인사이트
-        st.write("### 💡 팀 인사이트")
-        self._render_team_insights()
-    
-    def _render_team_insights(self):
-        """팀 인사이트 섹션"""
-        # 인사이트 작성
-        with st.form("insight_form"):
-            insight_title = st.text_input("인사이트 제목")
-            insight_content = st.text_area(
-                "내용",
-                placeholder="발견한 패턴, 제안사항 등을 공유하세요"
-            )
-            
-            insight_type = st.selectbox(
-                "유형",
-                ["발견", "제안", "주의", "질문"]
-            )
-            
-            if st.form_submit_button("인사이트 공유"):
-                self._share_insight({
-                    'title': insight_title,
-                    'content': insight_content,
-                    'type': insight_type,
-                    'author': st.session_state.user_id,
-                    'timestamp': datetime.now().isoformat()
-                })
-        
-        # 기존 인사이트 표시
-        insights = self._get_team_insights()
-        
-        for insight in insights:
-            with st.container():
-                col1, col2, col3 = st.columns([1, 4, 1])
-                
-                with col1:
-                    icon = {
-                        '발견': '💡',
-                        '제안': '💭',
-                        '주의': '⚠️',
-                        '질문': '❓'
-                    }.get(insight['type'], '📝')
-                    st.write(f"### {icon}")
-                
-                with col2:
-                    st.write(f"**{insight['title']}**")
-                    st.write(insight['content'])
-                    st.caption(
-                        f"{insight['author']} - {insight['timestamp']}"
-                    )
-                
+                    st.metric("Adj. R-squared", f"{model.rsquared_adj:.3f}")
                 with col3:
-                    # 투표
-                    votes = insight.get('votes', {'up': 0, 'down': 0})
-                    col_up, col_down = st.columns(2)
+                    st.metric("F-statistic", f"{model.fvalue:.3f}")
+                
+                # 효과 플롯
+                st.markdown("##### 주효과 플롯")
+                
+                for factor in selected_factors:
+                    grouped = df.groupby(factor)[response].agg(['mean', 'std', 'count'])
+                    grouped['se'] = grouped['std'] / np.sqrt(grouped['count'])
                     
-                    with col_up:
-                        if st.button("👍", key=f"up_{insight['id']}"):
-                            self._vote_insight(insight['id'], 'up')
-                    with col_down:
-                        if st.button("👎", key=f"down_{insight['id']}"):
-                            self._vote_insight(insight['id'], 'down')
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=grouped.index.astype(str),
+                        y=grouped['mean'],
+                        error_y=dict(
+                            type='data',
+                            array=grouped['se'] * 1.96,
+                            visible=True
+                        ),
+                        mode='markers+lines',
+                        name=factor
+                    ))
                     
-                    st.caption(f"{votes['up']-votes['down']:+d}")
-    
-    # === 헬퍼 함수들 ===
-    
-    def _get_project_experiments(self) -> List[Dict]:
-        """프로젝트의 실험 목록 조회"""
-        project_id = st.session_state.current_project['id']
-        return self.sheets_manager.get_experiments(project_id)
-    
-    def _load_experiment_data(self, experiment_id: str):
-        """실험 데이터 로드"""
-        data = self.sheets_manager.get_experiment_results(experiment_id)
-        if data:
-            df = pd.DataFrame(data)
-            st.session_state.analysis_data = df
-            st.success("데이터를 불러왔습니다.")
-        else:
-            st.error("데이터를 불러올 수 없습니다.")
-    
-    def _create_data_summary(self, df: pd.DataFrame) -> Dict:
-        """데이터 요약 생성"""
-        numeric_df = df.select_dtypes(include=[np.number])
-        
-        return {
-            'n_samples': len(df),
-            'variables': df.columns.tolist(),
-            'data_types': df.dtypes.to_dict(),
-            'statistics': {
-                'mean': numeric_df.mean().to_dict(),
-                'std': numeric_df.std().to_dict(),
-                'min': numeric_df.min().to_dict(),
-                'max': numeric_df.max().to_dict(),
-                'correlations': numeric_df.corr().to_dict()
-            },
-            'missing_values': df.isna().sum().to_dict()
-        }
-    
-    def _parse_ai_response(self, response: str, analysis_types: List[str]) -> Dict:
-        """AI 응답 파싱"""
-        try:
-            # JSON 응답 파싱 시도
-            if response.strip().startswith('{'):
-                return json.loads(response)
-            else:
-                # 텍스트 응답을 구조화
-                return {
-                    'key_insights': [{
-                        'title': '분석 결과',
-                        'description': response,
-                        'importance': 'info'
-                    }],
-                    'analysis_types': analysis_types
-                }
-        except:
-            return {
-                'key_insights': [{
-                    'title': '분석 결과',
-                    'description': response,
-                    'importance': 'info'
-                }]
-            }
-    
-    def _perform_basic_analysis(self, df: pd.DataFrame) -> Dict:
-        """오프라인 기본 분석"""
-        numeric_df = df.select_dtypes(include=[np.number])
-        
-        insights = []
-        
-        # 기본 통계
-        for col in numeric_df.columns:
-            mean_val = numeric_df[col].mean()
-            std_val = numeric_df[col].std()
-            insights.append({
-                'title': f'{col} 분포',
-                'description': f'평균: {mean_val:.2f} ± {std_val:.2f}',
-                'importance': 'info'
-            })
-        
-        # 상관관계
-        corr_matrix = numeric_df.corr()
-        high_corr = []
-        
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i+1, len(corr_matrix.columns)):
-                corr_val = corr_matrix.iloc[i, j]
-                if abs(corr_val) > 0.7:
-                    high_corr.append({
-                        'var1': corr_matrix.columns[i],
-                        'var2': corr_matrix.columns[j],
-                        'corr': corr_val
-                    })
-        
-        if high_corr:
-            insights.append({
-                'title': '높은 상관관계 발견',
-                'description': f'{len(high_corr)}개의 변수 쌍에서 높은 상관관계 발견',
-                'importance': 'high'
-            })
-        
-        return {'key_insights': insights}
-    
-    def _render_residual_plots(self, model):
-        """잔차 플롯"""
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=['잔차 vs 적합값', 'Q-Q Plot', 
-                          '표준화 잔차', '잔차 히스토그램']
-        )
-        
-        # 잔차 계산
-        residuals = model.resid
-        fitted = model.fittedvalues
-        standardized_resid = model.get_influence().resid_studentized_internal
-        
-        # 1. 잔차 vs 적합값
-        fig.add_trace(
-            go.Scatter(x=fitted, y=residuals, mode='markers', name='잔차'),
-            row=1, col=1
-        )
-        
-        # 2. Q-Q Plot
-        theoretical_quantiles = stats.probplot(residuals, dist="norm", fit=False)[0]
-        fig.add_trace(
-            go.Scatter(x=theoretical_quantiles, y=np.sort(residuals), 
-                      mode='markers', name='Q-Q'),
-            row=1, col=2
-        )
-        
-        # 3. 표준화 잔차
-        fig.add_trace(
-            go.Scatter(y=standardized_resid, mode='markers', name='표준화 잔차'),
-            row=2, col=1
-        )
-        
-        # 4. 잔차 히스토그램
-        fig.add_trace(
-            go.Histogram(x=residuals, name='분포'),
-            row=2, col=2
-        )
-        
-        fig.update_layout(height=800, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-    
-    def _get_team_members(self) -> List[Dict]:
-        """팀 멤버 목록 조회"""
-        project_id = st.session_state.current_project['id']
-        return self.sheets_manager.get_project_collaborators(project_id)
-    
-    def _share_analysis(self, analyses: List[str], recipients: List[Dict], 
-                       message: str):
-        """분석 공유"""
-        try:
-            # 분석 데이터 준비
-            shared_data = {
-                'project_id': st.session_state.current_project['id'],
-                'analyses': {
-                    name: st.session_state.analysis_results[name]
-                    for name in analyses
-                },
-                'shared_by': st.session_state.user_id,
-                'shared_with': [r['id'] for r in recipients],
-                'message': message,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # 저장
-            analysis_id = self.sheets_manager.save_shared_analysis(shared_data)
-            
-            # 알림 발송
-            if self.notifier:
-                for recipient in recipients:
-                    self.notifier.send_notification(
-                        recipient['id'],
-                        f"{st.session_state.user_name}님이 분석을 공유했습니다",
-                        'analysis_shared',
-                        {'analysis_id': analysis_id}
+                    fig.update_layout(
+                        title=f"{factor}의 주효과",
+                        xaxis_title=factor,
+                        yaxis_title=response,
+                        height=400
                     )
-            
-            st.success("분석이 공유되었습니다!")
-            
-        except Exception as e:
-            st.error(f"공유 실패: {str(e)}")
-    
-    def _get_shared_analyses(self) -> List[Dict]:
-        """공유받은 분석 조회"""
-        return self.sheets_manager.get_shared_analyses(
-            st.session_state.user_id
-        )
-    
-    def _load_shared_analysis(self, analysis_id: str):
-        """공유받은 분석 로드"""
-        analysis = self.sheets_manager.get_shared_analysis(analysis_id)
-        if analysis:
-            st.session_state.analysis_results = analysis['analyses']
-            st.success("분석을 불러왔습니다.")
-            st.rerun()
-    
-    def _share_insight(self, insight: Dict):
-        """인사이트 공유"""
-        insight['id'] = str(uuid.uuid4())
-        insight['project_id'] = st.session_state.current_project['id']
-        
-        self.sheets_manager.save_team_insight(insight)
-        st.success("인사이트가 공유되었습니다!")
-        st.rerun()
-    
-    def _get_team_insights(self) -> List[Dict]:
-        """팀 인사이트 조회"""
-        return self.sheets_manager.get_team_insights(
-            st.session_state.current_project['id']
-        )
-    
-    def _vote_insight(self, insight_id: str, vote_type: str):
-        """인사이트 투표"""
-        self.sheets_manager.vote_insight(
-            insight_id,
-            st.session_state.user_id,
-            vote_type
-        )
-        st.rerun()
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # 교호작용 플롯 (2요인인 경우)
+                if len(selected_factors) == 2:
+                    st.markdown("##### 교호작용 플롯")
+                    
+                    interaction_data = df.groupby(selected_factors)[response].mean().reset_index()
+                    
+                    fig = px.line(
+                        interaction_data,
+                        x=selected_factors[0],
+                        y=response,
+                        color=selected_factors[1],
+                        markers=True,
+                        title=f"{selected_factors[0]} × {selected_factors[1]} 교호작용"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # 잔차 분석
+                with st.expander("잔차 분석"):
+                    residuals = model.resid
+                    fitted = model.fittedvalues
+                    
+                    fig = make_subplots(
+                        rows=2, cols=2,
+                        subplot_titles=('잔차 vs 적합값', 'Q-Q 플롯', '잔차 히스토그램', 'Cook의 거리')
+                    )
+                    
+                    # 잔차 vs 적합값
+                    fig.add_trace(
+                        go.Scatter(x=fitted, y=residuals, mode='markers'),
+                        row=1, col=1
+                    )
+                    
+                    # Q-Q 플롯
+                    qq = stats.probplot(residuals, dist="norm")
+                    fig.add_trace(
+                        go.Scatter(x=qq[0][0], y=qq[0][1], mode='markers'),
+                        row=1, col=2
+                    )
+                    fig.add_trace(
+                        go.Scatter(x=qq[0][0], y=qq[0][0], mode='lines', line=dict(color='red')),
+                        row=1, col=2
+                    )
+                    
+                    # 잔차 히스토그램
+                    fig.add_trace(
+                        go.Histogram(x=residuals, nbinsx=30),
+                        row=2, col=1
+                    )
+                    
+                    # Cook의 거리
+                    influence = model.get_influence()
+                    cooks_d = influence.cooks_distance[0]
+                    fig.add_trace(
+                        go.Scatter(y=cooks_d, mode='markers'),
+                        row=2, col=2
+                    )
+                    
+                    fig.update_layout(height=800, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"ANOVA 분석 중 오류 발생: {str(e)}")
     
     def _render_regression_analysis(self, df: pd.DataFrame):
-        """회귀분석 렌더링"""
-        st.write("### 회귀분석")
+        """회귀분석"""
+        st.markdown("#### 회귀분석")
         
-        col1, col2 = st.columns(2)
+        # 반응변수 선택
+        response = st.selectbox(
+            "반응변수",
+            st.session_state.selected_responses,
+            key="reg_response"
+        )
         
-        with col1:
-            # 반응변수 선택
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            response = st.selectbox("반응변수", numeric_cols, key="reg_response")
+        # 독립변수 선택
+        predictors = st.multiselect(
+            "독립변수",
+            st.session_state.selected_factors,
+            default=st.session_state.selected_factors
+        )
+        
+        if response and predictors:
+            # 회귀 모델 옵션
+            col1, col2, col3 = st.columns(3)
             
-            # 독립변수 선택
-            predictors = st.multiselect(
-                "독립변수",
-                [col for col in numeric_cols if col != response],
-                key="reg_predictors"
-            )
+            with col1:
+                model_type = st.selectbox(
+                    "모델 유형",
+                    ["선형", "다항식", "교호작용 포함"]
+                )
             
-        with col2:
-            # 회귀 옵션
-            model_type = st.selectbox(
-                "모델 유형",
-                ["선형", "다항식", "로그 변환"]
-            )
+            with col2:
+                if model_type == "다항식":
+                    poly_degree = st.number_input("차수", min_value=2, max_value=4, value=2)
+            
+            with col3:
+                include_intercept = st.checkbox("절편 포함", value=True)
+            
+            # 모델 구축
+            X = df[predictors]
+            y = df[response]
             
             if model_type == "다항식":
-                poly_degree = st.slider("차수", 2, 4, 2)
+                from sklearn.preprocessing import PolynomialFeatures
+                poly = PolynomialFeatures(degree=poly_degree, include_bias=False)
+                X_poly = poly.fit_transform(X)
+                feature_names = poly.get_feature_names_out(predictors)
+                X = pd.DataFrame(X_poly, columns=feature_names, index=X.index)
             
-            include_interaction = st.checkbox("교호작용 포함", value=False)
-        
-        if st.button("회귀분석 실행", type="primary", key="run_regression"):
-            if len(predictors) == 0:
-                st.warning("최소 하나의 독립변수를 선택하세요.")
-                return
-                
-            with st.spinner("회귀분석 중..."):
-                try:
-                    # 회귀분석 수행
-                    results = self._perform_regression(
-                        df, response, predictors,
-                        model_type, poly_degree if model_type == "다항식" else None,
-                        include_interaction
-                    )
-                    
-                    # 결과 저장
-                    st.session_state.analysis_results['regression'] = results
-                    
-                    # 결과 표시
-                    self._display_regression_results(results)
-                    
-                except Exception as e:
-                    st.error(f"회귀분석 오류: {str(e)}")
-    
-    def _perform_regression(self, df: pd.DataFrame, response: str,
-                           predictors: List[str], model_type: str,
-                           poly_degree: Optional[int],
-                           include_interaction: bool) -> Dict:
-        """회귀분석 수행"""
-        # 데이터 준비
-        X = df[predictors].copy()
-        y = df[response]
-        
-        # 모델 유형에 따른 변환
-        if model_type == "다항식":
-            from sklearn.preprocessing import PolynomialFeatures
-            poly = PolynomialFeatures(degree=poly_degree, include_bias=False)
-            X_poly = poly.fit_transform(X)
-            X = pd.DataFrame(
-                X_poly,
-                columns=poly.get_feature_names_out(predictors)
+            if include_intercept:
+                X = sm.add_constant(X)
+            
+            # 모델 적합
+            model = sm.OLS(y, X).fit()
+            
+            # 결과 표시
+            st.markdown("##### 회귀분석 결과")
+            
+            # 모델 요약 메트릭
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("R²", f"{model.rsquared:.3f}")
+            with col2:
+                st.metric("Adj. R²", f"{model.rsquared_adj:.3f}")
+            with col3:
+                st.metric("F-statistic", f"{model.fvalue:.3f}")
+            with col4:
+                st.metric("p-value", f"{model.f_pvalue:.4f}")
+            
+            # 계수 테이블
+            coef_df = pd.DataFrame({
+                '계수': model.params,
+                '표준오차': model.bse,
+                't-값': model.tvalues,
+                'p-값': model.pvalues,
+                '95% CI 하한': model.conf_int()[0],
+                '95% CI 상한': model.conf_int()[1]
+            })
+            
+            coef_df['유의성'] = coef_df['p-값'].apply(
+                lambda p: '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else ''
             )
-        elif model_type == "로그 변환":
-            X = np.log(X + 1)  # log(x+1) to handle zeros
-        
-        # 상수항 추가
-        X = sm.add_constant(X)
-        
-        # 모델 적합
-        model = sm.OLS(y, X).fit()
-        
-        # 예측값
-        predictions = model.predict(X)
-        
-        # VIF 계산 (다중공선성)
-        from statsmodels.stats.outliers_influence import variance_inflation_factor
-        vif_data = pd.DataFrame()
-        vif_data["변수"] = X.columns
-        vif_data["VIF"] = [variance_inflation_factor(X.values, i) 
-                          for i in range(len(X.columns))]
-        
-        return {
-            'model': model,
-            'summary': model.summary(),
-            'r_squared': model.rsquared,
-            'adj_r_squared': model.rsquared_adj,
-            'coefficients': model.params.to_dict(),
-            'p_values': model.pvalues.to_dict(),
-            'predictions': predictions,
-            'residuals': model.resid,
-            'vif': vif_data,
-            'aic': model.aic,
-            'bic': model.bic
-        }
-    
-    def _display_regression_results(self, results: Dict):
-        """회귀분석 결과 표시"""
-        st.success("회귀분석 완료!")
-        
-        # 모델 요약
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            self.ui.render_metric_card("R²", f"{results['r_squared']:.4f}")
-        with col2:
-            self.ui.render_metric_card("Adjusted R²", f"{results['adj_r_squared']:.4f}")
-        with col3:
-            self.ui.render_metric_card("AIC", f"{results['aic']:.2f}")
-        with col4:
-            self.ui.render_metric_card("BIC", f"{results['bic']:.2f}")
-        
-        # 회귀계수
-        st.write("**회귀계수**")
-        coef_df = pd.DataFrame({
-            '계수': results['coefficients'],
-            'p-value': results['p_values']
-        })
-        coef_df['유의성'] = coef_df['p-value'].apply(
-            lambda p: '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else ''
-        )
-        st.dataframe(coef_df, use_container_width=True)
-        
-        # VIF (다중공선성)
-        with st.expander("다중공선성 진단 (VIF)"):
-            st.dataframe(results['vif'], use_container_width=True)
-            st.caption("VIF > 10인 경우 다중공선성 문제가 있을 수 있습니다.")
-        
-        # 잔차 플롯
-        self._render_residual_plots(results['model'])
+            
+            st.dataframe(
+                coef_df.style.format({
+                    '계수': '{:.4f}',
+                    '표준오차': '{:.4f}',
+                    't-값': '{:.3f}',
+                    'p-값': '{:.4f}',
+                    '95% CI 하한': '{:.4f}',
+                    '95% CI 상한': '{:.4f}'
+                }),
+                use_container_width=True
+            )
+            
+            # 예측 vs 실제 플롯
+            st.markdown("##### 모델 진단")
+            
+            predictions = model.predict(X)
+            
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=('예측 vs 실제', '잔차 플롯', '잔차 분포', 'Scale-Location')
+            )
+            
+            # 예측 vs 실제
+            fig.add_trace(
+                go.Scatter(x=y, y=predictions, mode='markers', name='데이터'),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=[y.min(), y.max()], y=[y.min(), y.max()], 
+                          mode='lines', line=dict(color='red', dash='dash'), name='y=x'),
+                row=1, col=1
+            )
+            
+            # 잔차 플롯
+            residuals = y - predictions
+            fig.add_trace(
+                go.Scatter(x=predictions, y=residuals, mode='markers'),
+                row=1, col=2
+            )
+            fig.add_hline(y=0, line_color="red", line_dash="dash", row=1, col=2)
+            
+            # 잔차 분포
+            fig.add_trace(
+                go.Histogram(x=residuals, nbinsx=30),
+                row=2, col=1
+            )
+            
+            # Scale-Location
+            standardized_residuals = residuals / residuals.std()
+            fig.add_trace(
+                go.Scatter(x=predictions, y=np.sqrt(np.abs(standardized_residuals)), mode='markers'),
+                row=2, col=2
+            )
+            
+            fig.update_layout(height=800, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # VIF (다중공선성) 체크
+            if len(predictors) > 1:
+                with st.expander("다중공선성 진단"):
+                    from statsmodels.stats.outliers_influence import variance_inflation_factor
+                    
+                    vif_data = pd.DataFrame()
+                    vif_data["변수"] = X.columns[1:] if include_intercept else X.columns
+                    vif_data["VIF"] = [variance_inflation_factor(X.values, i+1 if include_intercept else i) 
+                                       for i in range(len(vif_data))]
+                    
+                    st.dataframe(vif_data, use_container_width=True)
+                    
+                    high_vif = vif_data[vif_data['VIF'] > 10]
+                    if not high_vif.empty:
+                        st.warning(f"⚠️ 다중공선성 주의: {', '.join(high_vif['변수'].tolist())}")
     
     def _render_rsm_analysis(self, df: pd.DataFrame):
-        """반응표면분석 렌더링"""
-        st.write("### 반응표면분석 (RSM)")
+        """반응표면분석 (RSM)"""
+        st.markdown("#### 반응표면분석 (RSM)")
         
-        st.info("""
-        반응표면분석은 실험계획법의 데이터를 바탕으로 
-        최적 조건을 찾는 고급 분석 방법입니다.
-        """)
+        # 반응변수 선택
+        response = st.selectbox(
+            "반응변수",
+            st.session_state.selected_responses,
+            key="rsm_response"
+        )
         
-        # RSM 설정
-        col1, col2 = st.columns(2)
+        # 요인 선택 (최대 3개)
+        factors = st.multiselect(
+            "요인 선택 (최대 3개)",
+            st.session_state.selected_factors,
+            default=st.session_state.selected_factors[:2] if len(st.session_state.selected_factors) >= 2 else st.session_state.selected_factors,
+            max_selections=3
+        )
         
-        with col1:
-            # 반응변수
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            response = st.selectbox("반응변수", numeric_cols, key="rsm_response")
+        if response and len(factors) >= 2:
+            # 2차 모델 적합
+            from sklearn.preprocessing import PolynomialFeatures
             
-            # 실험인자
-            factors = st.multiselect(
-                "실험인자 (2-4개)",
-                [col for col in numeric_cols if col != response],
-                key="rsm_factors"
-            )
+            X = df[factors]
+            y = df[response]
             
-        with col2:
-            # RSM 모델
-            rsm_model = st.selectbox(
-                "RSM 모델",
-                ["2차 모델", "Box-Behnken", "중심합성계획"]
-            )
+            # 2차 다항식 변환
+            poly = PolynomialFeatures(degree=2, include_bias=True)
+            X_poly = poly.fit_transform(X)
+            feature_names = poly.get_feature_names_out(factors)
             
-            # 최적화 목표
+            # 모델 적합
+            model = sm.OLS(y, X_poly).fit()
+            
+            # 모델 요약
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("R²", f"{model.rsquared:.3f}")
+            with col2:
+                st.metric("Adj. R²", f"{model.rsquared_adj:.3f}")
+            with col3:
+                st.metric("RMSE", f"{np.sqrt(model.mse_resid):.3f}")
+            
+            # 반응표면 플롯
+            if len(factors) == 2:
+                st.markdown("##### 3D 반응표면")
+                
+                # 격자 생성
+                x1_range = np.linspace(df[factors[0]].min(), df[factors[0]].max(), 50)
+                x2_range = np.linspace(df[factors[1]].min(), df[factors[1]].max(), 50)
+                X1, X2 = np.meshgrid(x1_range, x2_range)
+                
+                # 예측
+                X_pred = np.column_stack([X1.ravel(), X2.ravel()])
+                X_pred_poly = poly.transform(X_pred)
+                Y_pred = model.predict(X_pred_poly).reshape(X1.shape)
+                
+                # 3D 표면 플롯
+                fig = go.Figure(data=[
+                    go.Surface(x=x1_range, y=x2_range, z=Y_pred, colorscale='viridis'),
+                    go.Scatter3d(x=df[factors[0]], y=df[factors[1]], z=y,
+                                mode='markers', marker=dict(size=5, color='red'))
+                ])
+                
+                fig.update_layout(
+                    title="반응표면",
+                    scene=dict(
+                        xaxis_title=factors[0],
+                        yaxis_title=factors[1],
+                        zaxis_title=response
+                    ),
+                    height=600
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # 등고선 플롯
+                st.markdown("##### 등고선 플롯")
+                
+                fig_contour = go.Figure(data=
+                    go.Contour(x=x1_range, y=x2_range, z=Y_pred, 
+                              colorscale='viridis', showscale=True)
+                )
+                
+                # 실험점 추가
+                fig_contour.add_trace(
+                    go.Scatter(x=df[factors[0]], y=df[factors[1]], 
+                              mode='markers', marker=dict(size=8, color='red'),
+                              name='실험점')
+                )
+                
+                fig_contour.update_layout(
+                    xaxis_title=factors[0],
+                    yaxis_title=factors[1],
+                    height=500
+                )
+                
+                st.plotly_chart(fig_contour, use_container_width=True)
+            
+            # 최적점 찾기
+            st.markdown("##### 최적화")
+            
             optimization_goal = st.radio(
                 "최적화 목표",
                 ["최대화", "최소화", "목표값"],
@@ -1322,523 +795,1282 @@ class DataAnalysisPage:
             )
             
             if optimization_goal == "목표값":
-                target = st.number_input("목표값", key="rsm_target")
-        
-        if len(factors) < 2:
-            st.warning("최소 2개의 실험인자를 선택하세요.")
-            return
+                target_value = st.number_input("목표값", value=y.mean())
             
-        if st.button("RSM 분석 실행", type="primary", key="run_rsm"):
-            with st.spinner("반응표면 분석 중..."):
-                try:
-                    # RSM 수행
-                    results = self._perform_rsm(
-                        df, response, factors,
-                        rsm_model, optimization_goal,
-                        target if optimization_goal == "목표값" else None
-                    )
-                    
-                    # 결과 저장
-                    st.session_state.analysis_results['rsm'] = results
-                    
-                    # 결과 표시
-                    self._display_rsm_results(results)
-                    
-                except Exception as e:
-                    st.error(f"RSM 분석 오류: {str(e)}")
-    
-    def _perform_rsm(self, df: pd.DataFrame, response: str,
-                    factors: List[str], model_type: str,
-                    optimization_goal: str,
-                    target: Optional[float]) -> Dict:
-        """RSM 분석 수행"""
-        # 2차 모델 생성
-        from sklearn.preprocessing import PolynomialFeatures
-        
-        X = df[factors]
-        y = df[response]
-        
-        # 2차 다항식 특성 생성
-        poly = PolynomialFeatures(degree=2, include_bias=True)
-        X_poly = poly.fit_transform(X)
-        feature_names = poly.get_feature_names_out(factors)
-        
-        # 회귀모델 적합
-        X_poly_df = pd.DataFrame(X_poly, columns=feature_names)
-        model = sm.OLS(y, X_poly_df).fit()
-        
-        # 최적점 찾기
-        from scipy.optimize import minimize
-        
-        def objective(x):
-            x_poly = poly.transform([x])
-            pred = model.predict(x_poly)[0]
-            
-            if optimization_goal == "최대화":
-                return -pred
-            elif optimization_goal == "최소화":
-                return pred
-            else:  # 목표값
-                return (pred - target) ** 2
-        
-        # 초기값과 범위
-        x0 = X.mean().values
-        bounds = [(X[col].min(), X[col].max()) for col in factors]
-        
-        # 최적화
-        opt_result = minimize(objective, x0, bounds=bounds, method='L-BFGS-B')
-        
-        # 최적점에서의 예측
-        optimal_x = opt_result.x
-        optimal_x_poly = poly.transform([optimal_x])
-        optimal_y = model.predict(optimal_x_poly)[0]
-        
-        # 반응표면 데이터 생성 (시각화용)
-        if len(factors) >= 2:
-            surface_data = self._generate_surface_data(
-                model, poly, factors[:2], X[factors[2:]].mean() if len(factors) > 2 else None
-            )
-        else:
-            surface_data = None
-        
-        return {
-            'model': model,
-            'polynomial_features': poly,
-            'feature_names': feature_names,
-            'optimal_conditions': dict(zip(factors, optimal_x)),
-            'optimal_response': optimal_y,
-            'optimization_goal': optimization_goal,
-            'target_value': target,
-            'surface_data': surface_data,
-            'r_squared': model.rsquared,
-            'anova': sm.stats.anova_lm(model, typ=2)
-        }
-    
-    def _generate_surface_data(self, model, poly, factors, fixed_values=None):
-        """반응표면 데이터 생성"""
-        # 그리드 생성
-        x_range = np.linspace(0, 1, 50)
-        y_range = np.linspace(0, 1, 50)
-        X_grid, Y_grid = np.meshgrid(x_range, y_range)
-        
-        # 예측값 계산
-        Z_grid = np.zeros_like(X_grid)
-        
-        for i in range(X_grid.shape[0]):
-            for j in range(X_grid.shape[1]):
-                point = [X_grid[i, j], Y_grid[i, j]]
+            if st.button("최적점 찾기", type="primary"):
+                from scipy.optimize import minimize
                 
-                # 추가 요인이 있으면 고정값 사용
-                if fixed_values is not None:
-                    point.extend(fixed_values)
+                def objective(x):
+                    x_poly = poly.transform(x.reshape(1, -1))
+                    pred = model.predict(x_poly)[0]
+                    
+                    if optimization_goal == "최대화":
+                        return -pred
+                    elif optimization_goal == "최소화":
+                        return pred
+                    else:  # 목표값
+                        return (pred - target_value) ** 2
                 
-                point_poly = poly.transform([point])
-                Z_grid[i, j] = model.predict(point_poly)[0]
-        
-        return {
-            'X': X_grid,
-            'Y': Y_grid,
-            'Z': Z_grid,
-            'factors': factors
-        }
+                # 초기점
+                x0 = X.mean().values
+                
+                # 경계 설정
+                bounds = [(X[col].min(), X[col].max()) for col in factors]
+                
+                # 최적화
+                result = minimize(objective, x0, bounds=bounds, method='L-BFGS-B')
+                
+                if result.success:
+                    optimal_x = result.x
+                    optimal_x_poly = poly.transform(optimal_x.reshape(1, -1))
+                    optimal_y = model.predict(optimal_x_poly)[0]
+                    
+                    st.success("✅ 최적점 발견!")
+                    
+                    # 최적 조건 표시
+                    optimal_df = pd.DataFrame({
+                        '요인': factors,
+                        '최적값': optimal_x
+                    })
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.dataframe(optimal_df, use_container_width=True)
+                    with col2:
+                        st.metric(f"예측 {response}", f"{optimal_y:.3f}")
+                else:
+                    st.error("최적화 실패")
     
-    def _display_rsm_results(self, results: Dict):
-        """RSM 결과 표시"""
-        st.success("반응표면분석 완료!")
+    def _render_pca_analysis(self, df: pd.DataFrame):
+        """주성분분석 (PCA)"""
+        st.markdown("#### 주성분분석 (PCA)")
         
-        # 최적 조건
-        st.write("### 🎯 최적 조건")
+        # 변수 선택
+        variables = st.multiselect(
+            "분석할 변수",
+            st.session_state.selected_factors + st.session_state.selected_responses,
+            default=st.session_state.selected_factors
+        )
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**최적 인자 수준**")
-            for factor, value in results['optimal_conditions'].items():
-                st.write(f"- {factor}: {value:.4f}")
-        
-        with col2:
-            st.write("**예측 반응값**")
-            self.ui.render_metric_card(
-                f"{results['optimization_goal']} 값",
-                f"{results['optimal_response']:.4f}"
-            )
-            
-            if results['optimization_goal'] == "목표값":
-                error = abs(results['optimal_response'] - results['target_value'])
-                pct_error = (error / results['target_value']) * 100
-                st.metric("목표값 대비 오차", f"{pct_error:.1f}%")
-        
-        # 모델 적합도
-        st.write("### 📊 모델 적합도")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            self.ui.render_metric_card("R²", f"{results['r_squared']:.4f}")
-        
-        with col2:
-            # ANOVA 테이블
-            with st.expander("ANOVA 테이블"):
-                st.dataframe(results['anova'], use_container_width=True)
-        
-        # 반응표면 플롯
-        if results['surface_data']:
-            st.write("### 🗺️ 반응표면 플롯")
-            
-            surface = results['surface_data']
-            
-            # 3D Surface
-            fig = go.Figure(data=[
-                go.Surface(
-                    x=surface['X'],
-                    y=surface['Y'],
-                    z=surface['Z'],
-                    colorscale='Viridis',
-                    contours={
-                        "z": {"show": True, "usecolormap": True,
-                              "project": {"z": True}}
-                    }
-                )
-            ])
-            
-            # 최적점 표시
-            opt_x = results['optimal_conditions'][surface['factors'][0]]
-            opt_y = results['optimal_conditions'][surface['factors'][1]]
-            opt_z = results['optimal_response']
-            
-            fig.add_trace(go.Scatter3d(
-                x=[opt_x], y=[opt_y], z=[opt_z],
-                mode='markers+text',
-                marker=dict(size=10, color='red'),
-                text=['최적점'],
-                textposition='top center',
-                name='최적점'
-            ))
-            
-            fig.update_layout(
-                title="반응표면 3D 플롯",
-                scene=dict(
-                    xaxis_title=surface['factors'][0],
-                    yaxis_title=surface['factors'][1],
-                    zaxis_title="Response"
-                ),
-                height=600
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # 등고선 플롯
-            fig_contour = go.Figure(data=[
-                go.Contour(
-                    x=surface['X'][0],
-                    y=surface['Y'][:, 0],
-                    z=surface['Z'],
-                    colorscale='Viridis',
-                    contours=dict(
-                        coloring='heatmap',
-                        showlabels=True
-                    )
-                )
-            ])
-            
-            # 최적점 표시
-            fig_contour.add_trace(go.Scatter(
-                x=[opt_x], y=[opt_y],
-                mode='markers+text',
-                marker=dict(size=15, color='red', symbol='x'),
-                text=['최적점'],
-                textposition='top center',
-                name='최적점'
-            ))
-            
-            fig_contour.update_layout(
-                title="반응표면 등고선 플롯",
-                xaxis_title=surface['factors'][0],
-                yaxis_title=surface['factors'][1],
-                height=500
-            )
-            
-            st.plotly_chart(fig_contour, use_container_width=True)
-    
-    def _render_correlation_analysis(self, df: pd.DataFrame):
-        """상관분석 렌더링"""
-        st.write("### 상관분석")
-        
-        # 숫자형 변수만 선택
-        numeric_df = df.select_dtypes(include=[np.number])
-        
-        if numeric_df.empty:
-            st.warning("숫자형 변수가 없습니다.")
+        if len(variables) < 2:
+            st.warning("최소 2개 이상의 변수를 선택해주세요")
             return
         
-        # 상관계수 계산
-        corr_matrix = numeric_df.corr()
+        # 데이터 준비
+        X = df[variables].dropna()
         
-        # 히트맵
-        fig = go.Figure(data=go.Heatmap(
-            z=corr_matrix.values,
-            x=corr_matrix.columns,
-            y=corr_matrix.columns,
-            colorscale='RdBu',
-            zmid=0,
-            text=corr_matrix.round(2).values,
-            texttemplate='%{text}',
-            textfont={"size": 10},
-            reversescale=True
+        # 표준화
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # PCA 수행
+        pca = PCA()
+        X_pca = pca.fit_transform(X_scaled)
+        
+        # 주성분 개수 선택
+        n_components = st.slider(
+            "주성분 개수",
+            min_value=2,
+            max_value=min(len(variables), 10),
+            value=min(3, len(variables))
+        )
+        
+        # 설명된 분산
+        st.markdown("##### 설명된 분산")
+        
+        explained_var = pca.explained_variance_ratio_[:n_components]
+        cumulative_var = np.cumsum(explained_var)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=[f'PC{i+1}' for i in range(n_components)],
+            y=explained_var * 100,
+            name='개별',
+            marker_color='lightblue'
+        ))
+        fig.add_trace(go.Scatter(
+            x=[f'PC{i+1}' for i in range(n_components)],
+            y=cumulative_var * 100,
+            name='누적',
+            line=dict(color='red'),
+            yaxis='y2'
         ))
         
         fig.update_layout(
-            title="상관계수 히트맵",
-            height=600,
-            xaxis={'side': 'bottom'}
+            title="주성분별 설명된 분산",
+            yaxis=dict(title="설명된 분산 (%)"),
+            yaxis2=dict(title="누적 설명된 분산 (%)", overlaying='y', side='right'),
+            height=400
         )
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # 높은 상관관계 표시
-        st.write("### 📊 주요 상관관계")
+        # 주성분 점수 플롯
+        st.markdown("##### 주성분 점수 플롯")
         
-        threshold = st.slider("상관계수 임계값", 0.5, 0.9, 0.7, 0.05)
-        
-        high_corr = []
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i+1, len(corr_matrix.columns)):
-                corr_val = corr_matrix.iloc[i, j]
-                if abs(corr_val) >= threshold:
-                    high_corr.append({
-                        '변수1': corr_matrix.columns[i],
-                        '변수2': corr_matrix.columns[j],
-                        '상관계수': corr_val,
-                        '관계': '양의 상관' if corr_val > 0 else '음의 상관'
-                    })
-        
-        if high_corr:
-            high_corr_df = pd.DataFrame(high_corr)
-            high_corr_df = high_corr_df.sort_values('상관계수', 
-                                                    key=abs, ascending=False)
-            st.dataframe(high_corr_df, use_container_width=True)
-        else:
-            st.info(f"상관계수가 {threshold} 이상인 변수 쌍이 없습니다.")
-    
-    def _render_pca_analysis(self, df: pd.DataFrame):
-        """주성분분석 렌더링"""
-        st.write("### 주성분분석 (PCA)")
-        
-        # 숫자형 변수만 선택
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if len(numeric_cols) < 2:
-            st.warning("최소 2개의 숫자형 변수가 필요합니다.")
-            return
-        
-        # 변수 선택
-        selected_vars = st.multiselect(
-            "분석할 변수",
-            numeric_cols,
-            default=numeric_cols[:5] if len(numeric_cols) > 5 else numeric_cols
-        )
-        
-        if len(selected_vars) < 2:
-            st.warning("최소 2개의 변수를 선택하세요.")
-            return
-        
-        # 표준화 옵션
-        standardize = st.checkbox("데이터 표준화", value=True)
-        
-        if st.button("PCA 실행", type="primary"):
-            with st.spinner("주성분분석 중..."):
-                # 데이터 준비
-                X = df[selected_vars].dropna()
-                
-                if standardize:
-                    scaler = StandardScaler()
-                    X_scaled = scaler.fit_transform(X)
-                else:
-                    X_scaled = X.values
-                
-                # PCA 수행
-                pca = PCA()
-                X_pca = pca.fit_transform(X_scaled)
-                
-                # 결과 표시
-                st.success("주성분분석 완료!")
-                
-                # 설명된 분산
-                st.write("### 📊 설명된 분산")
-                
-                explained_var = pca.explained_variance_ratio_
-                cumsum_var = np.cumsum(explained_var)
-                
-                fig = go.Figure()
-                
-                # 개별 설명 분산
-                fig.add_trace(go.Bar(
-                    x=[f'PC{i+1}' for i in range(len(explained_var))],
-                    y=explained_var,
-                    name='개별',
-                    marker_color='lightblue'
-                ))
-                
-                # 누적 설명 분산
-                fig.add_trace(go.Scatter(
-                    x=[f'PC{i+1}' for i in range(len(cumsum_var))],
-                    y=cumsum_var,
-                    name='누적',
-                    mode='lines+markers',
-                    marker_color='red',
-                    yaxis='y2'
-                ))
-                
-                fig.update_layout(
-                    title="주성분별 설명 분산",
-                    xaxis_title="주성분",
-                    yaxis_title="설명 분산 비율",
-                    yaxis2=dict(
-                        title="누적 설명 분산",
-                        overlaying='y',
-                        side='right'
-                    ),
-                    height=400
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # 주성분 개수 선택
-                n_components = st.selectbox(
-                    "사용할 주성분 개수",
-                    range(1, min(len(selected_vars), 6)),
-                    index=min(2, len(selected_vars)-1)
-                )
-                
-                # 주성분 점수 플롯
-                if n_components >= 2:
-                    st.write("### 🔍 주성분 점수 플롯")
-                    
-                    fig_score = go.Figure()
-                    
-                    fig_score.add_trace(go.Scatter(
-                        x=X_pca[:, 0],
-                        y=X_pca[:, 1],
-                        mode='markers',
-                        marker=dict(
-                            size=8,
-                            color=range(len(X_pca)),
-                            colorscale='Viridis',
-                            showscale=True
-                        ),
-                        text=[f'Sample {i+1}' for i in range(len(X_pca))],
-                        hovertemplate='%{text}<br>PC1: %{x:.2f}<br>PC2: %{y:.2f}'
-                    ))
-                    
-                    fig_score.update_layout(
-                        title="주성분 점수 플롯 (PC1 vs PC2)",
-                        xaxis_title=f'PC1 ({explained_var[0]:.1%})',
-                        yaxis_title=f'PC2 ({explained_var[1]:.1%})',
-                        height=500
-                    )
-                    
-                    st.plotly_chart(fig_score, use_container_width=True)
-                
-                # 주성분 적재량
-                st.write("### 📋 주성분 적재량")
-                
-                loadings = pd.DataFrame(
-                    pca.components_[:n_components].T,
-                    columns=[f'PC{i+1}' for i in range(n_components)],
-                    index=selected_vars
-                )
-                
-                # 히트맵으로 표시
-                fig_loading = go.Figure(data=go.Heatmap(
-                    z=loadings.values,
-                    x=loadings.columns,
-                    y=loadings.index,
-                    colorscale='RdBu',
-                    zmid=0,
-                    text=loadings.round(2).values,
-                    texttemplate='%{text}',
-                    textfont={"size": 10}
-                ))
-                
-                fig_loading.update_layout(
-                    title="주성분 적재량 히트맵",
-                    height=400
-                )
-                
-                st.plotly_chart(fig_loading, use_container_width=True)
-                
-                # 적재량 테이블
-                st.dataframe(
-                    loadings.round(3),
-                    use_container_width=True
-                )
-                
-                # 기여도가 높은 변수
-                st.write("### 🎯 주요 변수")
-                
-                for i in range(n_components):
-                    pc_loadings = loadings[f'PC{i+1}'].abs().sort_values(ascending=False)
-                    top_vars = pc_loadings.head(3)
-                    
-                    st.write(f"**PC{i+1}의 주요 변수:**")
-                    for var, loading in top_vars.items():
-                        direction = "+" if loadings.loc[var, f'PC{i+1}'] > 0 else "-"
-                        st.write(f"- {var}: {direction}{loading:.3f}")
-    
-    def _perform_sensitivity_analysis(self, optimal_conditions: Dict) -> Dict:
-        """민감도 분석"""
-        sensitivity = {}
-        
-        # 각 변수를 ±10% 변경했을 때의 영향 분석
-        for var in optimal_conditions:
-            base_value = optimal_conditions[var]
-            sensitivity[var] = {
-                'base': base_value,
-                'sensitivity': []
-            }
+        if n_components >= 2:
+            fig = px.scatter(
+                x=X_pca[:, 0],
+                y=X_pca[:, 1],
+                labels={'x': f'PC1 ({explained_var[0]*100:.1f}%)', 
+                       'y': f'PC2 ({explained_var[1]*100:.1f}%)'},
+                title="주성분 점수"
+            )
             
-            # -10% ~ +10% 범위에서 분석
-            for pct in range(-10, 11, 2):
-                test_conditions = optimal_conditions.copy()
-                test_conditions[var] = base_value * (1 + pct/100)
-                
-                # 예측값 계산 (간단한 예시)
-                # 실제로는 저장된 모델 사용
-                pred_change = pct * 0.5  # 임시 값
-                
-                sensitivity[var]['sensitivity'].append({
-                    'change_pct': pct,
-                    'response_change': pred_change
-                })
+            # 원점 추가
+            fig.add_hline(y=0, line_dash="dash", line_color="gray")
+            fig.add_vline(x=0, line_dash="dash", line_color="gray")
+            
+            st.plotly_chart(fig, use_container_width=True)
         
-        return sensitivity
-    
-    def _display_sensitivity_plot(self, sensitivity: Dict):
-        """민감도 플롯"""
+        # Loading 플롯
+        st.markdown("##### Loading 플롯")
+        
+        loadings = pca.components_[:2].T * np.sqrt(pca.explained_variance_[:2])
+        
         fig = go.Figure()
         
-        for var, data in sensitivity.items():
-            changes = [s['change_pct'] for s in data['sensitivity']]
-            responses = [s['response_change'] for s in data['sensitivity']]
-            
+        for i, var in enumerate(variables):
             fig.add_trace(go.Scatter(
-                x=changes,
-                y=responses,
+                x=[0, loadings[i, 0]],
+                y=[0, loadings[i, 1]],
+                mode='lines+text',
+                line=dict(color='blue'),
+                text=['', var],
+                textposition='top center',
+                showlegend=False
+            ))
+        
+        # 원 추가
+        theta = np.linspace(0, 2*np.pi, 100)
+        fig.add_trace(go.Scatter(
+            x=np.cos(theta),
+            y=np.sin(theta),
+            mode='lines',
+            line=dict(color='red', dash='dash'),
+            showlegend=False
+        ))
+        
+        fig.update_layout(
+            title="변수 Loading",
+            xaxis=dict(title=f'PC1 ({explained_var[0]*100:.1f}%)', range=[-1.2, 1.2]),
+            yaxis=dict(title=f'PC2 ({explained_var[1]*100:.1f}%)', range=[-1.2, 1.2]),
+            height=500,
+            width=500
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 주성분 해석
+        st.markdown("##### 주성분 해석")
+        
+        components_df = pd.DataFrame(
+            pca.components_[:n_components].T,
+            columns=[f'PC{i+1}' for i in range(n_components)],
+            index=variables
+        )
+        
+        st.dataframe(
+            components_df.style.background_gradient(cmap='RdBu', center=0),
+            use_container_width=True
+        )
+    
+    def _render_ai_insights(self):
+        """AI 인사이트 렌더링"""
+        st.subheader("🤖 AI 인사이트")
+        
+        df = st.session_state.processed_data if st.session_state.processed_data is not None else st.session_state.analysis_data
+        
+        if df is None:
+            st.warning("데이터를 먼저 업로드해주세요")
+            return
+        
+        # AI 설명 상세도 제어
+        col1, col2 = st.columns([4, 1])
+        with col2:
+            show_details = st.checkbox(
+                "🔍 상세 설명",
+                value=st.session_state.show_ai_details,
+                key="ai_insights_details_toggle"
+            )
+            st.session_state.show_ai_details = show_details
+        
+        # AI 분석 유형 선택
+        analysis_types = st.multiselect(
+            "AI 분석 유형",
+            ["패턴 발견", "이상치 탐지", "예측 모델", "최적화 제안", "인과관계 분석"],
+            default=["패턴 발견", "최적화 제안"]
+        )
+        
+        # AI 엔진 선택
+        available_engines = self.api_manager.get_available_engines()
+        selected_engine = st.selectbox(
+            "AI 엔진",
+            available_engines,
+            format_func=lambda x: f"{x} ({'빠름' if x in ['groq', 'sambanova'] else '정밀'})"
+        )
+        
+        # AI 분석 실행
+        if st.button("🚀 AI 분석 시작", type="primary", use_container_width=True):
+            self._run_ai_analysis(df, analysis_types, selected_engine)
+        
+        # AI 인사이트 표시
+        if st.session_state.ai_insights:
+            for i, insight in enumerate(st.session_state.ai_insights):
+                with st.container():
+                    # 인사이트 헤더
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    with col1:
+                        st.markdown(f"### {insight['type']}")
+                    with col2:
+                        confidence = insight.get('confidence', 0)
+                        st.metric("신뢰도", f"{confidence}%")
+                    with col3:
+                        st.caption(f"by {insight.get('engine', 'AI')}")
+                    
+                    # 핵심 인사이트
+                    st.info(insight['main_insight'])
+                    
+                    # 상세 설명 (조건부)
+                    if show_details and 'details' in insight:
+                        with st.expander("상세 분석", expanded=True):
+                            tabs = st.tabs(["추론 과정", "근거 데이터", "대안 해석", "제한사항"])
+                            
+                            with tabs[0]:
+                                st.write("**추론 과정**")
+                                st.write(insight['details'].get('reasoning', ''))
+                            
+                            with tabs[1]:
+                                st.write("**근거 데이터**")
+                                evidence = insight['details'].get('evidence', {})
+                                if evidence:
+                                    for key, value in evidence.items():
+                                        st.write(f"- {key}: {value}")
+                            
+                            with tabs[2]:
+                                st.write("**대안 해석**")
+                                alternatives = insight['details'].get('alternatives', [])
+                                for alt in alternatives:
+                                    st.write(f"- {alt}")
+                            
+                            with tabs[3]:
+                                st.write("**제한사항**")
+                                st.write(insight['details'].get('limitations', ''))
+                    
+                    # 시각화 (있는 경우)
+                    if 'visualization' in insight:
+                        st.plotly_chart(insight['visualization'], use_container_width=True)
+                    
+                    # 액션 아이템
+                    if 'actions' in insight:
+                        st.markdown("**💡 권장 조치**")
+                        for action in insight['actions']:
+                            st.write(f"- {action}")
+                    
+                    st.divider()
+    
+    def _render_visualizations(self):
+        """시각화 렌더링"""
+        st.subheader("📈 데이터 시각화")
+        
+        df = st.session_state.processed_data if st.session_state.processed_data is not None else st.session_state.analysis_data
+        
+        if df is None:
+            st.warning("데이터를 먼저 업로드해주세요")
+            return
+        
+        # 시각화 유형 선택
+        viz_type = st.selectbox(
+            "시각화 유형",
+            ["산점도 행렬", "평행 좌표", "3D 산점도", "히트맵", "시계열", "분포 비교"]
+        )
+        
+        if viz_type == "산점도 행렬":
+            self._render_scatter_matrix(df)
+        elif viz_type == "평행 좌표":
+            self._render_parallel_coordinates(df)
+        elif viz_type == "3D 산점도":
+            self._render_3d_scatter(df)
+        elif viz_type == "히트맵":
+            self._render_heatmap(df)
+        elif viz_type == "시계열":
+            self._render_timeseries(df)
+        elif viz_type == "분포 비교":
+            self._render_distribution_comparison(df)
+    
+    def _render_scatter_matrix(self, df: pd.DataFrame):
+        """산점도 행렬"""
+        variables = st.multiselect(
+            "변수 선택",
+            st.session_state.selected_factors + st.session_state.selected_responses,
+            default=(st.session_state.selected_factors + st.session_state.selected_responses)[:4]
+        )
+        
+        if len(variables) < 2:
+            st.warning("최소 2개 이상의 변수를 선택해주세요")
+            return
+        
+        # 색상 변수 (선택사항)
+        categorical_cols = [col for col in df.columns if df[col].nunique() <= 10]
+        color_var = st.selectbox("색상 변수 (선택사항)", ["없음"] + categorical_cols)
+        
+        fig = px.scatter_matrix(
+            df,
+            dimensions=variables,
+            color=None if color_var == "없음" else color_var,
+            title="산점도 행렬",
+            height=800
+        )
+        
+        fig.update_traces(diagonal_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_parallel_coordinates(self, df: pd.DataFrame):
+        """평행 좌표"""
+        variables = st.multiselect(
+            "변수 선택",
+            st.session_state.selected_factors + st.session_state.selected_responses,
+            default=st.session_state.selected_factors + st.session_state.selected_responses
+        )
+        
+        if len(variables) < 2:
+            st.warning("최소 2개 이상의 변수를 선택해주세요")
+            return
+        
+        # 정규화
+        df_norm = df[variables].copy()
+        for col in variables:
+            df_norm[col] = (df[col] - df[col].min()) / (df[col].max() - df[col].min())
+        
+        # 색상 변수
+        color_var = st.selectbox(
+            "색상 변수",
+            st.session_state.selected_responses,
+            index=0 if st.session_state.selected_responses else None
+        )
+        
+        fig = go.Figure(data=
+            go.Parcoords(
+                line=dict(
+                    color=df[color_var] if color_var else None,
+                    colorscale='Viridis',
+                    showscale=True
+                ),
+                dimensions=[
+                    dict(
+                        range=[0, 1],
+                        label=var,
+                        values=df_norm[var]
+                    ) for var in variables
+                ]
+            )
+        )
+        
+        fig.update_layout(
+            title="평행 좌표 플롯",
+            height=600
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_3d_scatter(self, df: pd.DataFrame):
+        """3D 산점도"""
+        numeric_cols = st.session_state.selected_factors + st.session_state.selected_responses
+        
+        if len(numeric_cols) < 3:
+            st.warning("3D 시각화를 위해서는 최소 3개의 숫자형 변수가 필요합니다")
+            return
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            x_var = st.selectbox("X축", numeric_cols)
+        with col2:
+            y_var = st.selectbox("Y축", [c for c in numeric_cols if c != x_var])
+        with col3:
+            z_var = st.selectbox("Z축", [c for c in numeric_cols if c not in [x_var, y_var]])
+        
+        # 색상 및 크기 변수
+        col1, col2 = st.columns(2)
+        with col1:
+            color_var = st.selectbox("색상 변수", ["없음"] + numeric_cols)
+        with col2:
+            size_var = st.selectbox("크기 변수", ["없음"] + numeric_cols)
+        
+        fig = px.scatter_3d(
+            df,
+            x=x_var, y=y_var, z=z_var,
+            color=None if color_var == "없음" else color_var,
+            size=None if size_var == "없음" else size_var,
+            title="3D 산점도"
+        )
+        
+        fig.update_layout(height=700)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_heatmap(self, df: pd.DataFrame):
+        """히트맵"""
+        # 상관관계 유형 선택
+        heatmap_type = st.radio(
+            "히트맵 유형",
+            ["상관관계", "데이터 값"],
+            horizontal=True
+        )
+        
+        if heatmap_type == "상관관계":
+            variables = st.multiselect(
+                "변수 선택",
+                st.session_state.selected_factors + st.session_state.selected_responses,
+                default=st.session_state.selected_factors + st.session_state.selected_responses
+            )
+            
+            if len(variables) < 2:
+                st.warning("최소 2개 이상의 변수를 선택해주세요")
+                return
+            
+            corr_matrix = df[variables].corr()
+            
+            fig = px.imshow(
+                corr_matrix,
+                text_auto=True,
+                color_continuous_scale='RdBu',
+                range_color=[-1, 1],
+                title="상관관계 히트맵"
+            )
+            
+        else:  # 데이터 값
+            # 행/열 변수 선택
+            categorical_vars = [col for col in df.columns if df[col].nunique() <= 20]
+            
+            if len(categorical_vars) < 2:
+                st.warning("범주형 변수가 부족합니다")
+                return
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                row_var = st.selectbox("행 변수", categorical_vars)
+            with col2:
+                col_var = st.selectbox("열 변수", [v for v in categorical_vars if v != row_var])
+            with col3:
+                value_var = st.selectbox("값 변수", st.session_state.selected_responses)
+            
+            # 피벗 테이블 생성
+            pivot_table = df.pivot_table(
+                index=row_var,
+                columns=col_var,
+                values=value_var,
+                aggfunc='mean'
+            )
+            
+            fig = px.imshow(
+                pivot_table,
+                text_auto=True,
+                title=f"{value_var} 평균값 히트맵"
+            )
+        
+        fig.update_layout(height=600)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def _render_timeseries(self, df: pd.DataFrame):
+        """시계열 시각화"""
+        # 시간 변수 확인
+        time_cols = []
+        for col in df.columns:
+            try:
+                pd.to_datetime(df[col])
+                time_cols.append(col)
+            except:
+                pass
+        
+        if not time_cols:
+            # 인덱스가 시간인지 확인
+            try:
+                pd.to_datetime(df.index)
+                use_index = st.checkbox("인덱스를 시간축으로 사용", value=True)
+                if use_index:
+                    df = df.copy()
+                    df['시간'] = df.index
+                    time_cols = ['시간']
+            except:
+                st.warning("시계열 데이터가 없습니다")
+                return
+        
+        time_var = st.selectbox("시간 변수", time_cols)
+        
+        # Y축 변수 선택
+        y_vars = st.multiselect(
+            "Y축 변수",
+            st.session_state.selected_responses,
+            default=st.session_state.selected_responses[:3] if len(st.session_state.selected_responses) >= 3 else st.session_state.selected_responses
+        )
+        
+        if not y_vars:
+            st.warning("Y축 변수를 선택해주세요")
+            return
+        
+        # 시계열 플롯
+        fig = go.Figure()
+        
+        for var in y_vars:
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime(df[time_var]),
+                y=df[var],
                 mode='lines+markers',
                 name=var
             ))
         
         fig.update_layout(
-            title="민감도 분석",
-            xaxis_title="변수 변화율 (%)",
-            yaxis_title="반응값 변화율 (%)",
-            height=400
+            title="시계열 플롯",
+            xaxis_title=time_var,
+            yaxis_title="값",
+            height=500
         )
         
         st.plotly_chart(fig, use_container_width=True)
+        
+        # 이동평균 추가 옵션
+        if st.checkbox("이동평균 추가"):
+            window_size = st.slider("윈도우 크기", 3, 30, 7)
+            
+            fig_ma = go.Figure()
+            
+            for var in y_vars:
+                # 원본 데이터
+                fig_ma.add_trace(go.Scatter(
+                    x=pd.to_datetime(df[time_var]),
+                    y=df[var],
+                    mode='lines',
+                    name=f"{var} (원본)",
+                    line=dict(width=1)
+                ))
+                
+                # 이동평균
+                ma = df[var].rolling(window=window_size).mean()
+                fig_ma.add_trace(go.Scatter(
+                    x=pd.to_datetime(df[time_var]),
+                    y=ma,
+                    mode='lines',
+                    name=f"{var} (MA-{window_size})",
+                    line=dict(width=3)
+                ))
+            
+            fig_ma.update_layout(
+                title=f"시계열 플롯 (이동평균 포함)",
+                xaxis_title=time_var,
+                yaxis_title="값",
+                height=500
+            )
+            
+            st.plotly_chart(fig_ma, use_container_width=True)
+    
+    def _render_distribution_comparison(self, df: pd.DataFrame):
+        """분포 비교"""
+        # 비교할 변수 선택
+        compare_var = st.selectbox(
+            "비교할 변수",
+            st.session_state.selected_responses
+        )
+        
+        # 그룹 변수 선택
+        categorical_vars = [col for col in df.columns if df[col].nunique() <= 10]
+        group_var = st.selectbox("그룹 변수", categorical_vars)
+        
+        if compare_var and group_var:
+            # 비교 유형
+            plot_type = st.radio(
+                "플롯 유형",
+                ["박스 플롯", "바이올린 플롯", "히스토그램", "밀도 플롯"],
+                horizontal=True
+            )
+            
+            if plot_type == "박스 플롯":
+                fig = px.box(df, x=group_var, y=compare_var, title=f"{compare_var} 분포 비교")
+            elif plot_type == "바이올린 플롯":
+                fig = px.violin(df, x=group_var, y=compare_var, box=True, title=f"{compare_var} 분포 비교")
+            elif plot_type == "히스토그램":
+                fig = px.histogram(df, x=compare_var, color=group_var, marginal="box", title=f"{compare_var} 분포 비교")
+            else:  # 밀도 플롯
+                fig = go.Figure()
+                for group in df[group_var].unique():
+                    group_data = df[df[group_var] == group][compare_var]
+                    fig.add_trace(go.Violin(
+                        x=group_data,
+                        name=str(group),
+                        side='positive',
+                        meanline_visible=True
+                    ))
+                fig.update_layout(title=f"{compare_var} 밀도 비교", xaxis_title=compare_var)
+            
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 통계 검정
+            with st.expander("통계 검정"):
+                groups = [df[df[group_var] == g][compare_var].dropna() for g in df[group_var].unique()]
+                
+                if len(groups) == 2:
+                    # t-검정
+                    statistic, p_value = stats.ttest_ind(groups[0], groups[1])
+                    st.write(f"**t-검정**")
+                    st.write(f"- t-statistic: {statistic:.4f}")
+                    st.write(f"- p-value: {p_value:.4f}")
+                    st.write(f"- 결론: {'유의한 차이' if p_value < 0.05 else '유의한 차이 없음'} (α=0.05)")
+                else:
+                    # ANOVA
+                    statistic, p_value = stats.f_oneway(*groups)
+                    st.write(f"**일원분산분석 (One-way ANOVA)**")
+                    st.write(f"- F-statistic: {statistic:.4f}")
+                    st.write(f"- p-value: {p_value:.4f}")
+                    st.write(f"- 결론: {'유의한 차이' if p_value < 0.05 else '유의한 차이 없음'} (α=0.05)")
+    
+    def _render_optimization(self):
+        """최적화 렌더링"""
+        st.subheader("🎯 최적화")
+        
+        df = st.session_state.processed_data if st.session_state.processed_data is not None else st.session_state.analysis_data
+        
+        if df is None:
+            st.warning("데이터를 먼저 업로드해주세요")
+            return
+        
+        # 최적화 목표 설정
+        st.markdown("#### 최적화 목표 설정")
+        
+        optimization_targets = []
+        
+        for response in st.session_state.selected_responses:
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+            
+            with col1:
+                st.write(f"**{response}**")
+            
+            with col2:
+                goal = st.selectbox(
+                    "목표",
+                    ["최대화", "최소화", "목표값", "제외"],
+                    key=f"opt_goal_{response}"
+                )
+            
+            with col3:
+                if goal == "목표값":
+                    target = st.number_input(
+                        "목표값",
+                        value=df[response].mean(),
+                        key=f"opt_target_{response}"
+                    )
+                else:
+                    target = None
+            
+            with col4:
+                weight = st.number_input(
+                    "가중치",
+                    min_value=0.0,
+                    max_value=10.0,
+                    value=1.0,
+                    step=0.1,
+                    key=f"opt_weight_{response}"
+                )
+            
+            if goal != "제외":
+                optimization_targets.append({
+                    'response': response,
+                    'goal': goal,
+                    'target': target,
+                    'weight': weight
+                })
+        
+        if not optimization_targets:
+            st.warning("최소 1개 이상의 최적화 목표를 설정해주세요")
+            return
+        
+        # 제약조건 설정
+        st.markdown("#### 제약조건")
+        
+        constraints = []
+        if st.checkbox("제약조건 추가"):
+            for factor in st.session_state.selected_factors:
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                
+                with col1:
+                    st.write(f"**{factor}**")
+                
+                with col2:
+                    min_val = st.number_input(
+                        "최소값",
+                        value=df[factor].min(),
+                        key=f"const_min_{factor}"
+                    )
+                
+                with col3:
+                    max_val = st.number_input(
+                        "최대값",
+                        value=df[factor].max(),
+                        key=f"const_max_{factor}"
+                    )
+                
+                with col4:
+                    if st.checkbox("적용", key=f"const_apply_{factor}"):
+                        constraints.append({
+                            'factor': factor,
+                            'min': min_val,
+                            'max': max_val
+                        })
+        
+        # 최적화 방법 선택
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            optimization_method = st.selectbox(
+                "최적화 방법",
+                ["반응표면법", "유전자 알고리즘", "베이지안 최적화", "그리드 탐색"]
+            )
+        
+        with col2:
+            n_iterations = st.number_input(
+                "반복 횟수",
+                min_value=10,
+                max_value=1000,
+                value=100
+            )
+        
+        # 최적화 실행
+        if st.button("🚀 최적화 실행", type="primary", use_container_width=True):
+            with st.spinner("최적화 진행 중..."):
+                optimal_solution = self._run_optimization(
+                    df, 
+                    optimization_targets,
+                    constraints,
+                    optimization_method,
+                    n_iterations
+                )
+                
+                if optimal_solution:
+                    st.success("✅ 최적화 완료!")
+                    
+                    # 최적 조건 표시
+                    st.markdown("#### 최적 조건")
+                    
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        optimal_df = pd.DataFrame([optimal_solution['factors']])
+                        st.dataframe(optimal_df.T, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("**예측 결과**")
+                        for target in optimization_targets:
+                            pred_value = optimal_solution['predictions'][target['response']]
+                            st.metric(target['response'], f"{pred_value:.3f}")
+                    
+                    # 최적화 히스토리
+                    if 'history' in optimal_solution:
+                        st.markdown("#### 최적화 과정")
+                        
+                        fig = go.Figure()
+                        for i, target in enumerate(optimization_targets):
+                            fig.add_trace(go.Scatter(
+                                y=optimal_solution['history'][target['response']],
+                                mode='lines',
+                                name=target['response']
+                            ))
+                        
+                        fig.update_layout(
+                            title="최적화 수렴 과정",
+                            xaxis_title="반복",
+                            yaxis_title="목적함수 값",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # 민감도 분석
+                    if st.checkbox("민감도 분석"):
+                        self._render_sensitivity_analysis(
+                            optimal_solution,
+                            df,
+                            optimization_targets
+                        )
+    
+    def _render_report(self):
+        """보고서 생성"""
+        st.subheader("📋 분석 보고서")
+        
+        # 보고서 옵션
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            report_format = st.selectbox(
+                "보고서 형식",
+                ["대화형 HTML", "PDF", "Word", "PowerPoint"]
+            )
+        
+        with col2:
+            report_style = st.selectbox(
+                "보고서 스타일",
+                ["기술 보고서", "경영진 요약", "학술 논문", "프레젠테이션"]
+            )
+        
+        with col3:
+            include_options = st.multiselect(
+                "포함 항목",
+                ["기술통계", "통계분석", "시각화", "AI 인사이트", "최적화 결과"],
+                default=["기술통계", "시각화", "AI 인사이트"]
+            )
+        
+        # 보고서 미리보기
+        if st.button("보고서 미리보기", use_container_width=True):
+            with st.spinner("보고서 생성 중..."):
+                report_content = self._generate_report(
+                    report_format,
+                    report_style,
+                    include_options
+                )
+                
+                if report_content:
+                    st.success("✅ 보고서 생성 완료!")
+                    
+                    # 미리보기 표시
+                    with st.expander("보고서 미리보기", expanded=True):
+                        if report_format == "대화형 HTML":
+                            st.components.v1.html(report_content, height=800)
+                        else:
+                            st.text_area("보고서 내용", report_content, height=400)
+        
+        # 보고서 다운로드
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📥 다운로드", type="primary", use_container_width=True):
+                # 다운로드 로직
+                st.download_button(
+                    "다운로드",
+                    data=self._export_report(report_format),
+                    file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{report_format.lower()}",
+                    mime=self._get_mime_type(report_format)
+                )
+        
+        with col2:
+            if st.button("📧 이메일 전송", use_container_width=True):
+                # 이메일 전송 로직
+                st.info("이메일 전송 기능은 준비 중입니다")
+        
+        with col3:
+            if st.button("☁️ 클라우드 저장", use_container_width=True):
+                # 클라우드 저장 로직
+                st.info("클라우드 저장 기능은 준비 중입니다")
+    
+    def _preprocess_data(self, df: pd.DataFrame, options: List[str]) -> pd.DataFrame:
+        """데이터 전처리"""
+        processed_df = df.copy()
+        
+        # 결측치 제거
+        if "결측치 제거" in options:
+            before_rows = len(processed_df)
+            processed_df = processed_df.dropna()
+            st.info(f"결측치 제거: {before_rows - len(processed_df)}행 제거됨")
+        
+        # 이상치 제거 (IQR 방법)
+        if "이상치 제거" in options:
+            numeric_cols = processed_df.select_dtypes(include=[np.number]).columns
+            outliers_removed = 0
+            
+            for col in numeric_cols:
+                Q1 = processed_df[col].quantile(0.25)
+                Q3 = processed_df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                
+                before_rows = len(processed_df)
+                processed_df = processed_df[
+                    (processed_df[col] >= lower_bound) & 
+                    (processed_df[col] <= upper_bound)
+                ]
+                outliers_removed += before_rows - len(processed_df)
+            
+            st.info(f"이상치 제거: 총 {outliers_removed}행 제거됨")
+        
+        # 정규화
+        if "정규화" in options:
+            numeric_cols = processed_df.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                min_val = processed_df[col].min()
+                max_val = processed_df[col].max()
+                if max_val > min_val:
+                    processed_df[col] = (processed_df[col] - min_val) / (max_val - min_val)
+            st.info("정규화 완료 (0-1 범위)")
+        
+        # 표준화
+        if "표준화" in options:
+            numeric_cols = processed_df.select_dtypes(include=[np.number]).columns
+            scaler = StandardScaler()
+            processed_df[numeric_cols] = scaler.fit_transform(processed_df[numeric_cols])
+            st.info("표준화 완료 (평균=0, 표준편차=1)")
+        
+        return processed_df
+    
+    def _load_sample_data(self):
+        """샘플 데이터 로드"""
+        # 샘플 데이터 생성
+        np.random.seed(42)
+        n_samples = 100
+        
+        sample_data = pd.DataFrame({
+            'Temperature': np.random.uniform(20, 100, n_samples),
+            'Pressure': np.random.uniform(1, 10, n_samples),
+            'Time': np.random.uniform(10, 120, n_samples),
+            'Catalyst': np.random.choice(['A', 'B', 'C'], n_samples),
+            'Yield': np.random.normal(75, 10, n_samples),
+            'Purity': np.random.normal(95, 3, n_samples),
+            'Cost': np.random.uniform(10, 50, n_samples)
+        })
+        
+        # 상관관계 추가
+        sample_data['Yield'] += 0.3 * sample_data['Temperature'] - 0.2 * sample_data['Pressure']
+        sample_data['Purity'] += 0.2 * sample_data['Time'] - 0.1 * sample_data['Temperature']
+        
+        st.session_state.analysis_data = sample_data
+        st.success("✅ 샘플 데이터 로드 완료")
+        st.rerun()
+    
+    def _load_project_data(self):
+        """프로젝트 데이터 로드"""
+        # 현재 프로젝트의 실험 데이터 로드
+        if 'current_project' in st.session_state:
+            project_id = st.session_state.current_project.get('id')
+            experiment_data = self.db_manager.get_experiment_data(project_id)
+            
+            if experiment_data:
+                st.session_state.analysis_data = pd.DataFrame(experiment_data)
+                st.success("✅ 프로젝트 데이터 로드 완료")
+                st.rerun()
+            else:
+                st.warning("프로젝트에 실험 데이터가 없습니다")
+        else:
+            st.warning("먼저 프로젝트를 선택해주세요")
+    
+    def _run_ai_analysis(self, df: pd.DataFrame, analysis_types: List[str], engine: str):
+        """AI 분석 실행"""
+        insights = []
+        
+        for analysis_type in analysis_types:
+            with st.spinner(f"{analysis_type} 분석 중..."):
+                # 데이터 요약 준비
+                data_summary = self._prepare_data_summary(df)
+                
+                # AI 프롬프트 생성
+                prompt = self._create_analysis_prompt(analysis_type, data_summary)
+                
+                # AI 호출
+                response = self.api_manager.call_ai(
+                    prompt,
+                    engine=engine,
+                    response_format="structured",
+                    detail_level='detailed' if st.session_state.show_ai_details else 'simple'
+                )
+                
+                if response:
+                    insight = {
+                        'type': analysis_type,
+                        'engine': engine,
+                        'main_insight': response.get('main_insight', ''),
+                        'confidence': response.get('confidence', 85),
+                        'details': {
+                            'reasoning': response.get('reasoning', ''),
+                            'evidence': response.get('evidence', {}),
+                            'alternatives': response.get('alternatives', []),
+                            'limitations': response.get('limitations', '')
+                        },
+                        'actions': response.get('recommended_actions', [])
+                    }
+                    
+                    # 시각화 생성 (가능한 경우)
+                    if 'visualization_data' in response:
+                        insight['visualization'] = self._create_insight_visualization(
+                            response['visualization_data'],
+                            analysis_type
+                        )
+                    
+                    insights.append(insight)
+        
+        st.session_state.ai_insights = insights
+        st.success("✅ AI 분석 완료!")
+        st.rerun()
+    
+    def _prepare_data_summary(self, df: pd.DataFrame) -> Dict:
+        """AI 분석을 위한 데이터 요약"""
+        summary = {
+            'shape': df.shape,
+            'columns': df.columns.tolist(),
+            'dtypes': df.dtypes.to_dict(),
+            'missing_values': df.isnull().sum().to_dict(),
+            'statistics': df.describe().to_dict(),
+            'correlations': df.corr().to_dict() if len(df.select_dtypes(include=[np.number]).columns) > 1 else {}
+        }
+        
+        # 선택된 요인과 반응변수 정보
+        summary['factors'] = st.session_state.selected_factors
+        summary['responses'] = st.session_state.selected_responses
+        
+        return summary
+    
+    def _create_analysis_prompt(self, analysis_type: str, data_summary: Dict) -> str:
+        """AI 분석 프롬프트 생성"""
+        base_prompt = f"""
+        실험 데이터를 분석하여 {analysis_type}에 대한 인사이트를 제공해주세요.
+        
+        데이터 요약:
+        - 크기: {data_summary['shape']}
+        - 요인: {', '.join(data_summary['factors'])}
+        - 반응변수: {', '.join(data_summary['responses'])}
+        
+        통계 요약:
+        {json.dumps(data_summary['statistics'], ensure_ascii=False, indent=2)}
+        
+        상관관계:
+        {json.dumps(data_summary['correlations'], ensure_ascii=False, indent=2)}
+        """
+        
+        specific_prompts = {
+            "패턴 발견": """
+            다음을 분석해주세요:
+            1. 요인과 반응변수 간의 주요 관계
+            2. 예상치 못한 패턴이나 트렌드
+            3. 상호작용 효과
+            4. 실험 설계의 효율성
+            """,
+            
+            "이상치 탐지": """
+            다음을 분석해주세요:
+            1. 통계적 이상치 식별
+            2. 이상치의 가능한 원인
+            3. 이상치가 결과에 미치는 영향
+            4. 처리 방법 제안
+            """,
+            
+            "예측 모델": """
+            다음을 분석해주세요:
+            1. 최적의 예측 모델 구조
+            2. 중요 변수 순위
+            3. 모델 성능 예상
+            4. 추가 실험 제안
+            """,
+            
+            "최적화 제안": """
+            다음을 분석해주세요:
+            1. 최적 조건 예측
+            2. 개선 가능 영역
+            3. 제약조건 고려사항
+            4. 실행 가능한 다음 단계
+            """,
+            
+            "인과관계 분석": """
+            다음을 분석해주세요:
+            1. 인과관계 가능성이 높은 요인
+            2. 매개변수 또는 조절변수
+            3. 인과관계 검증 방법
+            4. 추가 실험 설계
+            """
+        }
+        
+        full_prompt = base_prompt + "\n" + specific_prompts.get(analysis_type, "")
+        
+        if st.session_state.show_ai_details:
+            full_prompt += """
+            
+            응답 형식:
+            1. 핵심 인사이트 (간단명료하게)
+            2. 상세 분석:
+               - 추론 과정: 단계별 분석 과정
+               - 근거 데이터: 구체적인 수치와 통계
+               - 대안 해석: 다른 가능한 해석 2-3개
+               - 제한사항: 분석의 한계와 가정
+            3. 권장 조치사항 (구체적이고 실행 가능한)
+            4. 신뢰도 (0-100%)와 그 근거
+            """
+        
+        return full_prompt
+    
+    def _create_insight_visualization(self, viz_data: Dict, analysis_type: str):
+        """인사이트 시각화 생성"""
+        # 분석 유형에 따른 시각화 생성
+        if analysis_type == "패턴 발견":
+            # 산점도 또는 상관관계 플롯
+            pass
+        elif analysis_type == "이상치 탐지":
+            # 박스플롯 또는 산점도
+            pass
+        # ... 기타 시각화
+        
+        return None  # 임시
+    
+    def _run_optimization(self, df: pd.DataFrame, targets: List[Dict], 
+                         constraints: List[Dict], method: str, n_iter: int) -> Dict:
+        """최적화 실행"""
+        # 간단한 최적화 예시 (실제로는 더 복잡한 알고리즘 필요)
+        
+        # 목적함수 정의
+        def objective_function(x):
+            # 예측 모델 사용 (여기서는 간단한 선형 모델)
+            score = 0
+            for target in targets:
+                # 실제로는 학습된 모델로 예측
+                pred = np.random.normal(75, 5)  # 임시
+                
+                if target['goal'] == '최대화':
+                    score += target['weight'] * pred
+                elif target['goal'] == '최소화':
+                    score -= target['weight'] * pred
+                else:  # 목표값
+                    score -= target['weight'] * abs(pred - target['target'])
+            
+            return -score  # 최소화 문제로 변환
+        
+        # 최적화 실행
+        from scipy.optimize import minimize
+        
+        # 초기값
+        x0 = [df[f].mean() for f in st.session_state.selected_factors]
+        
+        # 경계 설정
+        bounds = []
+        for factor in st.session_state.selected_factors:
+            constraint = next((c for c in constraints if c['factor'] == factor), None)
+            if constraint:
+                bounds.append((constraint['min'], constraint['max']))
+            else:
+                bounds.append((df[factor].min(), df[factor].max()))
+        
+        # 최적화
+        result = minimize(objective_function, x0, bounds=bounds, method='L-BFGS-B')
+        
+        if result.success:
+            optimal_solution = {
+                'factors': {f: v for f, v in zip(st.session_state.selected_factors, result.x)},
+                'predictions': {t['response']: np.random.normal(75, 5) for t in targets},  # 임시
+                'score': -result.fun
+            }
+            
+            return optimal_solution
+        
+        return None
+    
+    def _render_sensitivity_analysis(self, optimal_solution: Dict, 
+                                   df: pd.DataFrame, targets: List[Dict]):
+        """민감도 분석"""
+        st.markdown("#### 민감도 분석")
+        
+        # 각 요인의 영향도 분석
+        base_values = optimal_solution['factors']
+        
+        sensitivity_data = []
+        
+        for factor in st.session_state.selected_factors:
+            # ±10% 변화
+            variations = np.linspace(0.9, 1.1, 21)
+            
+            effects = {}
+            for response in st.session_state.selected_responses:
+                effects[response] = []
+                
+                for var in variations:
+                    # 요인 값 변경
+                    test_values = base_values.copy()
+                    test_values[factor] = base_values[factor] * var
+                    
+                    # 예측 (실제로는 모델 사용)
+                    pred = np.random.normal(75, 2)  # 임시
+                    effects[response].append(pred)
+            
+            sensitivity_data.append({
+                'factor': factor,
+                'variations': variations,
+                'effects': effects
+            })
+        
+        # 시각화
+        for response in st.session_state.selected_responses:
+            fig = go.Figure()
+            
+            for sens_data in sensitivity_data:
+                fig.add_trace(go.Scatter(
+                    x=(sens_data['variations'] - 1) * 100,
+                    y=sens_data['effects'][response],
+                    mode='lines',
+                    name=sens_data['factor']
+                ))
+            
+            fig.update_layout(
+                title=f"{response}에 대한 민감도",
+                xaxis_title="요인 변화 (%)",
+                yaxis_title=response,
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+    
+    def _generate_report(self, format: str, style: str, 
+                        include_options: List[str]) -> str:
+        """보고서 생성"""
+        # 보고서 내용 생성
+        report_content = f"""
+        # 실험 데이터 분석 보고서
+        
+        생성일: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        
+        ## 요약
+        
+        본 보고서는 {len(st.session_state.analysis_data)}개의 실험 데이터를 분석한 결과입니다.
+        """
+        
+        # 각 섹션 추가
+        if "기술통계" in include_options:
+            report_content += "\n\n## 기술통계\n\n"
+            # 통계 요약 추가
+        
+        if "통계분석" in include_options:
+            report_content += "\n\n## 통계분석\n\n"
+            # 분석 결과 추가
+        
+        # ... 기타 섹션
+        
+        return report_content
+    
+    def _export_report(self, format: str) -> bytes:
+        """보고서 내보내기"""
+        # 형식별 내보내기 로직
+        report_content = self._generate_report(format, "", [])
+        
+        if format == "PDF":
+            # PDF 생성 로직
+            pass
+        elif format == "Word":
+            # Word 생성 로직
+            pass
+        
+        return report_content.encode()
+    
+    def _get_mime_type(self, format: str) -> str:
+        """MIME 타입 반환"""
+        mime_types = {
+            "PDF": "application/pdf",
+            "Word": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "대화형 HTML": "text/html",
+            "PowerPoint": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
+        return mime_types.get(format, "application/octet-stream")
 
+# 보조 함수
+from plotly.subplots import make_subplots
 
-# 페이지 렌더링 함수
+# 페이지 렌더링
 def render():
-    """데이터 분석 페이지 렌더링"""
+    """페이지 렌더링 함수"""
     page = DataAnalysisPage()
     page.render()
+
+# 메인 실행
+if __name__ == "__main__":
+    render()
