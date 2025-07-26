@@ -3,12 +3,14 @@
 ================================================================================
 데스크톱 애플리케이션의 오프라인 동작을 제어하는 상세 설정
 오프라인 우선 설계로 인터넷 없이도 완전한 기능 제공
+고분자 과학 특화 기능 및 문헌/DB 통합 지원
 ================================================================================
 """
 
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional, Callable, Tuple
 from enum import Enum
 from datetime import timedelta
+from pathlib import Path
 import json
 
 # ============================================================================
@@ -40,60 +42,120 @@ OFFLINE_CONFIG = {
     'connection_check_interval': 30,     # 초 단위
     'retry_interval': 60,               # 재시도 간격
     'max_offline_duration': None,       # 무제한
-    'show_offline_indicator': True,     # UI에 오프라인 상태 표시
-    'enable_offline_analytics': True,   # 오프라인 분석 데이터 수집
+    'queue_online_requests': True,      # 온라인 요청 대기열
+    
+    # 연결 상태 체크
+    'connectivity_check': {
+        'method': 'multiple',  # ping, dns, http
+        'timeout': 5,          # 초
+        'endpoints': [
+            'https://www.google.com',
+            'https://cloudflare.com',
+            'https://api.github.com'
+        ],
+        'fallback_to_cache': True,
+    },
+    
+    # 오프라인 데이터 요구사항
+    'required_data': {
+        'core': ['algorithms.json', 'templates.db', 'base_modules.json'],
+        'ai': ['ai_cache.db', 'ai_templates.json', 'response_patterns.json'],
+        'literature': ['literature_cache.db', 'protocol_templates.json'],
+        'polymer': ['polymer_templates.db', 'solvent_database.json', 'hansen_parameters.db'],
+        'benchmark': ['benchmark_data.db', 'materials_properties.db'],
+    },
 }
 
 # ============================================================================
-# 🚀 기능별 오프라인 동작
+# 🔌 기능별 오프라인 동작
 # ============================================================================
 
 FEATURE_OFFLINE_BEHAVIOR = {
-    # AI 기능
-    'ai_chat': {
-        'offline_mode': 'cached',  # cached, limited, disabled
-        'cache_responses': True,
-        'cache_ttl': timedelta(days=30),
-        'fallback_responses': True,
-        'local_models': ['basic_doe', 'statistics'],  # 로컬 모델
-        'max_cache_size_mb': 100,
-        'smart_suggestions': True,  # 캐시 기반 제안
+    # 프로젝트 관리
+    'project_management': {
+        'offline_mode': 'full',  # 완전 지원
+        'sync_required': False,
+        'cache_ttl': None,  # 영구 저장
+        'fallback': None,
+        'require_online': [],
     },
     
     # 실험 설계
     'experiment_design': {
-        'offline_mode': 'full',  # 완전 지원
-        'local_algorithms': [
-            'full_factorial',
-            'fractional_factorial', 
-            'central_composite',
-            'box_behnken',
-            'plackett_burman',
-            'latin_hypercube',
-            'd_optimal'
-        ],
-        'require_online': [],  # 온라인 필수 기능 없음
-        'cache_designs': True,
+        'offline_mode': 'full',
+        'rule_based': True,  # 규칙 기반 설계
+        'ai_cache': True,    # AI 캐시 사용
+        'templates': True,   # 템플릿 기반
+        'require_online': ['ai_optimization', 'latest_algorithms'],
+    },
+    
+    # 고분자 특화 기능
+    'polymer_design': {
+        'offline_mode': 'full',
+        'hansen_parameters': True,  # 한센 매개변수 (로컬)
+        'solvent_database': True,   # 용매 DB (로컬)
+        'phase_diagrams': True,     # 상 다이어그램 (계산)
+        'processing_optimization': True,  # 가공 최적화 (규칙)
+        'require_online': ['latest_polymer_data', 'patent_search'],
     },
     
     # 데이터 분석
     'data_analysis': {
         'offline_mode': 'full',
-        'local_statistics': True,
-        'local_ml_models': True,
-        'visualization': 'full',
-        'export_formats': ['excel', 'csv', 'pdf', 'html'],
-        'require_online': ['cloud_ml_models'],
+        'statistical_analysis': True,
+        'visualization': True,
+        'report_generation': True,
+        'require_online': ['cloud_computing', 'collaborative_analysis'],
     },
     
-    # 문헌 검색
+    # AI 기능
+    'ai_features': {
+        'offline_mode': 'cached',  # 캐시 기반
+        'cache_responses': True,
+        'rule_based_fallback': True,
+        'template_responses': True,
+        'local_models': False,  # 기본 비활성 (대용량)
+        'max_cache_size_mb': 500,
+        'cache_ttl': timedelta(days=30),
+        'require_online': ['real_time_ai', 'model_updates'],
+    },
+    
+    # 문헌 검색 (확장)
     'literature_search': {
         'offline_mode': 'cached',
-        'cache_papers': True,
-        'cache_ttl': timedelta(days=7),
-        'offline_search': 'local_index',  # 로컬 인덱스 검색
-        'max_cache_papers': 1000,
-        'require_online': ['new_search', 'full_text_download'],
+        'cached_papers': 1000,  # 최대 캐시 논문 수
+        'cached_protocols': 1000,  # 캐시된 프로토콜
+        'local_index': True,  # 로컬 검색 인덱스
+        'metadata_only': False,  # 전문 포함
+        'sources': {
+            'openalex': {'cache_size': 500, 'ttl_days': 30},
+            'crossref': {'cache_size': 300, 'ttl_days': 30},
+            'pubmed': {'cache_size': 200, 'ttl_days': 30},
+            'arxiv': {'cache_size': 200, 'ttl_days': 14},
+            'patents': {'cache_size': 100, 'ttl_days': 60},
+        },
+        'require_online': ['new_search', 'full_text_download', 'citation_network'],
+    },
+    
+    # 프로토콜 추출
+    'protocol_extraction': {
+        'offline_mode': 'full',
+        'pdf_processing': True,  # 로컬 PDF 처리
+        'ocr_support': True,     # OCR 지원
+        'nlp_extraction': True,  # NLP 추출
+        'template_matching': True,  # 템플릿 매칭
+        'cached_protocols': 1000,
+        'require_online': ['cloud_ocr', 'advanced_nlp'],
+    },
+    
+    # 벤치마크 분석
+    'benchmark_analysis': {
+        'offline_mode': 'cached',
+        'materials_database': 10000,  # 캐시된 물성 데이터
+        'comparison_metrics': True,
+        'statistical_analysis': True,
+        'trend_analysis': 'limited',  # 제한적
+        'require_online': ['real_time_comparison', 'global_rankings'],
     },
     
     # 협업
@@ -103,7 +165,7 @@ FEATURE_OFFLINE_BEHAVIOR = {
         'local_comments': True,
         'sync_on_connect': True,
         'conflict_resolution': SyncStrategy.LOCAL_FIRST,
-        'require_online': ['realtime_collaboration', 'video_call'],
+        'require_online': ['real_time_collaboration', 'video_call'],
     },
     
     # 모듈 마켓플레이스
@@ -112,21 +174,12 @@ FEATURE_OFFLINE_BEHAVIOR = {
         'cached_modules': True,
         'installed_modules': 'full',  # 설치된 모듈은 완전 지원
         'browse_cached': True,
-        'require_online': ['download_new', 'publish'],
-    },
-    
-    # 업데이트
-    'updates': {
-        'offline_mode': 'manual',
-        'check_on_connect': True,
-        'download_in_background': True,
-        'install_offline': True,
-        'require_online': ['check_updates', 'download'],
+        'require_online': ['download_new', 'publish', 'reviews'],
     },
 }
 
 # ============================================================================
-# 💾 오프라인 데이터 관리
+# 💾 오프라인 데이터 정책
 # ============================================================================
 
 OFFLINE_DATA_POLICY = {
@@ -140,22 +193,26 @@ OFFLINE_DATA_POLICY = {
     'retention': {
         'user_data': None,           # 무제한
         'project_data': None,        # 무제한
-        'cache_data': timedelta(days=90),
+        'experiment_data': None,     # 무제한
+        'ai_cache': timedelta(days=90),
+        'literature_cache': timedelta(days=180),
         'temp_data': timedelta(days=7),
-        'log_data': timedelta(days=30),
+        'logs': timedelta(days=30),
     },
     
     'size_limits': {
-        'total_size_gb': 10,
-        'cache_size_gb': 2,
-        'backup_size_gb': 5,
-        'alert_threshold': 0.8,  # 80% 도달 시 경고
+        'total_cache': 5 * 1024,     # 5GB
+        'ai_cache': 500,             # 500MB
+        'literature_cache': 2 * 1024, # 2GB
+        'media_cache': 1024,         # 1GB
+        'temp_files': 500,           # 500MB
     },
     
     'cleanup': {
         'auto_cleanup': True,
-        'cleanup_interval': timedelta(days=1),
-        'priorities': ['temp', 'cache', 'logs', 'old_backups'],
+        'cleanup_interval': timedelta(days=7),
+        'preserve_recent': timedelta(days=30),
+        'lru_eviction': True,  # Least Recently Used
     },
 }
 
@@ -164,40 +221,56 @@ OFFLINE_DATA_POLICY = {
 # ============================================================================
 
 AI_OFFLINE_STRATEGY = {
-    'response_cache': {
-        'enabled': True,
-        'storage_path': 'cache/ai_responses',
-        'index_file': 'cache/ai_index.json',
-        'max_entries': 10000,
-        'eviction_policy': 'LRU',  # Least Recently Used
-        'similarity_threshold': 0.85,  # 유사 질문 매칭
+    'fallback_chain': [
+        'cached_response',      # 1. 캐시된 응답
+        'template_response',    # 2. 템플릿 기반
+        'rule_based',          # 3. 규칙 기반
+        'local_model',         # 4. 로컬 모델 (선택적)
+        'queued_request',      # 5. 대기열 추가
+    ],
+    
+    'cache_strategy': {
+        'hash_prompts': True,
+        'fuzzy_matching': True,
+        'similarity_threshold': 0.85,
+        'cache_variations': True,
+        'language_agnostic': False,
     },
     
-    'fallback_models': {
-        'basic_statistics': {
-            'type': 'rule_based',
-            'capabilities': ['mean', 'median', 'std', 'correlation'],
+    'template_responses': {
+        'experiment_design': {
+            'factorial': "2^k 요인 설계는 {k}개 요인에 대해 {runs}회 실행이 필요합니다.",
+            'screening': "Plackett-Burman 설계로 {k}개 요인을 {runs}회 실행으로 스크리닝할 수 있습니다.",
+            'optimization': "중심합성설계(CCD)는 {k}개 요인에 대해 {runs}회 실행이 필요합니다.",
         },
-        'doe_templates': {
-            'type': 'template_based',
-            'templates_path': 'resources/doe_templates.json',
-        },
-        'error_diagnosis': {
-            'type': 'decision_tree',
-            'model_path': 'resources/error_tree.pkl',
+        'polymer': {
+            'solvent': "한센 용해도 매개변수 기준으로 {polymer}에 적합한 용매는 {solvents}입니다.",
+            'processing': "{polymer}의 권장 가공 온도는 {temp}°C, 압력은 {pressure} MPa입니다.",
         },
     },
     
-    'smart_suggestions': {
-        'enabled': True,
-        'based_on': ['history', 'similar_projects', 'common_patterns'],
-        'max_suggestions': 5,
+    'rule_based_logic': {
+        'experiment_design': [
+            {
+                'condition': lambda x: x['factors'] <= 3,
+                'response': 'full_factorial',
+                'reasoning': "요인이 3개 이하일 때는 완전요인설계가 효율적입니다."
+            },
+            {
+                'condition': lambda x: x['factors'] > 7,
+                'response': 'plackett_burman',
+                'reasoning': "많은 요인의 스크리닝에는 Plackett-Burman이 적합합니다."
+            },
+        ],
     },
     
-    'offline_prompts': {
-        'no_connection': "오프라인 모드입니다. 캐시된 응답과 로컬 분석을 사용합니다.",
-        'limited_features': "일부 AI 기능이 제한됩니다. 기본 분석은 가능합니다.",
-        'cached_response': "이전에 유사한 질문에 대한 응답입니다.",
+    'local_models': {
+        'enabled': False,  # 기본 비활성
+        'models': {
+            'small_llm': {'size': '1GB', 'capability': 'basic'},
+            'chemistry_bert': {'size': '500MB', 'capability': 'chemistry'},
+            'materials_gpt': {'size': '2GB', 'capability': 'materials'},
+        },
     },
 }
 
@@ -206,89 +279,86 @@ AI_OFFLINE_STRATEGY = {
 # ============================================================================
 
 SYNC_CONFIGURATION = {
-    'auto_sync': {
-        'enabled': True,
-        'on_connection_restore': True,
-        'on_app_start': False,  # 시작 시 자동 동기화 안 함
-        'on_app_close': True,
-        'interval': timedelta(minutes=5),
-    },
-    
     'sync_priorities': [
-        'user_settings',      # 1순위
-        'project_metadata',   # 2순위
-        'experiment_results', # 3순위
-        'analysis_data',      # 4순위
-        'comments',          # 5순위
-        'cache_data',        # 6순위
+        'user_projects',      # 1순위
+        'experiment_results', # 2순위
+        'analysis_data',      # 3순위
+        'collaboration_queue', # 4순위
+        'ai_responses',       # 5순위
+        'literature_cache',   # 6순위
+        'module_updates',     # 7순위
     ],
+    
+    'sync_triggers': {
+        'on_connect': True,
+        'on_disconnect': True,
+        'periodic': timedelta(minutes=30),
+        'on_idle': True,
+        'manual': True,
+    },
     
     'conflict_resolution': {
         'default_strategy': SyncStrategy.LOCAL_FIRST,
         'strategies_by_type': {
-            'user_settings': SyncStrategy.NEWEST_WINS,
-            'project_data': SyncStrategy.LOCAL_FIRST,
-            'shared_data': SyncStrategy.MANUAL,
+            'user_projects': SyncStrategy.NEWEST_WINS,
+            'shared_data': SyncStrategy.MERGE,
             'system_config': SyncStrategy.REMOTE_FIRST,
         },
-        'auto_backup_before_sync': True,
+        'backup_before_sync': True,
+        'user_confirmation': 'major_conflicts',
     },
     
-    'queue_management': {
-        'max_queue_size': 1000,
-        'queue_persistence': True,
-        'retry_failed': True,
-        'max_retries': 3,
-        'retry_delay': timedelta(minutes=1),
+    'bandwidth_management': {
+        'limit_bandwidth': False,
+        'max_bandwidth_mbps': 10,
+        'compress_data': True,
+        'delta_sync': True,
+        'batch_size': 100,
     },
 }
 
 # ============================================================================
-# 📊 오프라인 분석
+# 📊 오프라인 분석 설정
 # ============================================================================
 
 OFFLINE_ANALYTICS = {
-    'local_processing': {
-        'statistical_tests': [
-            't_test', 'anova', 'chi_square', 'correlation',
-            'regression', 'normality_test', 'outlier_detection'
-        ],
-        'ml_algorithms': [
-            'linear_regression', 'logistic_regression',
-            'decision_tree', 'random_forest', 'kmeans'
-        ],
-        'optimization': [
-            'gradient_descent', 'genetic_algorithm',
-            'simulated_annealing', 'grid_search'
-        ],
+    'enabled': True,
+    'anonymous': True,
+    'local_only': True,
+    
+    'track_events': [
+        'feature_usage',
+        'error_frequency',
+        'performance_metrics',
+        'offline_duration',
+        'sync_success_rate',
+    ],
+    
+    'storage': {
+        'location': 'local',
+        'format': 'sqlite',
+        'retention': timedelta(days=90),
+        'aggregate_only': True,
     },
     
-    'visualization': {
-        'chart_types': 'all',  # 모든 차트 타입 지원
-        'export_formats': ['png', 'svg', 'pdf', 'html'],
-        'interactive': True,
-        'max_data_points': 100000,
-    },
-    
-    'reporting': {
-        'templates': 'local',
-        'formats': ['html', 'pdf', 'docx', 'pptx'],
-        'include_code': True,
-        'include_data': True,
+    'reports': {
+        'usage_summary': True,
+        'error_report': True,
+        'performance_report': True,
+        'sync_report': True,
     },
 }
 
 # ============================================================================
-# 🎨 UI 오프라인 표시
+# 🎨 오프라인 UI 설정
 # ============================================================================
 
 OFFLINE_UI_CONFIG = {
     'indicators': {
-        'show_badge': True,
+        'show_offline_badge': True,
         'badge_position': 'top-right',
-        'badge_color': '#FFA500',  # 주황색
+        'badge_color': '#FF9800',
         'badge_text': '오프라인',
-        'tooltip': '인터넷 연결 없음. 로컬 기능만 사용 가능.',
     },
     
     'disabled_features': {
@@ -320,9 +390,10 @@ OFFLINE_UI_CONFIG = {
 OFFLINE_SECURITY = {
     'local_encryption': {
         'enabled': True,
-        'algorithm': 'AES-256',
+        'algorithm': 'AES-256-GCM',
         'key_derivation': 'PBKDF2',
-        'encrypt_types': ['credentials', 'api_keys', 'personal_data'],
+        'iterations': 100000,
+        'encrypt_types': ['credentials', 'api_keys', 'personal_data', 'projects'],
     },
     
     'access_control': {
@@ -330,12 +401,105 @@ OFFLINE_SECURITY = {
         'session_timeout': timedelta(hours=24),
         'biometric_support': True,  # 지원하는 경우
         'pin_fallback': True,
+        'auto_lock': timedelta(minutes=30),
     },
     
     'data_protection': {
         'secure_delete': True,
         'memory_encryption': False,  # 성능 영향
         'anti_tampering': True,
+        'integrity_checks': True,
+    },
+}
+
+# ============================================================================
+# 📦 오프라인 데이터 패키지
+# ============================================================================
+
+OFFLINE_DATA_PACKAGES = {
+    'core': {
+        'name': '핵심 데이터',
+        'version': '2.0.0',
+        'size_mb': 100,
+        'files': [
+            'algorithms.json',
+            'base_templates.db',
+            'core_modules.json',
+            'statistical_tables.db',
+        ],
+        'required': True,
+        'description': '오프라인 작동에 필수적인 핵심 데이터',
+    },
+    
+    'polymer': {
+        'name': '고분자 과학 데이터',
+        'version': '1.5.0',
+        'size_mb': 250,
+        'files': [
+            'polymer_templates.db',  # 50+ 템플릿
+            'hansen_parameters.db',  # 용해도 매개변수
+            'solvent_database.json', # 용매 데이터베이스
+            'phase_diagrams.db',     # 상 다이어그램
+            'processing_data.json',  # 가공 조건
+        ],
+        'required': False,
+        'description': '고분자 실험 설계를 위한 특화 데이터',
+    },
+    
+    'ai_cache': {
+        'name': 'AI 응답 캐시',
+        'version': '2.0.0',
+        'size_mb': 500,
+        'files': [
+            'ai_responses.db',
+            'prompt_templates.json',
+            'response_patterns.json',
+            'embedding_cache.db',
+        ],
+        'required': False,
+        'description': 'AI 기능을 위한 캐시 데이터',
+    },
+    
+    'literature': {
+        'name': '문헌 데이터베이스',
+        'version': '2.0.0',
+        'size_mb': 2000,
+        'files': [
+            'literature_cache.db',    # 1000+ 논문
+            'protocol_library.db',    # 1000+ 프로토콜
+            'citation_network.json',  # 인용 네트워크
+            'abstract_index.db',      # 초록 인덱스
+        ],
+        'required': False,
+        'description': '캐시된 문헌 및 프로토콜 데이터',
+    },
+    
+    'materials': {
+        'name': '재료 물성 데이터베이스',
+        'version': '1.2.0',
+        'size_mb': 500,
+        'files': [
+            'materials_properties.db',  # 10000+ 물성
+            'benchmark_data.db',        # 벤치마크 데이터
+            'structure_database.db',    # 구조 데이터
+            'performance_metrics.json', # 성능 지표
+        ],
+        'required': False,
+        'description': '재료 물성 및 벤치마크 데이터',
+    },
+    
+    'templates': {
+        'name': '실험 템플릿 라이브러리',
+        'version': '2.0.0',
+        'size_mb': 50,
+        'files': [
+            'experiment_templates.db',  # 100+ 템플릿
+            'analysis_templates.json',  # 분석 템플릿
+            'report_templates.db',      # 보고서 템플릿
+            'visualization_presets.json', # 시각화 프리셋
+        ],
+        'required': True,
+        'description': '다양한 실험 설계 템플릿',
     },
 }
 
@@ -362,9 +526,11 @@ class OfflineManager:
         """오프라인 상태 메시지"""
         messages = {
             'ai_chat': "AI 채팅은 캐시된 응답과 로컬 모델을 사용합니다.",
-            'literature_search': "저장된 문헌만 검색 가능합니다.",
+            'literature_search': "저장된 문헌만 검색 가능합니다. 새로운 검색은 온라인 연결이 필요합니다.",
             'collaboration': "변경사항은 로컬에 저장되며 온라인 시 동기화됩니다.",
             'marketplace': "설치된 모듈과 캐시된 목록만 사용 가능합니다.",
+            'protocol_extraction': "로컬 PDF 파일에서 프로토콜을 추출할 수 있습니다.",
+            'benchmark_analysis': "캐시된 데이터베이스와 비교 분석이 가능합니다.",
         }
         return messages.get(feature, "이 기능은 오프라인에서 제한됩니다.")
     
@@ -386,6 +552,42 @@ class OfflineManager:
             
         max_size = feature_config.get('max_cache_size_mb', 100) * 1024 * 1024
         return response_size < max_size
+    
+    @staticmethod
+    def validate_offline_readiness(data_dir: Path) -> Tuple[bool, List[str]]:
+        """오프라인 준비 상태 검증"""
+        missing = []
+        
+        # 필수 데이터 확인
+        for category, files in OFFLINE_CONFIG['required_data'].items():
+            for file in files:
+                file_path = data_dir / category / file
+                if not file_path.exists():
+                    missing.append(f"{category}/{file}")
+        
+        # 데이터 패키지 확인
+        for package_id, package in OFFLINE_DATA_PACKAGES.items():
+            if package['required']:
+                for file in package['files']:
+                    file_path = data_dir / 'packages' / package_id / file
+                    if not file_path.exists():
+                        missing.append(f"packages/{package_id}/{file}")
+        
+        return len(missing) == 0, missing
+    
+    @staticmethod
+    def get_cache_stats() -> Dict[str, Any]:
+        """캐시 통계 정보"""
+        stats = {
+            'total_size_mb': 0,
+            'by_category': {},
+            'oldest_entry': None,
+            'newest_entry': None,
+            'hit_rate': 0,
+        }
+        
+        # 실제 구현은 database_manager와 연동
+        return stats
 
 # ============================================================================
 # 🎯 오프라인 전략 함수
@@ -416,11 +618,34 @@ def get_sync_strategy(data_type: str) -> SyncStrategy:
     default = SYNC_CONFIGURATION['conflict_resolution']['default_strategy']
     return strategies.get(data_type, default)
 
+def get_required_packages(features: List[str]) -> List[str]:
+    """기능에 필요한 오프라인 패키지 목록"""
+    required = set(['core'])  # 항상 필요
+    
+    feature_package_map = {
+        'polymer_design': 'polymer',
+        'ai_features': 'ai_cache',
+        'literature_search': 'literature',
+        'benchmark_analysis': 'materials',
+        'experiment_design': 'templates',
+    }
+    
+    for feature in features:
+        if feature in feature_package_map:
+            required.add(feature_package_map[feature])
+    
+    return list(required)
+
 # ============================================================================
 # 📤 Export
 # ============================================================================
 
 __all__ = [
+    # Enums
+    'OfflineMode',
+    'SyncStrategy',
+    
+    # 설정 딕셔너리
     'OFFLINE_CONFIG',
     'FEATURE_OFFLINE_BEHAVIOR',
     'OFFLINE_DATA_POLICY',
@@ -429,11 +654,15 @@ __all__ = [
     'OFFLINE_ANALYTICS',
     'OFFLINE_UI_CONFIG',
     'OFFLINE_SECURITY',
-    'OfflineMode',
-    'SyncStrategy',
+    'OFFLINE_DATA_PACKAGES',
+    
+    # 클래스
     'OfflineManager',
+    
+    # 함수
     'get_offline_strategy',
     'is_offline_first',
     'get_cache_ttl',
-    'get_sync_strategy'
+    'get_sync_strategy',
+    'get_required_packages',
 ]
