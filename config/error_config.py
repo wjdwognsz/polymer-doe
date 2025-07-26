@@ -102,7 +102,7 @@ class ErrorDefinition:
 
 RECOVERY_ACTIONS = {
     'try_encodings': {
-        'function': 'utils.file_handler.try_multiple_encodings',
+        'function': 'utils.protocol_extractor.try_multiple_encodings',
         'params': ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'cp949', 'gbk'],
         'description': '여러 인코딩으로 파일 읽기 시도'
     },
@@ -117,7 +117,7 @@ RECOVERY_ACTIONS = {
         'description': '바이너리 모드로 읽기 시도'
     },
     'enhance_image': {
-        'function': 'utils.ocr_handler.enhance_image',
+        'function': 'utils.protocol_extractor.enhance_image',
         'params': ['contrast', 'sharpness', 'denoise'],
         'description': '이미지 품질 개선'
     },
