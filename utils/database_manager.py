@@ -1,4 +1,12 @@
-"""로컬 SQLite 데이터베이스 관리"""
+# utils/database_manager.py
+
+"""
+Universal DOE Platform - SQLite 데이터베이스 관리자
+
+오프라인 우선 설계로 모든 데이터를 안전하게 로컬에 저장합니다.
+스레드 안전성, 자동 백업, 암호화를 지원합니다.
+"""
+
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -12,8 +20,119 @@ from contextlib import contextmanager
 import time
 from queue import Queue
 import atexit
+import os
+from dataclasses import dataclass, asdict, field
+from enum import Enum
+from cryptography.fernet import Fernet
+import base64
+import bcrypt
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== 열거형 정의 ====================
+
+class UserRole(Enum):
+    """사용자 역할"""
+    ADMIN = "admin"
+    USER = "user"
+    GUEST = "guest"
+    PREMIUM = "premium"
+
+
+class ProjectStatus(Enum):
+    """프로젝트 상태"""
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
+    SHARED = "shared"
+
+
+class ExperimentStatus(Enum):
+    """실험 상태"""
+    PLANNING = "planning"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SyncStatus(Enum):
+    """동기화 상태"""
+    PENDING = "pending"
+    SYNCED = "synced"
+    FAILED = "failed"
+    CONFLICT = "conflict"
+
+
+# ==================== 데이터 모델 ====================
+
+@dataclass
+class User:
+    """사용자 데이터 모델"""
+    id: Optional[int] = None
+    email: str = ""
+    password_hash: str = ""
+    name: str = ""
+    role: str = UserRole.USER.value
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
+    settings: Dict[str, Any] = field(default_factory=dict)
+    is_active: bool = True
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now()
+        if self.updated_at is None:
+            self.updated_at = datetime.now()
+
+
+@dataclass
+class Project:
+    """프로젝트 데이터 모델"""
+    id: Optional[int] = None
+    user_id: int = 0
+    name: str = ""
+    description: str = ""
+    field: str = ""
+    module_id: str = ""
+    status: str = ProjectStatus.ACTIVE.value
+    data: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now()
+        if self.updated_at is None:
+            self.updated_at = datetime.now()
+
+
+@dataclass
+class Experiment:
+    """실험 데이터 모델"""
+    id: Optional[int] = None
+    project_id: int = 0
+    name: str = ""
+    design_type: str = ""
+    factors: Dict[str, Any] = field(default_factory=dict)
+    responses: Dict[str, Any] = field(default_factory=dict)
+    design_matrix: List[Dict[str, Any]] = field(default_factory=list)
+    results: Dict[str, Any] = field(default_factory=dict)
+    status: str = ExperimentStatus.PLANNING.value
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now()
+        if self.updated_at is None:
+            self.updated_at = datetime.now()
+
+
+# ==================== 데이터베이스 관리자 ====================
 
 class DatabaseManager:
     """SQLite 데이터베이스 관리자"""
@@ -42,10 +161,14 @@ class DatabaseManager:
         self._lock = threading.RLock()
         self._connections = {}
         self._backup_thread = None
+        self._backup_stop_event = threading.Event()
         
         # 캐시
         self._cache = {}
         self._cache_ttl = {}
+        
+        # 암호화 설정
+        self._setup_encryption()
         
         # 초기화
         self._init_database()
@@ -56,6 +179,24 @@ class DatabaseManager:
         
         # 종료 시 정리
         atexit.register(self.close)
+    
+    def _setup_encryption(self):
+        """암호화 설정"""
+        key_file = self.db_path.parent / ".encryption.key"
+        
+        if key_file.exists():
+            with open(key_file, 'rb') as f:
+                key = f.read()
+        else:
+            key = Fernet.generate_key()
+            with open(key_file, 'wb') as f:
+                f.write(key)
+            # 키 파일 권한 설정 (Windows 제외)
+            if os.name != 'nt':
+                os.chmod(key_file, 0o600)
+        
+        self._cipher = Fernet(key)
+        logger.info("Encryption initialized")
     
     def _init_database(self):
         """데이터베이스 초기화"""
@@ -72,6 +213,9 @@ class DatabaseManager:
             
             # 인덱스 생성
             self._create_indexes(conn)
+            
+            # 초기 데이터 삽입
+            self._insert_initial_data(conn)
             
             conn.commit()
     
@@ -108,7 +252,6 @@ class DatabaseManager:
                 data TEXT DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_deleted INTEGER DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         ''')
@@ -120,11 +263,10 @@ class DatabaseManager:
                 project_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
                 design_type TEXT,
-                factors TEXT,
-                responses TEXT,
-                design_matrix TEXT,
-                results TEXT,
-                analysis TEXT,
+                factors TEXT DEFAULT '{}',
+                responses TEXT DEFAULT '{}',
+                design_matrix TEXT DEFAULT '[]',
+                results TEXT DEFAULT '{}',
                 status TEXT DEFAULT 'planning',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -154,12 +296,11 @@ class DatabaseManager:
                 table_name TEXT NOT NULL,
                 record_id INTEGER NOT NULL,
                 action TEXT NOT NULL,
-                data TEXT,
-                local_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                sync_timestamp TIMESTAMP,
                 sync_status TEXT DEFAULT 'pending',
-                error_message TEXT,
-                retry_count INTEGER DEFAULT 0
+                sync_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                synced_at TIMESTAMP,
+                error_message TEXT
             )
         ''')
         
@@ -169,8 +310,7 @@ class DatabaseManager:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 expires_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                hit_count INTEGER DEFAULT 0
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -180,27 +320,56 @@ class DatabaseManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id INTEGER,
                 details TEXT,
                 ip_address TEXT,
-                user_agent TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
             )
         ''')
         
-        # 모듈 사용 기록
+        # 모듈 사용 기록 테이블
         conn.execute('''
             CREATE TABLE IF NOT EXISTS module_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                module_id TEXT NOT NULL,
                 project_id INTEGER,
+                module_id TEXT NOT NULL,
                 usage_count INTEGER DEFAULT 1,
                 last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                rating INTEGER,
                 feedback TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
                 FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL
+            )
+        ''')
+        
+        # 프로젝트 공유 테이블
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS project_shares (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                shared_with_email TEXT NOT NULL,
+                permission TEXT DEFAULT 'view',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+                UNIQUE(project_id, shared_with_email)
+            )
+        ''')
+        
+        # 알림 테이블
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT,
+                data TEXT DEFAULT '{}',
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                read_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         ''')
         
@@ -229,14 +398,43 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_sync_log_status ON sync_log(sync_status)",
             "CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at)",
             "CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_log(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at)"
+            "CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read)",
+            "CREATE INDEX IF NOT EXISTS idx_module_usage_user ON module_usage(user_id, module_id)",
+            "CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)"
         ]
         
         for index in indexes:
             conn.execute(index)
+        
+        # 트리거 생성 (자동 updated_at)
+        tables_with_updated_at = ['users', 'projects', 'experiments', 'api_keys']
+        for table in tables_with_updated_at:
+            conn.execute(f'''
+                CREATE TRIGGER IF NOT EXISTS update_{table}_timestamp
+                AFTER UPDATE ON {table}
+                BEGIN
+                    UPDATE {table} SET updated_at = CURRENT_TIMESTAMP
+                    WHERE id = NEW.id;
+                END
+            ''')
+    
+    def _insert_initial_data(self, conn: sqlite3.Connection):
+        """초기 데이터 삽입"""
+        # 게스트 사용자 확인/생성
+        guest_exists = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE email = ?",
+            ("guest@universaldoe.local",)
+        ).fetchone()[0]
+        
+        if not guest_exists:
+            conn.execute('''
+                INSERT INTO users (email, password_hash, name, role)
+                VALUES (?, ?, ?, ?)
+            ''', ("guest@universaldoe.local", "no_password", "게스트 사용자", UserRole.GUEST.value))
     
     @contextmanager
-    def _get_connection(self) -> sqlite3.Connection:
+    def _get_connection(self, readonly: bool = False) -> sqlite3.Connection:
         """데이터베이스 연결 컨텍스트 매니저"""
         thread_id = threading.get_ident()
         
@@ -248,6 +446,8 @@ class DatabaseManager:
                     timeout=30.0
                 )
                 conn.row_factory = sqlite3.Row
+                if readonly:
+                    conn.execute("PRAGMA query_only = ON")
                 self._connections[thread_id] = conn
             
             conn = self._connections[thread_id]
@@ -256,415 +456,803 @@ class DatabaseManager:
             yield conn
         except Exception as e:
             conn.rollback()
-            logger.error(f"Database error: {str(e)}")
+            logger.error(f"Database error: {e}")
             raise
-    
-    def execute(self, query: str, params: Optional[tuple] = None) -> sqlite3.Cursor:
-        """쿼리 실행"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            conn.commit()
-            return cursor
-    
-    def executemany(self, query: str, params_list: List[tuple]) -> sqlite3.Cursor:
-        """다중 쿼리 실행"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.executemany(query, params_list)
-            conn.commit()
-            return cursor
-    
-    def fetchone(self, query: str, params: Optional[tuple] = None) -> Optional[Dict[str, Any]]:
-        """단일 행 조회"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            row = cursor.fetchone()
-            return dict(row) if row else None
-    
-    def fetchall(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
-        """전체 행 조회"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-    
-    @contextmanager
-    def transaction(self):
-        """트랜잭션 컨텍스트 매니저"""
-        with self._get_connection() as conn:
-            try:
-                yield conn
+        finally:
+            if not readonly:
                 conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
     
-    # === CRUD 메서드 ===
-    
-    def insert(self, table: str, data: Dict[str, Any]) -> int:
-        """데이터 삽입"""
-        # 타임스탬프 자동 추가
-        if 'created_at' not in data:
-            data['created_at'] = datetime.now().isoformat()
-        if 'updated_at' not in data:
-            data['updated_at'] = datetime.now().isoformat()
-        
-        columns = ', '.join(data.keys())
-        placeholders = ', '.join(['?' for _ in data])
-        query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        
-        cursor = self.execute(query, tuple(data.values()))
-        
-        # 동기화 로그 추가
-        self._log_sync_action(table, cursor.lastrowid, 'insert', data)
-        
-        return cursor.lastrowid
-    
-    def update(self, table: str, id: int, data: Dict[str, Any]) -> bool:
-        """데이터 업데이트"""
-        # 타임스탬프 업데이트
-        data['updated_at'] = datetime.now().isoformat()
-        
-        set_clause = ', '.join([f"{k} = ?" for k in data.keys()])
-        query = f"UPDATE {table} SET {set_clause} WHERE id = ?"
-        
-        cursor = self.execute(query, tuple(list(data.values()) + [id]))
-        
-        # 동기화 로그 추가
-        if cursor.rowcount > 0:
-            self._log_sync_action(table, id, 'update', data)
-        
-        return cursor.rowcount > 0
-    
-    def delete(self, table: str, id: int, soft: bool = True) -> bool:
-        """데이터 삭제"""
-        if soft and table in ['projects', 'experiments']:
-            # 소프트 삭제
-            return self.update(table, id, {'is_deleted': 1})
-        else:
-            # 하드 삭제
-            query = f"DELETE FROM {table} WHERE id = ?"
-            cursor = self.execute(query, (id,))
-            
-            # 동기화 로그 추가
-            if cursor.rowcount > 0:
-                self._log_sync_action(table, id, 'delete', {})
-            
-            return cursor.rowcount > 0
-    
-    def get_by_id(self, table: str, id: int) -> Optional[Dict[str, Any]]:
-        """ID로 조회"""
-        query = f"SELECT * FROM {table} WHERE id = ?"
-        return self.fetchone(query, (id,))
-    
-    def get_all(self, table: str, 
-                filters: Optional[Dict[str, Any]] = None,
-                order_by: Optional[str] = None,
-                limit: Optional[int] = None,
-                offset: Optional[int] = None) -> List[Dict[str, Any]]:
-        """전체 조회"""
-        query = f"SELECT * FROM {table}"
-        params = []
-        
-        # 필터 적용
-        if filters:
-            conditions = []
-            for key, value in filters.items():
-                if value is None:
-                    conditions.append(f"{key} IS NULL")
-                else:
-                    conditions.append(f"{key} = ?")
-                    params.append(value)
-            query += " WHERE " + " AND ".join(conditions)
-        
-        # 정렬
-        if order_by:
-            query += f" ORDER BY {order_by}"
-        
-        # 페이지네이션
-        if limit:
-            query += f" LIMIT {limit}"
-            if offset:
-                query += f" OFFSET {offset}"
-        
-        return self.fetchall(query, tuple(params) if params else None)
-    
-    # === 특수 메서드 ===
-    
-    def search(self, table: str, search_term: str, 
-               search_fields: List[str]) -> List[Dict[str, Any]]:
-        """텍스트 검색"""
-        conditions = []
-        params = []
-        
-        for field in search_fields:
-            conditions.append(f"{field} LIKE ?")
-            params.append(f"%{search_term}%")
-        
-        query = f"SELECT * FROM {table} WHERE " + " OR ".join(conditions)
-        return self.fetchall(query, tuple(params))
-    
-    def count(self, table: str, filters: Optional[Dict[str, Any]] = None) -> int:
-        """레코드 수 조회"""
-        query = f"SELECT COUNT(*) as count FROM {table}"
-        params = []
-        
-        if filters:
-            conditions = []
-            for key, value in filters.items():
-                if value is None:
-                    conditions.append(f"{key} IS NULL")
-                else:
-                    conditions.append(f"{key} = ?")
-                    params.append(value)
-            query += " WHERE " + " AND ".join(conditions)
-        
-        result = self.fetchone(query, tuple(params) if params else None)
-        return result['count'] if result else 0
-    
-    # === 캐시 메서드 ===
-    
-    def cache_get(self, key: str) -> Optional[Any]:
-        """캐시에서 값 조회"""
-        # 메모리 캐시 확인
-        if key in self._cache:
-            if key in self._cache_ttl and self._cache_ttl[key] > datetime.now():
-                return self._cache[key]
-            else:
-                # 만료된 캐시 삭제
-                del self._cache[key]
-                if key in self._cache_ttl:
-                    del self._cache_ttl[key]
-        
-        # DB 캐시 확인
-        query = """
-            SELECT value FROM cache 
-            WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))
-        """
-        result = self.fetchone(query, (key,))
-        
-        if result:
-            # 히트 카운트 증가
-            self.execute("UPDATE cache SET hit_count = hit_count + 1 WHERE key = ?", (key,))
-            
-            try:
-                value = json.loads(result['value'])
-                # 메모리 캐시에 저장
-                self._cache[key] = value
-                return value
-            except json.JSONDecodeError:
-                return result['value']
-        
-        return None
-    
-    def cache_set(self, key: str, value: Any, ttl: Optional[int] = None):
-        """캐시에 값 저장"""
-        # 메모리 캐시 저장
-        self._cache[key] = value
-        if ttl:
-            self._cache_ttl[key] = datetime.now() + timedelta(seconds=ttl)
-        
-        # DB 캐시 저장
-        expires_at = None
-        if ttl:
-            expires_at = (datetime.now() + timedelta(seconds=ttl)).isoformat()
-        
-        value_str = json.dumps(value) if not isinstance(value, str) else value
-        
-        query = """
-            INSERT OR REPLACE INTO cache (key, value, expires_at)
-            VALUES (?, ?, ?)
-        """
-        self.execute(query, (key, value_str, expires_at))
-    
-    def cache_delete(self, key: str):
-        """캐시에서 값 삭제"""
-        # 메모리 캐시 삭제
-        if key in self._cache:
-            del self._cache[key]
-        if key in self._cache_ttl:
-            del self._cache_ttl[key]
-        
-        # DB 캐시 삭제
-        self.execute("DELETE FROM cache WHERE key = ?", (key,))
-    
-    def cache_clear(self):
-        """전체 캐시 클리어"""
-        self._cache.clear()
-        self._cache_ttl.clear()
-        self.execute("DELETE FROM cache")
-    
-    def cache_cleanup(self):
-        """만료된 캐시 정리"""
-        # 메모리 캐시 정리
-        expired_keys = []
-        now = datetime.now()
-        for key, expires_at in self._cache_ttl.items():
-            if expires_at <= now:
-                expired_keys.append(key)
-        
-        for key in expired_keys:
-            del self._cache[key]
-            del self._cache_ttl[key]
-        
-        # DB 캐시 정리
-        self.execute("DELETE FROM cache WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')")
-    
-    # === 동기화 관련 ===
-    
-    def _log_sync_action(self, table: str, record_id: int, 
-                        action: str, data: Dict[str, Any]):
-        """동기화 액션 로깅"""
-        if table not in ['sync_log', 'cache', 'activity_log']:  # 로그 테이블은 제외
-            query = """
-                INSERT INTO sync_log (table_name, record_id, action, data)
-                VALUES (?, ?, ?, ?)
-            """
-            self.execute(query, (table, record_id, action, json.dumps(data)))
-    
-    def get_pending_sync(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """대기 중인 동기화 항목 조회"""
-        query = """
-            SELECT * FROM sync_log 
-            WHERE sync_status = 'pending' AND retry_count < 3
-            ORDER BY local_timestamp ASC
-            LIMIT ?
-        """
-        return self.fetchall(query, (limit,))
-    
-    def mark_synced(self, sync_id: int, success: bool = True, 
-                   error_message: Optional[str] = None):
-        """동기화 완료 표시"""
-        if success:
-            query = """
-                UPDATE sync_log 
-                SET sync_status = 'completed', sync_timestamp = ?
-                WHERE id = ?
-            """
-            self.execute(query, (datetime.now().isoformat(), sync_id))
-        else:
-            query = """
-                UPDATE sync_log 
-                SET sync_status = 'failed', error_message = ?, retry_count = retry_count + 1
-                WHERE id = ?
-            """
-            self.execute(query, (error_message, sync_id))
-    
-    # === 백업 관련 ===
+    # ==================== 백업 관리 ====================
     
     def _start_backup_thread(self):
         """백업 스레드 시작"""
-        def backup_loop():
-            while self._backup_thread:
+        def backup_worker():
+            while not self._backup_stop_event.is_set():
                 try:
-                    time.sleep(self.backup_interval)
-                    self.create_backup()
+                    self.backup_database()
+                    self._cleanup_old_backups()
                 except Exception as e:
-                    logger.error(f"Backup failed: {str(e)}")
+                    logger.error(f"Backup error: {e}")
+                
+                # 백업 간격만큼 대기
+                self._backup_stop_event.wait(self.backup_interval)
         
-        self._backup_thread = threading.Thread(target=backup_loop, daemon=True)
+        self._backup_thread = threading.Thread(target=backup_worker, daemon=True)
         self._backup_thread.start()
+        logger.info("Backup thread started")
     
-    def create_backup(self) -> Optional[Path]:
-        """데이터베이스 백업 생성"""
-        if not self.backup_enabled:
-            return None
+    def backup_database(self) -> Path:
+        """데이터베이스 백업"""
+        self.backup_path.mkdir(parents=True, exist_ok=True)
         
-        try:
-            # 백업 디렉토리 생성
-            self.backup_path.mkdir(parents=True, exist_ok=True)
-            
-            # 백업 파일명 생성
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_file = self.backup_path / f"backup_{timestamp}.db"
-            
-            # 백업 실행
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = self.backup_path / f"backup_{timestamp}.db"
+        
+        with self._lock:
             with self._get_connection() as conn:
+                # SQLite 백업 API 사용
                 backup = sqlite3.connect(str(backup_file))
                 conn.backup(backup)
                 backup.close()
-            
-            logger.info(f"Backup created: {backup_file}")
-            
-            # 오래된 백업 삭제
-            self._cleanup_old_backups()
-            
-            return backup_file
-            
-        except Exception as e:
-            logger.error(f"Backup creation failed: {str(e)}")
-            return None
+        
+        logger.info(f"Database backed up to {backup_file}")
+        return backup_file
     
-    def _cleanup_old_backups(self):
-        """오래된 백업 파일 삭제"""
+    def restore_database(self, backup_file: Path) -> bool:
+        """데이터베이스 복원"""
+        if not backup_file.exists():
+            logger.error(f"Backup file not found: {backup_file}")
+            return False
+        
         try:
-            backups = sorted(self.backup_path.glob("backup_*.db"), 
-                           key=lambda p: p.stat().st_mtime, 
-                           reverse=True)
-            
-            # 최대 개수 초과 시 삭제
-            for backup in backups[self.max_backups:]:
-                backup.unlink()
-                logger.info(f"Deleted old backup: {backup}")
-                
-        except Exception as e:
-            logger.error(f"Backup cleanup failed: {str(e)}")
-    
-    def restore_backup(self, backup_file: Path) -> bool:
-        """백업에서 복원"""
-        try:
-            if not backup_file.exists():
-                logger.error(f"Backup file not found: {backup_file}")
-                return False
-            
             # 현재 DB 백업
             temp_backup = self.db_path.with_suffix('.db.temp')
             shutil.copy2(self.db_path, temp_backup)
             
-            try:
-                # 백업 파일로 교체
-                shutil.copy2(backup_file, self.db_path)
-                
-                # 연결 재초기화
-                self._connections.clear()
-                self._init_database()
-                
-                logger.info(f"Database restored from: {backup_file}")
-                temp_backup.unlink()
-                return True
-                
-            except Exception as e:
-                # 복원 실패 시 원복
+            # 복원
+            shutil.copy2(backup_file, self.db_path)
+            
+            # 복원된 DB 테스트
+            with self._get_connection() as conn:
+                conn.execute("SELECT COUNT(*) FROM users")
+            
+            # 성공 시 임시 백업 삭제
+            temp_backup.unlink()
+            logger.info(f"Database restored from {backup_file}")
+            return True
+            
+        except Exception as e:
+            # 실패 시 원래 DB로 복구
+            if temp_backup.exists():
                 shutil.copy2(temp_backup, self.db_path)
                 temp_backup.unlink()
-                raise e
-                
-        except Exception as e:
-            logger.error(f"Restore failed: {str(e)}")
+            logger.error(f"Restore failed: {e}")
             return False
     
-    # === 유틸리티 메서드 ===
+    def _cleanup_old_backups(self):
+        """오래된 백업 삭제"""
+        if not self.backup_path.exists():
+            return
+        
+        backups = sorted(
+            self.backup_path.glob("backup_*.db"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        
+        # 지정된 개수만 유지
+        for old_backup in backups[self.max_backups:]:
+            old_backup.unlink()
+            logger.info(f"Deleted old backup: {old_backup}")
     
-    def get_stats(self) -> Dict[str, Any]:
+    # ==================== 사용자 관리 ====================
+    
+    def create_user(self, user: User) -> int:
+        """사용자 생성"""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute('''
+                    INSERT INTO users (email, password_hash, name, role, settings)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    user.email,
+                    user.password_hash,
+                    user.name,
+                    user.role,
+                    json.dumps(user.settings)
+                ))
+                
+                user_id = cursor.lastrowid
+                
+                # 활동 로그
+                self._log_activity(conn, user_id, "user_created", "users", user_id)
+                
+                # 동기화 로그
+                self._add_sync_log(conn, "users", user_id, "create")
+                
+                return user_id
+    
+    def get_user(self, user_id: int = None, email: str = None) -> Optional[User]:
+        """사용자 조회"""
+        with self._get_connection(readonly=True) as conn:
+            if user_id:
+                row = conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+            elif email:
+                row = conn.execute(
+                    "SELECT * FROM users WHERE email = ?", (email,)
+                ).fetchone()
+            else:
+                return None
+            
+            if row:
+                return self._row_to_user(row)
+            return None
+    
+    def update_user(self, user_id: int, updates: Dict[str, Any]) -> bool:
+        """사용자 정보 업데이트"""
+        with self._lock:
+            with self._get_connection() as conn:
+                allowed_fields = ['name', 'role', 'settings', 'is_active']
+                filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+                
+                if 'settings' in filtered_updates:
+                    filtered_updates['settings'] = json.dumps(filtered_updates['settings'])
+                
+                set_clause = ', '.join([f"{k} = ?" for k in filtered_updates.keys()])
+                values = list(filtered_updates.values()) + [user_id]
+                
+                conn.execute(
+                    f"UPDATE users SET {set_clause} WHERE id = ?",
+                    values
+                )
+                
+                # 활동 로그
+                self._log_activity(conn, user_id, "user_updated", "users", user_id, 
+                                 {"fields": list(filtered_updates.keys())})
+                
+                # 동기화 로그
+                self._add_sync_log(conn, "users", user_id, "update")
+                
+                return True
+    
+    def update_last_login(self, user_id: int):
+        """마지막 로그인 시간 업데이트"""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
+                (user_id,)
+            )
+    
+    def _row_to_user(self, row: sqlite3.Row) -> User:
+        """Row를 User 객체로 변환"""
+        data = dict(row)
+        data['settings'] = json.loads(data.get('settings', '{}'))
+        
+        # datetime 변환
+        for field in ['created_at', 'updated_at', 'last_login']:
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        
+        return User(**data)
+    
+    # ==================== 프로젝트 관리 ====================
+    
+    def create_project(self, project: Project) -> int:
+        """프로젝트 생성"""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute('''
+                    INSERT INTO projects (user_id, name, description, field, module_id, status, data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    project.user_id,
+                    project.name,
+                    project.description,
+                    project.field,
+                    project.module_id,
+                    project.status,
+                    json.dumps(project.data)
+                ))
+                
+                project_id = cursor.lastrowid
+                
+                # 활동 로그
+                self._log_activity(conn, project.user_id, "project_created", 
+                                 "projects", project_id, {"name": project.name})
+                
+                # 동기화 로그
+                self._add_sync_log(conn, "projects", project_id, "create")
+                
+                return project_id
+    
+    def get_project(self, project_id: int) -> Optional[Project]:
+        """프로젝트 조회"""
+        with self._get_connection(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
+            
+            if row:
+                return self._row_to_project(row)
+            return None
+    
+    def list_user_projects(self, user_id: int, 
+                          status: Optional[str] = None,
+                          include_shared: bool = True) -> List[Project]:
+        """사용자의 프로젝트 목록"""
+        with self._get_connection(readonly=True) as conn:
+            # 소유한 프로젝트
+            query = "SELECT * FROM projects WHERE user_id = ?"
+            params = [user_id]
+            
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            
+            owned_projects = conn.execute(query, params).fetchall()
+            projects = [self._row_to_project(row) for row in owned_projects]
+            
+            # 공유받은 프로젝트
+            if include_shared:
+                user = self.get_user(user_id)
+                if user:
+                    shared_query = '''
+                        SELECT p.* FROM projects p
+                        JOIN project_shares ps ON p.id = ps.project_id
+                        WHERE ps.shared_with_email = ?
+                    '''
+                    shared_rows = conn.execute(shared_query, (user.email,)).fetchall()
+                    projects.extend([self._row_to_project(row) for row in shared_rows])
+            
+            # 최근 업데이트 순 정렬
+            projects.sort(key=lambda p: p.updated_at, reverse=True)
+            return projects
+    
+    def update_project(self, project_id: int, updates: Dict[str, Any]) -> bool:
+        """프로젝트 업데이트"""
+        with self._lock:
+            with self._get_connection() as conn:
+                allowed_fields = ['name', 'description', 'field', 'module_id', 'status', 'data']
+                filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+                
+                if 'data' in filtered_updates:
+                    filtered_updates['data'] = json.dumps(filtered_updates['data'])
+                
+                set_clause = ', '.join([f"{k} = ?" for k in filtered_updates.keys()])
+                values = list(filtered_updates.values()) + [project_id]
+                
+                conn.execute(f"UPDATE projects SET {set_clause} WHERE id = ?", values)
+                
+                # 프로젝트 소유자 찾기
+                project = self.get_project(project_id)
+                if project:
+                    self._log_activity(conn, project.user_id, "project_updated", 
+                                     "projects", project_id, {"fields": list(filtered_updates.keys())})
+                
+                # 동기화 로그
+                self._add_sync_log(conn, "projects", project_id, "update")
+                
+                return True
+    
+    def share_project(self, project_id: int, shared_with_email: str, 
+                     permission: str = 'view') -> bool:
+        """프로젝트 공유"""
+        with self._lock:
+            with self._get_connection() as conn:
+                try:
+                    conn.execute('''
+                        INSERT INTO project_shares (project_id, shared_with_email, permission)
+                        VALUES (?, ?, ?)
+                    ''', (project_id, shared_with_email, permission))
+                    
+                    # 공유받은 사용자에게 알림
+                    shared_user = self.get_user(email=shared_with_email)
+                    if shared_user:
+                        project = self.get_project(project_id)
+                        if project:
+                            self._create_notification(
+                                conn, shared_user.id, 'project_shared',
+                                "프로젝트 공유됨",
+                                f"'{project.name}' 프로젝트가 공유되었습니다.",
+                                {"project_id": project_id, "permission": permission}
+                            )
+                    
+                    return True
+                except sqlite3.IntegrityError:
+                    # 이미 공유된 경우
+                    conn.execute('''
+                        UPDATE project_shares SET permission = ?
+                        WHERE project_id = ? AND shared_with_email = ?
+                    ''', (permission, project_id, shared_with_email))
+                    return True
+    
+    def _row_to_project(self, row: sqlite3.Row) -> Project:
+        """Row를 Project 객체로 변환"""
+        data = dict(row)
+        data['data'] = json.loads(data.get('data', '{}'))
+        
+        # datetime 변환
+        for field in ['created_at', 'updated_at']:
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        
+        return Project(**data)
+    
+    # ==================== 실험 관리 ====================
+    
+    def create_experiment(self, experiment: Experiment) -> int:
+        """실험 생성"""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute('''
+                    INSERT INTO experiments 
+                    (project_id, name, design_type, factors, responses, design_matrix, results, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    experiment.project_id,
+                    experiment.name,
+                    experiment.design_type,
+                    json.dumps(experiment.factors),
+                    json.dumps(experiment.responses),
+                    json.dumps(experiment.design_matrix),
+                    json.dumps(experiment.results),
+                    experiment.status
+                ))
+                
+                experiment_id = cursor.lastrowid
+                
+                # 프로젝트 소유자 찾기
+                project = self.get_project(experiment.project_id)
+                if project:
+                    self._log_activity(conn, project.user_id, "experiment_created", 
+                                     "experiments", experiment_id, 
+                                     {"name": experiment.name, "project_id": experiment.project_id})
+                
+                # 동기화 로그
+                self._add_sync_log(conn, "experiments", experiment_id, "create")
+                
+                return experiment_id
+    
+    def get_experiment(self, experiment_id: int) -> Optional[Experiment]:
+        """실험 조회"""
+        with self._get_connection(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM experiments WHERE id = ?", (experiment_id,)
+            ).fetchone()
+            
+            if row:
+                return self._row_to_experiment(row)
+            return None
+    
+    def list_project_experiments(self, project_id: int, 
+                               status: Optional[str] = None) -> List[Experiment]:
+        """프로젝트의 실험 목록"""
+        with self._get_connection(readonly=True) as conn:
+            query = "SELECT * FROM experiments WHERE project_id = ?"
+            params = [project_id]
+            
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            
+            query += " ORDER BY created_at DESC"
+            
+            rows = conn.execute(query, params).fetchall()
+            return [self._row_to_experiment(row) for row in rows]
+    
+    def update_experiment(self, experiment_id: int, updates: Dict[str, Any]) -> bool:
+        """실험 업데이트"""
+        with self._lock:
+            with self._get_connection() as conn:
+                allowed_fields = ['name', 'design_type', 'factors', 'responses', 
+                                'design_matrix', 'results', 'status']
+                filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+                
+                # JSON 필드 변환
+                json_fields = ['factors', 'responses', 'design_matrix', 'results']
+                for field in json_fields:
+                    if field in filtered_updates:
+                        filtered_updates[field] = json.dumps(filtered_updates[field])
+                
+                # 상태가 completed로 변경되면 completed_at 설정
+                if filtered_updates.get('status') == ExperimentStatus.COMPLETED.value:
+                    filtered_updates['completed_at'] = datetime.now().isoformat()
+                
+                set_clause = ', '.join([f"{k} = ?" for k in filtered_updates.keys()])
+                values = list(filtered_updates.values()) + [experiment_id]
+                
+                conn.execute(f"UPDATE experiments SET {set_clause} WHERE id = ?", values)
+                
+                # 활동 로그
+                experiment = self.get_experiment(experiment_id)
+                if experiment:
+                    project = self.get_project(experiment.project_id)
+                    if project:
+                        self._log_activity(conn, project.user_id, "experiment_updated", 
+                                         "experiments", experiment_id, 
+                                         {"fields": list(filtered_updates.keys())})
+                
+                # 동기화 로그
+                self._add_sync_log(conn, "experiments", experiment_id, "update")
+                
+                return True
+    
+    def _row_to_experiment(self, row: sqlite3.Row) -> Experiment:
+        """Row를 Experiment 객체로 변환"""
+        data = dict(row)
+        
+        # JSON 필드 파싱
+        for field in ['factors', 'responses', 'design_matrix', 'results']:
+            data[field] = json.loads(data.get(field, '{}' if field != 'design_matrix' else '[]'))
+        
+        # datetime 변환
+        for field in ['created_at', 'updated_at', 'completed_at']:
+            if data.get(field):
+                data[field] = datetime.fromisoformat(data[field])
+        
+        return Experiment(**data)
+    
+    # ==================== API 키 관리 ====================
+    
+    def save_api_key(self, user_id: int, service: str, api_key: str) -> bool:
+        """API 키 저장 (암호화)"""
+        with self._lock:
+            with self._get_connection() as conn:
+                encrypted_key = self._cipher.encrypt(api_key.encode()).decode()
+                
+                try:
+                    conn.execute('''
+                        INSERT INTO api_keys (user_id, service, encrypted_key)
+                        VALUES (?, ?, ?)
+                    ''', (user_id, service, encrypted_key))
+                except sqlite3.IntegrityError:
+                    # 이미 존재하면 업데이트
+                    conn.execute('''
+                        UPDATE api_keys SET encrypted_key = ?
+                        WHERE user_id = ? AND service = ?
+                    ''', (encrypted_key, user_id, service))
+                
+                # 활동 로그
+                self._log_activity(conn, user_id, "api_key_saved", "api_keys", None, 
+                                 {"service": service})
+                
+                return True
+    
+    def get_api_key(self, user_id: int, service: str) -> Optional[str]:
+        """API 키 조회 (복호화)"""
+        with self._get_connection(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT encrypted_key FROM api_keys WHERE user_id = ? AND service = ?",
+                (user_id, service)
+            ).fetchone()
+            
+            if row:
+                encrypted_key = row['encrypted_key']
+                return self._cipher.decrypt(encrypted_key.encode()).decode()
+            return None
+    
+    def list_api_keys(self, user_id: int) -> List[Dict[str, Any]]:
+        """사용자의 API 키 목록 (키 값은 제외)"""
+        with self._get_connection(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT service, created_at, updated_at FROM api_keys WHERE user_id = ?",
+                (user_id,)
+            ).fetchall()
+            
+            return [dict(row) for row in rows]
+    
+    def delete_api_key(self, user_id: int, service: str) -> bool:
+        """API 키 삭제"""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "DELETE FROM api_keys WHERE user_id = ? AND service = ?",
+                    (user_id, service)
+                )
+                
+                # 활동 로그
+                self._log_activity(conn, user_id, "api_key_deleted", "api_keys", None, 
+                                 {"service": service})
+                
+                return True
+    
+    # ==================== 캐시 관리 ====================
+    
+    def cache_set(self, key: str, value: Any, ttl_seconds: int = 3600) -> bool:
+        """캐시 설정"""
+        with self._lock:
+            with self._get_connection() as conn:
+                expires_at = datetime.now() + timedelta(seconds=ttl_seconds)
+                
+                conn.execute('''
+                    INSERT OR REPLACE INTO cache (key, value, expires_at)
+                    VALUES (?, ?, ?)
+                ''', (key, json.dumps(value), expires_at.isoformat()))
+                
+                # 메모리 캐시도 업데이트
+                self._cache[key] = value
+                self._cache_ttl[key] = expires_at
+                
+                return True
+    
+    def cache_get(self, key: str) -> Optional[Any]:
+        """캐시 조회"""
+        # 메모리 캐시 확인
+        if key in self._cache:
+            if self._cache_ttl[key] > datetime.now():
+                return self._cache[key]
+            else:
+                # 만료된 캐시 삭제
+                del self._cache[key]
+                del self._cache_ttl[key]
+        
+        # DB 캐시 확인
+        with self._get_connection(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT value, expires_at FROM cache WHERE key = ?",
+                (key,)
+            ).fetchone()
+            
+            if row:
+                expires_at = datetime.fromisoformat(row['expires_at'])
+                if expires_at > datetime.now():
+                    value = json.loads(row['value'])
+                    # 메모리 캐시 업데이트
+                    self._cache[key] = value
+                    self._cache_ttl[key] = expires_at
+                    return value
+                else:
+                    # 만료된 캐시 삭제
+                    self.cache_delete(key)
+            
+            return None
+    
+    def cache_delete(self, key: str) -> bool:
+        """캐시 삭제"""
+        with self._lock:
+            # 메모리 캐시 삭제
+            if key in self._cache:
+                del self._cache[key]
+                del self._cache_ttl[key]
+            
+            # DB 캐시 삭제
+            with self._get_connection() as conn:
+                conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+                return True
+    
+    def cache_clear(self) -> bool:
+        """전체 캐시 삭제"""
+        with self._lock:
+            # 메모리 캐시 초기화
+            self._cache.clear()
+            self._cache_ttl.clear()
+            
+            # DB 캐시 삭제
+            with self._get_connection() as conn:
+                conn.execute("DELETE FROM cache")
+                return True
+    
+    def cache_cleanup(self) -> int:
+        """만료된 캐시 정리"""
+        with self._lock:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM cache WHERE expires_at < ?",
+                    (datetime.now().isoformat(),)
+                )
+                return cursor.rowcount
+    
+    # ==================== 활동 로그 ====================
+    
+    def _log_activity(self, conn: sqlite3.Connection, user_id: int, action: str, 
+                     resource_type: Optional[str] = None, resource_id: Optional[int] = None,
+                     details: Optional[Dict[str, Any]] = None):
+        """활동 로그 기록"""
+        conn.execute('''
+            INSERT INTO activity_log (user_id, action, resource_type, resource_id, details)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            user_id,
+            action,
+            resource_type,
+            resource_id,
+            json.dumps(details) if details else None
+        ))
+    
+    def get_user_activities(self, user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """사용자 활동 로그 조회"""
+        with self._get_connection(readonly=True) as conn:
+            rows = conn.execute('''
+                SELECT * FROM activity_log 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (user_id, limit)).fetchall()
+            
+            activities = []
+            for row in rows:
+                activity = dict(row)
+                if activity.get('details'):
+                    activity['details'] = json.loads(activity['details'])
+                activities.append(activity)
+            
+            return activities
+    
+    # ==================== 동기화 로그 ====================
+    
+    def _add_sync_log(self, conn: sqlite3.Connection, table_name: str, 
+                     record_id: int, action: str):
+        """동기화 로그 추가"""
+        conn.execute('''
+            INSERT INTO sync_log (table_name, record_id, action, sync_status)
+            VALUES (?, ?, ?, ?)
+        ''', (table_name, record_id, action, SyncStatus.PENDING.value))
+    
+    def get_pending_syncs(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """대기 중인 동기화 목록"""
+        with self._get_connection(readonly=True) as conn:
+            rows = conn.execute('''
+                SELECT * FROM sync_log 
+                WHERE sync_status = ? 
+                ORDER BY created_at 
+                LIMIT ?
+            ''', (SyncStatus.PENDING.value, limit)).fetchall()
+            
+            return [dict(row) for row in rows]
+    
+    def update_sync_status(self, sync_id: int, status: SyncStatus, 
+                          error_message: Optional[str] = None) -> bool:
+        """동기화 상태 업데이트"""
+        with self._lock:
+            with self._get_connection() as conn:
+                if status == SyncStatus.SYNCED:
+                    conn.execute('''
+                        UPDATE sync_log 
+                        SET sync_status = ?, synced_at = CURRENT_TIMESTAMP 
+                        WHERE id = ?
+                    ''', (status.value, sync_id))
+                else:
+                    conn.execute('''
+                        UPDATE sync_log 
+                        SET sync_status = ?, error_message = ? 
+                        WHERE id = ?
+                    ''', (status.value, error_message, sync_id))
+                
+                return True
+    
+    # ==================== 알림 관리 ====================
+    
+    def _create_notification(self, conn: sqlite3.Connection, user_id: int, 
+                           notification_type: str, title: str, message: str,
+                           data: Optional[Dict[str, Any]] = None):
+        """알림 생성"""
+        conn.execute('''
+            INSERT INTO notifications (user_id, type, title, message, data)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            user_id,
+            notification_type,
+            title,
+            message,
+            json.dumps(data) if data else '{}'
+        ))
+    
+    def get_user_notifications(self, user_id: int, unread_only: bool = False, 
+                             limit: int = 50) -> List[Dict[str, Any]]:
+        """사용자 알림 조회"""
+        with self._get_connection(readonly=True) as conn:
+            query = "SELECT * FROM notifications WHERE user_id = ?"
+            params = [user_id]
+            
+            if unread_only:
+                query += " AND is_read = 0"
+            
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+            
+            rows = conn.execute(query, params).fetchall()
+            
+            notifications = []
+            for row in rows:
+                notification = dict(row)
+                notification['data'] = json.loads(notification.get('data', '{}'))
+                notifications.append(notification)
+            
+            return notifications
+    
+    def mark_notification_read(self, notification_id: int) -> bool:
+        """알림 읽음 표시"""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute('''
+                    UPDATE notifications 
+                    SET is_read = 1, read_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                ''', (notification_id,))
+                return True
+    
+    # ==================== 모듈 사용 기록 ====================
+    
+    def record_module_usage(self, user_id: int, module_id: str, 
+                          project_id: Optional[int] = None, 
+                          feedback: Optional[str] = None):
+        """모듈 사용 기록"""
+        with self._lock:
+            with self._get_connection() as conn:
+                # 기존 기록 확인
+                row = conn.execute('''
+                    SELECT id, usage_count FROM module_usage 
+                    WHERE user_id = ? AND module_id = ?
+                ''', (user_id, module_id)).fetchone()
+                
+                if row:
+                    # 사용 횟수 증가
+                    conn.execute('''
+                        UPDATE module_usage 
+                        SET usage_count = usage_count + 1, 
+                            last_used = CURRENT_TIMESTAMP,
+                            project_id = COALESCE(?, project_id),
+                            feedback = COALESCE(?, feedback)
+                        WHERE id = ?
+                    ''', (project_id, feedback, row['id']))
+                else:
+                    # 새 기록 생성
+                    conn.execute('''
+                        INSERT INTO module_usage (user_id, module_id, project_id, feedback)
+                        VALUES (?, ?, ?, ?)
+                    ''', (user_id, module_id, project_id, feedback))
+    
+    def get_popular_modules(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """인기 모듈 목록"""
+        with self._get_connection(readonly=True) as conn:
+            rows = conn.execute('''
+                SELECT module_id, SUM(usage_count) as total_usage, COUNT(DISTINCT user_id) as user_count
+                FROM module_usage
+                GROUP BY module_id
+                ORDER BY total_usage DESC
+                LIMIT ?
+            ''', (limit,)).fetchall()
+            
+            return [dict(row) for row in rows]
+    
+    # ==================== 유틸리티 메서드 ====================
+    
+    def execute(self, query: str, params: tuple = ()) -> sqlite3.Cursor:
+        """직접 쿼리 실행"""
+        with self._get_connection() as conn:
+            return conn.execute(query, params)
+    
+    def fetchone(self, query: str, params: tuple = ()) -> Optional[sqlite3.Row]:
+        """단일 결과 조회"""
+        with self._get_connection(readonly=True) as conn:
+            return conn.execute(query, params).fetchone()
+    
+    def fetchall(self, query: str, params: tuple = ()) -> List[sqlite3.Row]:
+        """전체 결과 조회"""
+        with self._get_connection(readonly=True) as conn:
+            return conn.execute(query, params).fetchall()
+    
+    def count(self, table: str, condition: str = "", params: tuple = ()) -> int:
+        """레코드 수 조회"""
+        query = f"SELECT COUNT(*) FROM {table}"
+        if condition:
+            query += f" WHERE {condition}"
+        
+        with self._get_connection(readonly=True) as conn:
+            return conn.execute(query, params).fetchone()[0]
+    
+    def get_database_stats(self) -> Dict[str, Any]:
         """데이터베이스 통계"""
         stats = {
             'database_size': self.db_path.stat().st_size if self.db_path.exists() else 0,
             'tables': {}
         }
         
-        tables = ['users', 'projects', 'experiments', 'sync_log', 'cache']
+        # 각 테이블 레코드 수
+        tables = ['users', 'projects', 'experiments', 'api_keys', 'sync_log', 'cache',
+                 'activity_log', 'module_usage', 'notifications']
         for table in tables:
             stats['tables'][table] = self.count(table)
         
@@ -673,25 +1261,27 @@ class DatabaseManager:
             backups = list(self.backup_path.glob("backup_*.db"))
             stats['backups'] = {
                 'count': len(backups),
-                'latest': max(backups, key=lambda p: p.stat().st_mtime).name if backups else None
+                'latest': max(backups, key=lambda p: p.stat().st_mtime).name if backups else None,
+                'total_size': sum(b.stat().st_size for b in backups)
             }
         
         return stats
     
     def vacuum(self):
-        """데이터베이스 최적화"""
-        with self._get_connection() as conn:
-            conn.execute("VACUUM")
-            conn.execute("ANALYZE")
+        """데이터베이스 최적화 (VACUUM)"""
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute("VACUUM")
+                conn.execute("ANALYZE")
         logger.info("Database optimized")
     
     def close(self):
         """데이터베이스 연결 종료"""
         # 백업 스레드 중지
         if self._backup_thread:
-            backup_thread = self._backup_thread
+            self._backup_stop_event.set()
+            self._backup_thread.join(timeout=5)
             self._backup_thread = None
-            backup_thread.join(timeout=5)
         
         # 모든 연결 종료
         with self._lock:
@@ -708,19 +1298,30 @@ class DatabaseManager:
         self.close()
 
 
-# 싱글톤 인스턴스 관리
-_db_manager: Optional[DatabaseManager] = None
+# ==================== 싱글톤 인스턴스 관리 ====================
 
-def get_database_manager() -> DatabaseManager:
+_db_manager: Optional[DatabaseManager] = None
+_db_lock = threading.Lock()
+
+def get_database_manager(db_path: Optional[Path] = None) -> DatabaseManager:
     """DatabaseManager 싱글톤 인스턴스 반환"""
     global _db_manager
     
-    if _db_manager is None:
-        from config.local_config import LOCAL_CONFIG
+    with _db_lock:
+        if _db_manager is None:
+            if db_path is None:
+                from config.local_config import LOCAL_CONFIG
+                db_path = Path(LOCAL_CONFIG['database']['path'])
+            
+            config = {
+                'wal_mode': True,
+                'connection_pool_size': 5,
+                'backup_enabled': True,
+                'backup_interval': 3600,
+                'max_backups': 5
+            }
+            
+            _db_manager = DatabaseManager(db_path, config)
+            logger.info(f"DatabaseManager initialized with {db_path}")
         
-        db_config = LOCAL_CONFIG.get('database', {})
-        db_path = Path(db_config.get('path', './data/db/app.db'))
-        
-        _db_manager = DatabaseManager(db_path, db_config)
-    
-    return _db_manager
+        return _db_manager
