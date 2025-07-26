@@ -1,6 +1,7 @@
 """
-data_processor.py - 데이터 처리 엔진
-Universal DOE Platform의 핵심 데이터 처리 시스템으로 실험 설계, 분석, 최적화를 담당
+데이터 처리 엔진 - Universal DOE Platform의 핵심 분석 시스템
+실험 설계, 데이터 전처리, 통계 분석, 최적화를 담당하는 통합 처리 엔진
+Version: Ultimate (1번 + 2번 코드 통합)
 """
 
 # 표준 라이브러리
@@ -17,6 +18,8 @@ from enum import Enum
 import copy
 from functools import lru_cache
 import time
+import re
+import hashlib
 
 # 과학 계산
 from scipy import stats, optimize, signal
@@ -48,11 +51,15 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
 # 실험 설계
 try:
-    import pyDOE2 as doe
-    from pyDOE2 import *
+    import pyDOE3 as doe
+    from pyDOE3 import *
 except ImportError:
-    import pyDOE as doe
-    from pyDOE import *
+    try:
+        import pyDOE2 as doe
+        from pyDOE2 import *
+    except ImportError:
+        import pyDOE as doe
+        from pyDOE import *
 
 # 최적화
 try:
@@ -85,14 +92,21 @@ from mpl_toolkits.mplot3d import Axes3D
 try:
     from utils.api_manager import APIManager
     from utils.common_ui import show_error, show_warning, show_info
-    from config.app_config import APP_CONFIG
+    from config.app_config import APP_CONFIG, EXPERIMENT_DEFAULTS
 except ImportError:
     APIManager = None
     APP_CONFIG = {}
+    EXPERIMENT_DEFAULTS = {}
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+# 전역 상수
+RANDOM_STATE = 42
+CONFIDENCE_LEVEL = 0.95
+MAX_ITERATIONS = 1000
+CONVERGENCE_TOL = 1e-6
 
 
 # === Enums and Constants ===
@@ -108,14 +122,14 @@ class TransformMethod(Enum):
     BOX_COX = "box_cox"
     YEO_JOHNSON = "yeo_johnson"
     QUANTILE = "quantile"
-    ROBUST = "robust"
+    ROBUST_SCALE = "robust_scale"
 
 
 class DesignType(Enum):
     """실험 설계 유형"""
     FACTORIAL = "factorial"
     FRACTIONAL_FACTORIAL = "fractional_factorial"
-    CCD = "central_composite"
+    CENTRAL_COMPOSITE = "central_composite"
     BOX_BEHNKEN = "box_behnken"
     LATIN_HYPERCUBE = "latin_hypercube"
     PLACKETT_BURMAN = "plackett_burman"
@@ -148,7 +162,8 @@ class Factor:
     
     def __post_init__(self):
         if self.type == 'continuous' and self.center is None:
-            self.center = (self.low + self.high) / 2
+            if self.low is not None and self.high is not None:
+                self.center = (self.low + self.high) / 2
 
 
 @dataclass
@@ -177,8 +192,8 @@ class ValidationReport:
 class ProcessedData:
     """처리된 데이터"""
     data: pd.DataFrame
-    metadata: Dict[str, Any]
-    transformations: List[Dict[str, Any]]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    transformations: List[Dict[str, Any]] = field(default_factory=list)
     validation_report: Optional[ValidationReport] = None
     timestamp: datetime = field(default_factory=datetime.now)
 
@@ -188,10 +203,11 @@ class AnalysisResult:
     """분석 결과"""
     analysis_type: str
     results: Dict[str, Any]
-    statistics: Dict[str, Any]
+    statistics: Dict[str, Any] = field(default_factory=dict)
     visualizations: Dict[str, Any] = field(default_factory=dict)
     interpretation: Optional[str] = None
     ai_insights: Optional[List[str]] = None
+    confidence_level: float = 0.95
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -204,6 +220,8 @@ class OptimizationResult:
     pareto_front: Optional[pd.DataFrame] = None
     sensitivity: Optional[Dict[str, float]] = None
     robustness: Optional[Dict[str, Any]] = None
+    confidence_region: Optional[Dict] = None
+    constraints_satisfied: bool = True
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -220,32 +238,38 @@ class DataValidator:
             'vif_threshold': 10,  # Variance Inflation Factor
             'correlation_threshold': 0.95
         }
+        
+        self.checks = {
+            'basic': self._check_basic_validity,
+            'missing': self._check_missing_values,
+            'outliers': self._check_outliers,
+            'types': self._check_data_types,
+            'distribution': self._check_statistical_assumptions,
+            'design': self._check_design_validity
+        }
     
     def validate(self, data: pd.DataFrame, 
                  factors: Optional[List[Factor]] = None,
                  responses: Optional[List[Response]] = None,
-                 design_type: Optional[DesignType] = None) -> ValidationReport:
+                 design_type: Optional[DesignType] = None,
+                 checks: Optional[List[str]] = None) -> ValidationReport:
         """종합 데이터 검증"""
         report = ValidationReport(valid=True)
         
-        # 기본 검증
-        self._check_basic_validity(data, report)
+        if checks is None:
+            checks = ['basic', 'missing', 'outliers', 'types', 'distribution']
         
-        # 결측치 검증
-        self._check_missing_values(data, report)
-        
-        # 이상치 검증
-        self._check_outliers(data, report)
-        
-        # 데이터 타입 검증
-        self._check_data_types(data, report)
-        
-        # 통계적 가정 검증
-        self._check_statistical_assumptions(data, report)
-        
-        # 실험 설계 검증
-        if design_type:
-            self._check_design_validity(data, design_type, factors, report)
+        # 각 검사 수행
+        for check_name in checks:
+            if check_name in self.checks:
+                try:
+                    if check_name == 'design':
+                        self._check_design_validity(data, design_type, factors, report)
+                    else:
+                        self.checks[check_name](data, report)
+                except Exception as e:
+                    logger.error(f"검증 중 오류 ({check_name}): {e}")
+                    report.issues.append(f"{check_name} 검증 실패")
         
         # 최종 판정
         report.valid = len(report.issues) == 0
@@ -302,27 +326,38 @@ class DataValidator:
             outliers = z_scores > self.validation_rules['outlier_threshold']
             n_outliers = outliers.sum()
             
-            if n_outliers > 0:
+            # IQR 방법도 확인
+            Q1 = data[col].quantile(0.25)
+            Q3 = data[col].quantile(0.75)
+            IQR = Q3 - Q1
+            iqr_outliers = ((data[col] < Q1 - 1.5 * IQR) | (data[col] > Q3 + 1.5 * IQR)).sum()
+            
+            if n_outliers > 0 or iqr_outliers > 0:
                 outlier_info[col] = {
-                    'count': n_outliers,
-                    'percentage': n_outliers / len(data) * 100
+                    'z_score_count': int(n_outliers),
+                    'iqr_count': int(iqr_outliers),
+                    'percentage': max(n_outliers, iqr_outliers) / len(data) * 100
                 }
                 
-                if n_outliers > len(data) * 0.1:  # 10% 이상
-                    report.warnings.append(f"{col}: 이상치 과다 ({n_outliers}개, {outlier_info[col]['percentage']:.1f}%)")
+                if outlier_info[col]['percentage'] > 10:
+                    report.warnings.append(
+                        f"{col}: 이상치 과다 ({outlier_info[col]['percentage']:.1f}%)"
+                    )
         
         report.statistics['outliers'] = outlier_info
     
     def _check_data_types(self, data: pd.DataFrame, report: ValidationReport):
         """데이터 타입 검사"""
         for col in data.columns:
-            # 숫자형으로 변환 가능한지 체크
             if data[col].dtype == 'object':
                 try:
-                    pd.to_numeric(data[col], errors='coerce')
+                    pd.to_numeric(data[col], errors='raise')
                     report.recommendations.append(f"{col}: 숫자형으로 변환 가능")
                 except:
-                    pass
+                    # 범주형 변수 확인
+                    n_unique = data[col].nunique()
+                    if n_unique < 10:
+                        report.statistics[f'{col}_categories'] = data[col].unique().tolist()
     
     def _check_statistical_assumptions(self, data: pd.DataFrame, report: ValidationReport):
         """통계적 가정 검사"""
@@ -331,12 +366,13 @@ class DataValidator:
         # 정규성 검정
         normality_results = {}
         for col in numeric_cols:
-            if len(data[col].dropna()) >= 8:  # 최소 샘플 수
+            if len(data[col].dropna()) >= 8:
                 _, p_value = stats.shapiro(data[col].dropna())
                 normality_results[col] = p_value
                 
                 if p_value < 0.05:
                     report.warnings.append(f"{col}: 정규성 가정 위반 (p={p_value:.3f})")
+                    report.recommendations.append(f"{col}: 변환을 고려하세요 (Box-Cox, log 등)")
         
         report.statistics['normality_tests'] = normality_results
         
@@ -349,37 +385,37 @@ class DataValidator:
                 report.warnings.append(f"다중공선성 발견: {list(high_vif.keys())}")
                 report.statistics['vif'] = vif_results
     
-    def _check_design_validity(self, data: pd.DataFrame, design_type: DesignType, 
+    def _check_design_validity(self, data: pd.DataFrame, design_type: Optional[DesignType], 
                               factors: Optional[List[Factor]], report: ValidationReport):
         """실험 설계 유효성 검사"""
+        if not design_type or not factors:
+            return
+        
         if design_type == DesignType.FACTORIAL:
             # 완전요인설계 검사
-            if factors:
-                expected_runs = 1
-                for factor in factors:
-                    if factor.type == 'continuous':
-                        expected_runs *= 2  # 2수준 가정
-                    elif factor.levels:
-                        expected_runs *= len(factor.levels)
-                
-                if len(data) < expected_runs:
-                    report.warnings.append(f"불완전한 요인설계 (실행 수: {len(data)}/{expected_runs})")
+            expected_runs = 1
+            for factor in factors:
+                if factor.type == 'continuous':
+                    expected_runs *= 2  # 2수준 가정
+                elif factor.levels:
+                    expected_runs *= len(factor.levels)
+            
+            if len(data) < expected_runs:
+                report.warnings.append(f"불완전한 요인설계 (실행 수: {len(data)}/{expected_runs})")
         
-        elif design_type == DesignType.CCD:
+        elif design_type == DesignType.CENTRAL_COMPOSITE:
             # 중심합성설계 검사
-            if factors:
-                n_factors = len([f for f in factors if f.type == 'continuous'])
-                expected_runs = 2**n_factors + 2*n_factors + 1  # 최소 중심점 1개
-                
-                if len(data) < expected_runs:
-                    report.warnings.append(f"CCD 실행 수 부족 ({len(data)}/{expected_runs})")
+            n_factors = len([f for f in factors if f.type == 'continuous'])
+            expected_runs = 2**n_factors + 2*n_factors + 1  # 최소 중심점 1개
+            
+            if len(data) < expected_runs:
+                report.warnings.append(f"CCD 실행 수 부족 ({len(data)}/{expected_runs})")
     
     def _analyze_missing_pattern(self, data: pd.DataFrame) -> Dict[str, str]:
         """결측치 패턴 분석"""
         missing_mask = data.isnull()
         
         # MCAR (Missing Completely At Random) 테스트
-        # 간단한 휴리스틱: 결측치가 다른 변수와 상관없으면 MCAR
         correlations = []
         for col in missing_mask.columns:
             if missing_mask[col].sum() > 0:
@@ -421,11 +457,7 @@ class TransformationEngine:
     """데이터 변환 엔진"""
     
     def __init__(self):
-        self.scalers = {
-            'standard': StandardScaler(),
-            'minmax': MinMaxScaler(),
-            'robust': RobustScaler()
-        }
+        self.scalers = {}
         self.transformers = {}
         self.transformation_history = []
     
@@ -462,20 +494,28 @@ class TransformationEngine:
         return transformed_data, transformations
     
     def apply_transform(self, series: pd.Series, 
-                       method: TransformMethod,
+                       method: Union[str, TransformMethod],
                        params: Optional[Dict] = None) -> pd.Series:
         """변환 적용"""
+        if isinstance(method, str):
+            method = TransformMethod(method)
+        
         clean_series = series.dropna()
         
         if method == TransformMethod.STANDARDIZE:
             scaler = StandardScaler()
             transformed = scaler.fit_transform(clean_series.values.reshape(-1, 1)).flatten()
-            self.transformers[f"{series.name}_scaler"] = scaler
+            self.scalers[f"{series.name}_standard"] = scaler
             
         elif method == TransformMethod.NORMALIZE:
             scaler = MinMaxScaler()
             transformed = scaler.fit_transform(clean_series.values.reshape(-1, 1)).flatten()
-            self.transformers[f"{series.name}_scaler"] = scaler
+            self.scalers[f"{series.name}_minmax"] = scaler
+            
+        elif method == TransformMethod.ROBUST_SCALE:
+            scaler = RobustScaler()
+            transformed = scaler.fit_transform(clean_series.values.reshape(-1, 1)).flatten()
+            self.scalers[f"{series.name}_robust"] = scaler
             
         elif method == TransformMethod.LOG:
             # 음수 처리
@@ -496,6 +536,10 @@ class TransformationEngine:
             else:
                 transformed = np.sqrt(clean_series)
                 
+        elif method == TransformMethod.RECIPROCAL:
+            # 0 방지
+            transformed = 1 / (clean_series + 1e-8)
+            
         elif method == TransformMethod.BOX_COX:
             if clean_series.min() <= 0:
                 shift = abs(clean_series.min()) + 1
@@ -504,11 +548,17 @@ class TransformationEngine:
             else:
                 transformed, lambda_param = stats.boxcox(clean_series)
                 params = {'lambda': lambda_param}
+            self.transformers[f"{series.name}_boxcox"] = params
                 
         elif method == TransformMethod.YEO_JOHNSON:
             pt = PowerTransformer(method='yeo-johnson')
             transformed = pt.fit_transform(clean_series.values.reshape(-1, 1)).flatten()
-            self.transformers[f"{series.name}_pt"] = pt
+            self.transformers[f"{series.name}_yeojohnson"] = pt
+            
+        elif method == TransformMethod.QUANTILE:
+            pt = PowerTransformer(method='quantile')
+            transformed = pt.fit_transform(clean_series.values.reshape(-1, 1)).flatten()
+            self.transformers[f"{series.name}_quantile"] = pt
             
         else:
             transformed = clean_series.values
@@ -534,29 +584,41 @@ class TransformationEngine:
         if len(clean_series) < 8:
             return {'method': TransformMethod.NONE, 'params': None, 'improvement': 0}
         
-        # 원본 정규성
+        # 원본 정규성과 왜도
         _, original_p = stats.shapiro(clean_series)
+        original_skew = abs(clean_series.skew())
+        
+        # 이미 정규분포에 가까우면 변환 불필요
+        if original_p > 0.1 and original_skew < 0.5:
+            return {'method': TransformMethod.NONE, 'params': None, 'improvement': 0}
         
         best_method = TransformMethod.NONE
-        best_p_value = original_p
+        best_score = original_p
         best_params = None
         
         # 각 변환 방법 시도
-        for method in [TransformMethod.LOG, TransformMethod.SQRT, 
-                      TransformMethod.BOX_COX, TransformMethod.YEO_JOHNSON]:
+        methods_to_try = [
+            TransformMethod.LOG, 
+            TransformMethod.SQRT,
+            TransformMethod.BOX_COX, 
+            TransformMethod.YEO_JOHNSON
+        ]
+        
+        for method in methods_to_try:
             try:
                 transformed = self.apply_transform(series, method)
                 _, p_value = stats.shapiro(transformed.dropna())
                 
-                if p_value > best_p_value:
+                if p_value > best_score:
                     best_method = method
-                    best_p_value = p_value
+                    best_score = p_value
+                    best_params = self.transformers.get(f"{series.name}_{method.value}")
                     
             except Exception as e:
                 logger.debug(f"Transform {method} failed: {e}")
                 continue
         
-        improvement = (best_p_value - original_p) / (original_p + 1e-10)
+        improvement = (best_score - original_p) / (original_p + 1e-10) * 100
         
         return {
             'method': best_method,
@@ -569,8 +631,24 @@ class TransformationEngine:
                          method: TransformMethod,
                          params: Optional[Dict] = None) -> pd.Series:
         """역변환"""
-        if method == TransformMethod.STANDARDIZE or method == TransformMethod.NORMALIZE:
-            scaler = self.transformers.get(f"{column_name}_scaler")
+        if method == TransformMethod.STANDARDIZE:
+            scaler = self.scalers.get(f"{column_name}_standard")
+            if scaler:
+                return pd.Series(
+                    scaler.inverse_transform(series.values.reshape(-1, 1)).flatten(),
+                    index=series.index
+                )
+                
+        elif method == TransformMethod.NORMALIZE:
+            scaler = self.scalers.get(f"{column_name}_minmax")
+            if scaler:
+                return pd.Series(
+                    scaler.inverse_transform(series.values.reshape(-1, 1)).flatten(),
+                    index=series.index
+                )
+                
+        elif method == TransformMethod.ROBUST_SCALE:
+            scaler = self.scalers.get(f"{column_name}_robust")
             if scaler:
                 return pd.Series(
                     scaler.inverse_transform(series.values.reshape(-1, 1)).flatten(),
@@ -589,7 +667,11 @@ class TransformationEngine:
                 result -= params['shift']
             return result
             
+        elif method == TransformMethod.RECIPROCAL:
+            return 1 / series
+            
         elif method == TransformMethod.BOX_COX:
+            params = params or self.transformers.get(f"{column_name}_boxcox")
             if params and 'lambda' in params:
                 from scipy.special import inv_boxcox
                 result = inv_boxcox(series, params['lambda'])
@@ -597,8 +679,9 @@ class TransformationEngine:
                     result -= params['shift']
                 return pd.Series(result, index=series.index)
                 
-        elif method == TransformMethod.YEO_JOHNSON:
-            pt = self.transformers.get(f"{column_name}_pt")
+        elif method in [TransformMethod.YEO_JOHNSON, TransformMethod.QUANTILE]:
+            transformer_key = f"{column_name}_{method.value}"
+            pt = self.transformers.get(transformer_key)
             if pt:
                 return pd.Series(
                     pt.inverse_transform(series.values.reshape(-1, 1)).flatten(),
@@ -611,13 +694,13 @@ class TransformationEngine:
 # === Experiment Design Engine ===
 
 class ExperimentDesignEngine:
-    """실험 설계 엔진"""
+    """실험 설계 엔진 (통합 버전)"""
     
     def __init__(self):
         self.design_functions = {
             DesignType.FACTORIAL: self._create_factorial,
             DesignType.FRACTIONAL_FACTORIAL: self._create_fractional_factorial,
-            DesignType.CCD: self._create_ccd,
+            DesignType.CENTRAL_COMPOSITE: self._create_ccd,
             DesignType.BOX_BEHNKEN: self._create_box_behnken,
             DesignType.LATIN_HYPERCUBE: self._create_latin_hypercube,
             DesignType.PLACKETT_BURMAN: self._create_plackett_burman,
@@ -638,7 +721,7 @@ class ExperimentDesignEngine:
         continuous_factors = [f for f in factors if f.type == 'continuous']
         categorical_factors = [f for f in factors if f.type == 'categorical']
         
-        if not continuous_factors and design_type != DesignType.TAGUCHI:
+        if not continuous_factors and design_type not in [DesignType.TAGUCHI, DesignType.FACTORIAL]:
             raise ValueError("연속형 인자가 필요합니다")
         
         # 설계 생성
@@ -687,7 +770,8 @@ class ExperimentDesignEngine:
         
         # 랜덤화
         if kwargs.get('randomize', True):
-            df = df.sample(frac=1).reset_index(drop=True)
+            df = df.sample(frac=1, random_state=kwargs.get('random_state', RANDOM_STATE))
+            df.index = range(1, len(df) + 1)
         
         return df
     
@@ -702,14 +786,10 @@ class ExperimentDesignEngine:
             # 인자가 적으면 완전요인설계
             return self._create_factorial(continuous_factors, categorical_factors, **kwargs)
         
-        # 적절한 생성자 찾기
+        # 해상도에 따른 생성자 선택
         if n_factors <= 7:
-            if resolution >= 5:
-                design = doe.fracfact(f"a b c d e f g"[:n_factors*2-1])
-            elif resolution >= 4:
-                design = doe.fracfact(f"a b c d=ab e=ac f=bc"[:n_factors*2-1])
-            else:  # Resolution III
-                design = doe.fracfact(f"a b c=ab d=ac e=bc"[:n_factors*2-1])
+            generators = self._get_fractional_generators(n_factors, resolution)
+            design = doe.fracfact(generators)
         else:
             # Plackett-Burman for screening
             design = doe.pbdesign(n_factors)
@@ -732,8 +812,9 @@ class ExperimentDesignEngine:
         n_factors = len(continuous_factors)
         
         # CCD 옵션
-        alpha = kwargs.get('alpha', 'rotatable')  # rotatable, orthogonal, face
-        n_center = kwargs.get('n_center', 4)
+        alpha = kwargs.get('alpha', 'rotatable')
+        center = kwargs.get('center', [4, 4])
+        face = kwargs.get('face', 'circumscribed')
         
         # 알파 값 계산
         if alpha == 'rotatable':
@@ -746,7 +827,7 @@ class ExperimentDesignEngine:
             alpha_value = float(alpha)
         
         # 설계 생성
-        design = doe.ccdesign(n_factors, center=(n_center, n_center), alpha=alpha)
+        design = doe.ccdesign(n_factors, center=center, alpha=alpha_value, face=face)
         
         # 실제 값으로 변환
         df = self._coded_to_actual(design, continuous_factors)
@@ -758,7 +839,9 @@ class ExperimentDesignEngine:
         # 블록 정보 추가
         n_factorial = 2 ** n_factors
         n_axial = 2 * n_factors
-        blocks = ['factorial'] * n_factorial + ['axial'] * n_axial + ['center'] * (len(df) - n_factorial - n_axial)
+        blocks = (['factorial'] * n_factorial + 
+                  ['axial'] * n_axial + 
+                  ['center'] * (len(df) - n_factorial - n_axial))
         df['Block'] = blocks[:len(df)]
         
         return df
@@ -773,7 +856,8 @@ class ExperimentDesignEngine:
             raise ValueError("Box-Behnken 설계는 최소 3개의 인자가 필요합니다")
         
         # 설계 생성
-        design = doe.bbdesign(n_factors, center=kwargs.get('n_center', 3))
+        center = kwargs.get('center', 3)
+        design = doe.bbdesign(n_factors, center=center)
         
         # 실제 값으로 변환
         df = self._coded_to_actual(design, continuous_factors)
@@ -790,10 +874,9 @@ class ExperimentDesignEngine:
         """라틴 하이퍼큐브 설계"""
         n_factors = len(continuous_factors)
         n_samples = kwargs.get('n_samples', max(10, 2 * n_factors))
-        criterion = kwargs.get('criterion', 'maximin')
         
         # LHS 생성
-        design = doe.lhs(n_factors, samples=n_samples, criterion=criterion)
+        design = doe.lhs(n_factors, samples=n_samples, random_state=kwargs.get('random_state', RANDOM_STATE))
         
         # [-1, 1]로 스케일링
         design = 2 * design - 1
@@ -847,13 +930,10 @@ class ExperimentDesignEngine:
         degree = kwargs.get('degree', 2)
         
         if design_type == 'simplex_lattice':
-            # Simplex lattice 설계
             design = self._simplex_lattice(n_components, degree)
         elif design_type == 'simplex_centroid':
-            # Simplex centroid 설계
             design = self._simplex_centroid(n_components)
         else:
-            # 기본값
             design = self._simplex_lattice(n_components, degree)
         
         # DataFrame 생성
@@ -890,43 +970,22 @@ class ExperimentDesignEngine:
         oa_type = self._select_taguchi_array(n_factors, levels)
         
         # 직교배열 생성
-        if oa_type == 'L4':
-            design = np.array([[1,1,1], [1,2,2], [2,1,2], [2,2,1]]) - 1
-        elif oa_type == 'L8':
-            design = doe.fracfact('a b c d=abc')
-            design = (design + 1) / 2  # 0, 1로 변환
-        elif oa_type == 'L9':
-            design = np.array([
-                [0,0,0], [0,1,1], [0,2,2],
-                [1,0,1], [1,1,2], [1,2,0],
-                [2,0,2], [2,1,0], [2,2,1]
-            ])
-        elif oa_type == 'L16':
-            design = doe.fracfact('a b c d e=abcd')
-            design = (design + 1) / 2
-        elif oa_type == 'L27':
-            # 3수준 13인자 설계의 부분
-            design = self._generate_l27_array()[:, :n_factors]
-        else:
-            # 기본값: Plackett-Burman
-            return self._create_plackett_burman(continuous_factors, categorical_factors, **kwargs)
-        
-        # 필요한 열만 선택
-        design = design[:, :n_factors]
+        design = self._generate_taguchi_array(oa_type, n_factors)
         
         # DataFrame 생성
         df = pd.DataFrame()
         
         for i, factor in enumerate(all_factors):
-            if factor.type == 'continuous':
-                # 연속형: 수준을 실제 값으로 매핑
-                n_levels = int(design[:, i].max() + 1)
-                level_values = np.linspace(factor.low, factor.high, n_levels)
-                df[factor.name] = [level_values[int(x)] for x in design[:, i]]
-            else:
-                # 범주형: 직접 매핑
-                df[factor.name] = [factor.levels[int(x) % len(factor.levels)] 
-                                  for x in design[:, i]]
+            if i < design.shape[1]:
+                if factor.type == 'continuous':
+                    # 연속형: 수준을 실제 값으로 매핑
+                    n_levels = int(design[:, i].max() + 1)
+                    level_values = np.linspace(factor.low, factor.high, n_levels)
+                    df[factor.name] = [level_values[int(x)] for x in design[:, i]]
+                else:
+                    # 범주형: 직접 매핑
+                    df[factor.name] = [factor.levels[int(x) % len(factor.levels)] 
+                                      for x in design[:, i]]
         
         # 외부 배열 추가 (노이즈 인자)
         if kwargs.get('outer_array', False):
@@ -939,7 +998,7 @@ class ExperimentDesignEngine:
                          **kwargs) -> pd.DataFrame:
         """D-최적 설계"""
         n_runs = kwargs.get('n_runs', len(continuous_factors) * 4)
-        model_type = kwargs.get('model', 'linear')  # linear, quadratic, cubic
+        model_type = kwargs.get('model', 'linear')
         
         # 후보 점 생성
         if model_type == 'linear':
@@ -947,7 +1006,6 @@ class ExperimentDesignEngine:
         elif model_type == 'quadratic':
             candidates = self._create_ccd(continuous_factors, categorical_factors)
         else:
-            # 더 많은 후보 점
             candidates = self._create_latin_hypercube(
                 continuous_factors, categorical_factors, 
                 n_samples=n_runs * 10
@@ -964,19 +1022,20 @@ class ExperimentDesignEngine:
         
         return optimal_design
     
+    # === 헬퍼 메서드 ===
+    
     def _coded_to_actual(self, coded_design: np.ndarray, 
                         factors: List[Factor]) -> pd.DataFrame:
         """코드화된 설계를 실제 값으로 변환"""
         df = pd.DataFrame()
         
-        for i, factor in enumerate(factors):
+        continuous_idx = 0
+        for factor in factors:
             if factor.type == 'continuous':
-                # -1 to 1 -> actual values
-                if i < coded_design.shape[1]:
-                    df[factor.name] = (coded_design[:, i] + 1) / 2 * (factor.high - factor.low) + factor.low
-            elif factor.type == 'categorical':
-                # 범주형은 별도 처리
-                pass
+                if continuous_idx < coded_design.shape[1]:
+                    # -1 to 1 -> actual values
+                    df[factor.name] = (coded_design[:, continuous_idx] + 1) / 2 * (factor.high - factor.low) + factor.low
+                    continuous_idx += 1
         
         return df
     
@@ -1004,21 +1063,22 @@ class ExperimentDesignEngine:
         
         # 모든 범주형 조합 생성
         cat_levels = [factor.levels for factor in categorical_factors]
-        cat_combinations = np.array(np.meshgrid(*cat_levels)).T.reshape(-1, len(categorical_factors))
+        import itertools
+        cat_combinations = list(itertools.product(*cat_levels))
         
         # 연속형 설계와 범주형 조합의 전체 조합
         n_continuous_runs = len(continuous_design) if continuous_design.size > 0 else 1
         n_cat_combinations = len(cat_combinations)
         
-        if continuous_design.size > 0:
-            repeated_continuous = np.repeat(continuous_design, n_cat_combinations, axis=0)
-            repeated_categorical = np.tile(cat_combinations, (n_continuous_runs, 1))
-            
-            full_design = np.column_stack([repeated_continuous, repeated_categorical])
-        else:
-            full_design = cat_combinations
+        full_design = []
+        for cont_row in continuous_design:
+            for cat_combo in cat_combinations:
+                if continuous_design.size > 0:
+                    full_design.append(np.concatenate([cont_row, cat_combo]))
+                else:
+                    full_design.append(cat_combo)
         
-        return full_design
+        return np.array(full_design)
     
     def _add_categorical_to_dataframe(self, df: pd.DataFrame,
                                      categorical_factors: List[Factor]) -> pd.DataFrame:
@@ -1034,11 +1094,39 @@ class ExperimentDesignEngine:
         
         return df
     
+    def _get_fractional_generators(self, n_factors: int, resolution: int) -> str:
+        """부분요인설계 생성자 결정"""
+        # 해상도에 따른 생성자
+        generators_map = {
+            3: {  # Resolution III
+                4: 'a b c abc',
+                5: 'a b c d abcd',
+                6: 'a b c d e bcde',
+                7: 'a b c d e f abcdef'
+            },
+            4: {  # Resolution IV
+                4: 'a b c d',
+                5: 'a b c d ab',
+                6: 'a b c d e ace',
+                7: 'a b c d e f abf'
+            },
+            5: {  # Resolution V
+                5: 'a b c d e',
+                6: 'a b c d e abc',
+                7: 'a b c d e f abcf'
+            }
+        }
+        
+        if resolution in generators_map and n_factors in generators_map[resolution]:
+            return generators_map[resolution][n_factors]
+        else:
+            # 기본값
+            return 'a b c d e f g h'[:n_factors*2-1]
+    
     def _simplex_lattice(self, n_components: int, degree: int) -> np.ndarray:
         """Simplex lattice 설계 생성"""
         points = []
         
-        # 재귀적으로 모든 조합 생성
         def generate_points(n, d, current=[]):
             if n == 1:
                 current.append(d)
@@ -1092,7 +1180,6 @@ class ExperimentDesignEngine:
     def _apply_mixture_constraints(self, df: pd.DataFrame, 
                                   constraints: Dict) -> pd.DataFrame:
         """혼합물 제약조건 적용"""
-        # 예: {'A': (0.1, 0.5), 'B': (0.2, 0.6)}
         valid_rows = []
         
         for idx, row in df.iterrows():
@@ -1124,28 +1211,48 @@ class ExperimentDesignEngine:
             elif n_factors <= 13:
                 return 'L27'
         
-        # 기본값
         return 'L16'
+    
+    def _generate_taguchi_array(self, oa_type: str, n_factors: int) -> np.ndarray:
+        """다구치 직교배열 생성"""
+        if oa_type == 'L4':
+            design = np.array([[0,0,0], [0,1,1], [1,0,1], [1,1,0]])
+        elif oa_type == 'L8':
+            design = doe.fracfact('a b c d=abc')
+            design = (design + 1) / 2  # 0, 1로 변환
+        elif oa_type == 'L9':
+            design = np.array([
+                [0,0,0,0], [0,1,1,1], [0,2,2,2],
+                [1,0,1,2], [1,1,2,0], [1,2,0,1],
+                [2,0,2,1], [2,1,0,2], [2,2,1,0]
+            ])
+        elif oa_type == 'L16':
+            design = doe.fracfact('a b c d e=abcd')
+            design = (design + 1) / 2
+        elif oa_type == 'L27':
+            # 간단한 L27 구현
+            design = self._generate_l27_array()
+        else:
+            # 기본값: L8
+            design = doe.fracfact('a b c')
+            design = (design + 1) / 2
+        
+        # 필요한 열만 선택
+        return design[:, :n_factors]
     
     def _generate_l27_array(self) -> np.ndarray:
         """L27 직교배열 생성"""
-        # 3^13 설계의 부분
-        # 간단한 구현을 위해 일부만 표시
-        l27 = np.array([
-            [0,0,0,0,0,0,0,0,0,0,0,0,0],
-            [0,0,0,1,1,1,2,2,2,1,1,1,2],
-            [0,0,0,2,2,2,1,1,1,2,2,2,1],
-            [0,1,2,0,1,2,0,1,2,0,1,2,0],
-            [0,1,2,1,2,0,2,0,1,1,2,0,2],
-            [0,1,2,2,0,1,1,2,0,2,0,1,1],
-            [0,2,1,0,2,1,0,2,1,0,2,1,0],
-            [0,2,1,1,0,2,2,1,0,1,0,2,2],
-            [0,2,1,2,1,0,1,0,2,2,1,0,1],
-            # ... 나머지 18개 행
-        ])
+        # 3^13 설계의 부분 (간단한 구현)
+        l27 = []
+        for i in range(27):
+            row = []
+            temp = i
+            for j in range(13):
+                row.append(temp % 3)
+                temp //= 3
+            l27.append(row)
         
-        # 전체 27개 행 생성 (실제로는 더 복잡한 알고리즘 필요)
-        return np.tile(l27[:9], (3, 1))
+        return np.array(l27)
     
     def _add_outer_array(self, inner_array: pd.DataFrame, 
                         noise_factors: List[Factor]) -> pd.DataFrame:
@@ -1247,10 +1354,10 @@ class ExperimentDesignEngine:
         return selected
 
 
-# === Statistical Analyzer ===
+# === Statistical Analyzer (계속) ===
 
 class StatisticalAnalyzer:
-    """통계 분석 엔진"""
+    """통계 분석 엔진 (통합 버전)"""
     
     def __init__(self, api_manager: Optional[APIManager] = None):
         self.api_manager = api_manager
@@ -1282,7 +1389,7 @@ class StatisticalAnalyzer:
         results = analysis_functions[analysis_type](data, **kwargs)
         
         # AI 인사이트 생성
-        if self.api_manager:
+        if self.api_manager and kwargs.get('use_ai', True):
             ai_insights = self._generate_ai_insights(results, analysis_type)
             results.ai_insights = ai_insights
         
@@ -1431,33 +1538,47 @@ class StatisticalAnalyzer:
                     'results': str(tukey_result)
                 }
         
-        # Two-way ANOVA
-        elif len(factor_cols) == 2:
-            formula = f"{response_col} ~ C({factor_cols[0]}) * C({factor_cols[1]})"
+        # Two-way or multi-way ANOVA
+        else:
+            # 모델 구성
+            formula_parts = [f"C({factor})" for factor in factor_cols]
+            
+            # 주효과
+            formula = f"{response_col} ~ " + " + ".join(formula_parts)
+            
+            # 교호작용 (2-way interactions)
+            if kwargs.get('include_interactions', True) and len(factor_cols) > 1:
+                interactions = []
+                for i in range(len(factor_cols)):
+                    for j in range(i+1, len(factor_cols)):
+                        interactions.append(f"C({factor_cols[i]}):C({factor_cols[j]})")
+                formula += " + " + " + ".join(interactions)
+            
             model = ols(formula, data=data).fit()
             anova_table = sm.stats.anova_lm(model, typ=2)
             
-            results['two_way_anova'] = anova_table.to_dict()
+            results['anova_table'] = anova_table.to_dict()
             
             # 주효과와 교호작용 검정
             results['main_effects'] = {}
-            results['interaction'] = {}
+            results['interactions'] = {}
             
-            for factor in factor_cols:
-                if factor in anova_table.index:
-                    results['main_effects'][factor] = {
-                        'f_statistic': anova_table.loc[factor, 'F'],
-                        'p_value': anova_table.loc[factor, 'PR(>F)'],
-                        'significant': anova_table.loc[factor, 'PR(>F)'] < 0.05
+            for index, row in anova_table.iterrows():
+                if ':' not in index and index != 'Residual':
+                    # 주효과
+                    factor_name = index.replace('C(', '').replace(')', '')
+                    results['main_effects'][factor_name] = {
+                        'f_statistic': row['F'],
+                        'p_value': row['PR(>F)'],
+                        'significant': row['PR(>F)'] < 0.05
                     }
-            
-            interaction_term = f"C({factor_cols[0]}):C({factor_cols[1]})"
-            if interaction_term in anova_table.index:
-                results['interaction'] = {
-                    'f_statistic': anova_table.loc[interaction_term, 'F'],
-                    'p_value': anova_table.loc[interaction_term, 'PR(>F)'],
-                    'significant': anova_table.loc[interaction_term, 'PR(>F)'] < 0.05
-                }
+                elif ':' in index:
+                    # 교호작용
+                    results['interactions'][index] = {
+                        'f_statistic': row['F'],
+                        'p_value': row['PR(>F)'],
+                        'significant': row['PR(>F)'] < 0.05
+                    }
         
         # 시각화 데이터
         visualizations = {}
@@ -1643,6 +1764,140 @@ class StatisticalAnalyzer:
         results.analysis_type = 'rsm'
         
         return results
+    
+    def _pca_analysis(self, data: pd.DataFrame, **kwargs) -> AnalysisResult:
+        """주성분 분석 (PCA)"""
+        numeric_cols = kwargs.get('variables', data.select_dtypes(include=[np.number]).columns)
+        n_components = kwargs.get('n_components', min(len(numeric_cols), len(data)))
+        
+        # 데이터 준비
+        X = data[numeric_cols].dropna()
+        
+        # 표준화
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # PCA
+        pca = PCA(n_components=n_components)
+        X_pca = pca.fit_transform(X_scaled)
+        
+        # 결과 정리
+        results = {
+            'explained_variance': pca.explained_variance_.tolist(),
+            'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
+            'cumulative_variance_ratio': np.cumsum(pca.explained_variance_ratio_).tolist(),
+            'components': pca.components_.tolist(),
+            'loadings': pd.DataFrame(
+                pca.components_.T,
+                index=numeric_cols,
+                columns=[f'PC{i+1}' for i in range(n_components)]
+            ).to_dict(),
+            'scores': pd.DataFrame(
+                X_pca,
+                index=X.index,
+                columns=[f'PC{i+1}' for i in range(n_components)]
+            ).to_dict()
+        }
+        
+        # Kaiser 기준으로 주성분 수 추천
+        n_kaiser = sum(pca.explained_variance_ > 1)
+        
+        # 시각화 데이터
+        visualizations = {
+            'scree_plot': {
+                'x': list(range(1, n_components + 1)),
+                'y': pca.explained_variance_.tolist()
+            },
+            'biplot': {
+                'scores': X_pca[:, :2].tolist() if n_components >= 2 else [],
+                'loadings': (pca.components_[:2].T * np.sqrt(pca.explained_variance_[:2])).tolist()
+                           if n_components >= 2 else [],
+                'labels': numeric_cols.tolist()
+            }
+        }
+        
+        return AnalysisResult(
+            analysis_type='pca',
+            results=results,
+            statistics={
+                'n_variables': len(numeric_cols),
+                'n_observations': len(X),
+                'n_components': n_components,
+                'n_components_kaiser': n_kaiser,
+                'total_variance_explained': sum(pca.explained_variance_ratio_[:n_kaiser])
+            },
+            visualizations=visualizations
+        )
+    
+    def _time_series_analysis(self, data: pd.DataFrame, **kwargs) -> AnalysisResult:
+        """시계열 분석"""
+        time_col = kwargs.get('time_column')
+        value_col = kwargs.get('value_column')
+        
+        if not time_col or not value_col:
+            raise ValueError("time_column과 value_column이 필요합니다")
+        
+        # 시계열 데이터 준비
+        ts_data = data[[time_col, value_col]].dropna()
+        ts_data = ts_data.sort_values(time_col)
+        ts_data.set_index(time_col, inplace=True)
+        
+        # 기본 통계
+        results = {
+            'summary': {
+                'mean': ts_data[value_col].mean(),
+                'std': ts_data[value_col].std(),
+                'min': ts_data[value_col].min(),
+                'max': ts_data[value_col].max(),
+                'trend': self._detect_trend(ts_data[value_col])
+            }
+        }
+        
+        # 자기상관 분석
+        acf_values = sm.tsa.acf(ts_data[value_col], nlags=20)
+        pacf_values = sm.tsa.pacf(ts_data[value_col], nlags=20)
+        
+        results['autocorrelation'] = {
+            'acf': acf_values.tolist(),
+            'pacf': pacf_values.tolist()
+        }
+        
+        # Ljung-Box 검정
+        lb_result = acorr_ljungbox(ts_data[value_col], lags=10, return_df=True)
+        results['ljung_box_test'] = lb_result.to_dict()
+        
+        # 이동평균
+        if kwargs.get('moving_average'):
+            window = kwargs.get('window_size', 3)
+            results['moving_average'] = ts_data[value_col].rolling(window=window).mean().to_dict()
+        
+        # 시각화 데이터
+        visualizations = {
+            'time_series_plot': {
+                'x': ts_data.index.tolist(),
+                'y': ts_data[value_col].tolist()
+            },
+            'acf_plot': {
+                'lags': list(range(len(acf_values))),
+                'values': acf_values.tolist()
+            },
+            'pacf_plot': {
+                'lags': list(range(len(pacf_values))),
+                'values': pacf_values.tolist()
+            }
+        }
+        
+        return AnalysisResult(
+            analysis_type='time_series',
+            results=results,
+            statistics={
+                'n_observations': len(ts_data),
+                'time_range': f"{ts_data.index.min()} to {ts_data.index.max()}"
+            },
+            visualizations=visualizations
+        )
+    
+    # === RSM 헬퍼 메서드 ===
     
     def _find_stationary_point(self, model, factors: List[str]) -> Dict:
         """정상점 찾기"""
@@ -1843,145 +2098,17 @@ class StatisticalAnalyzer:
                          data: pd.DataFrame, response: str) -> float:
         """주어진 점에서 반응값 예측"""
         # 간단한 2차 모델 가정
-        # 실제로는 저장된 모델 사용해야 함
-        prediction = 0
+        prediction = data[response].mean()
         
         # 주효과
         for i, factor in enumerate(factors):
-            prediction += x[i] * data[response].mean() * 0.1
+            prediction += x[i] * data[response].corr(data[factor]) * data[response].std()
         
         # 제곱효과
         for i, factor in enumerate(factors):
-            prediction -= (x[i] - data[factor].mean())**2 * 0.05
+            prediction -= (x[i] - data[factor].mean())**2 * 0.05 * data[response].std()
         
         return prediction
-    
-    def _pca_analysis(self, data: pd.DataFrame, **kwargs) -> AnalysisResult:
-        """주성분 분석 (PCA)"""
-        numeric_cols = kwargs.get('variables', data.select_dtypes(include=[np.number]).columns)
-        n_components = kwargs.get('n_components', min(len(numeric_cols), len(data)))
-        
-        # 데이터 준비
-        X = data[numeric_cols].dropna()
-        
-        # 표준화
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        
-        # PCA
-        pca = PCA(n_components=n_components)
-        X_pca = pca.fit_transform(X_scaled)
-        
-        # 결과 정리
-        results = {
-            'explained_variance': pca.explained_variance_.tolist(),
-            'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
-            'cumulative_variance_ratio': np.cumsum(pca.explained_variance_ratio_).tolist(),
-            'components': pca.components_.tolist(),
-            'loadings': pd.DataFrame(
-                pca.components_.T,
-                index=numeric_cols,
-                columns=[f'PC{i+1}' for i in range(n_components)]
-            ).to_dict(),
-            'scores': pd.DataFrame(
-                X_pca,
-                index=X.index,
-                columns=[f'PC{i+1}' for i in range(n_components)]
-            ).to_dict()
-        }
-        
-        # Kaiser 기준으로 주성분 수 추천
-        n_kaiser = sum(pca.explained_variance_ > 1)
-        
-        # 시각화 데이터
-        visualizations = {
-            'scree_plot': {
-                'x': list(range(1, n_components + 1)),
-                'y': pca.explained_variance_.tolist()
-            },
-            'biplot': {
-                'scores': X_pca[:, :2].tolist() if n_components >= 2 else [],
-                'loadings': (pca.components_[:2].T * np.sqrt(pca.explained_variance_[:2])).tolist()
-                           if n_components >= 2 else [],
-                'labels': numeric_cols.tolist()
-            }
-        }
-        
-        return AnalysisResult(
-            analysis_type='pca',
-            results=results,
-            statistics={
-                'n_variables': len(numeric_cols),
-                'n_observations': len(X),
-                'n_components': n_components,
-                'n_components_kaiser': n_kaiser,
-                'total_variance_explained': sum(pca.explained_variance_ratio_[:n_kaiser])
-            },
-            visualizations=visualizations
-        )
-    
-    def _time_series_analysis(self, data: pd.DataFrame, **kwargs) -> AnalysisResult:
-        """시계열 분석"""
-        time_col = kwargs.get('time_column')
-        value_col = kwargs.get('value_column')
-        
-        if not time_col or not value_col:
-            raise ValueError("time_column과 value_column이 필요합니다")
-        
-        # 시계열 데이터 준비
-        ts_data = data[[time_col, value_col]].dropna()
-        ts_data = ts_data.sort_values(time_col)
-        ts_data.set_index(time_col, inplace=True)
-        
-        # 기본 통계
-        results = {
-            'summary': {
-                'mean': ts_data[value_col].mean(),
-                'std': ts_data[value_col].std(),
-                'min': ts_data[value_col].min(),
-                'max': ts_data[value_col].max(),
-                'trend': self._detect_trend(ts_data[value_col])
-            }
-        }
-        
-        # 자기상관 분석
-        acf_values = sm.tsa.acf(ts_data[value_col], nlags=20)
-        pacf_values = sm.tsa.pacf(ts_data[value_col], nlags=20)
-        
-        results['autocorrelation'] = {
-            'acf': acf_values.tolist(),
-            'pacf': pacf_values.tolist()
-        }
-        
-        # Ljung-Box 검정
-        lb_result = acorr_ljungbox(ts_data[value_col], lags=10, return_df=True)
-        results['ljung_box_test'] = lb_result.to_dict()
-        
-        # 시각화 데이터
-        visualizations = {
-            'time_series_plot': {
-                'x': ts_data.index.tolist(),
-                'y': ts_data[value_col].tolist()
-            },
-            'acf_plot': {
-                'lags': list(range(len(acf_values))),
-                'values': acf_values.tolist()
-            },
-            'pacf_plot': {
-                'lags': list(range(len(pacf_values))),
-                'values': pacf_values.tolist()
-            }
-        }
-        
-        return AnalysisResult(
-            analysis_type='time_series',
-            results=results,
-            statistics={
-                'n_observations': len(ts_data),
-                'time_range': f"{ts_data.index.min()} to {ts_data.index.max()}"
-            },
-            visualizations=visualizations
-        )
     
     def _detect_trend(self, series: pd.Series) -> str:
         """추세 감지"""
@@ -2007,32 +2134,32 @@ class StatisticalAnalyzer:
         insights = []
         
         # 분석 유형별 프롬프트 생성
-        if analysis_type == 'descriptive':
-            prompt = self._create_descriptive_prompt(results)
-        elif analysis_type == 'correlation':
-            prompt = self._create_correlation_prompt(results)
-        elif analysis_type == 'anova':
-            prompt = self._create_anova_prompt(results)
-        elif analysis_type == 'regression':
-            prompt = self._create_regression_prompt(results)
-        elif analysis_type == 'rsm':
-            prompt = self._create_rsm_prompt(results)
-        else:
-            return []
+        prompt_functions = {
+            'descriptive': self._create_descriptive_prompt,
+            'correlation': self._create_correlation_prompt,
+            'anova': self._create_anova_prompt,
+            'regression': self._create_regression_prompt,
+            'rsm': self._create_rsm_prompt,
+            'pca': self._create_pca_prompt,
+            'time_series': self._create_time_series_prompt
+        }
         
-        # AI 호출
-        try:
-            ai_response = self.api_manager.get_ai_response(
-                prompt,
-                model_preference=['gemini', 'gpt', 'claude'],
-                max_length=1000
-            )
+        if analysis_type in prompt_functions:
+            prompt = prompt_functions[analysis_type](results)
             
-            # 인사이트 파싱
-            insights = self._parse_ai_insights(ai_response)
-            
-        except Exception as e:
-            logger.error(f"AI 인사이트 생성 실패: {e}")
+            # AI 호출
+            try:
+                ai_response = self.api_manager.generate_ai_response(
+                    prompt=prompt,
+                    model='gemini',
+                    system_prompt="당신은 전문 통계 분석가입니다. 간결하고 실용적인 인사이트를 제공하세요."
+                )
+                
+                # 인사이트 파싱
+                insights = self._parse_ai_insights(ai_response)
+                
+            except Exception as e:
+                logger.error(f"AI 인사이트 생성 실패: {e}")
         
         return insights
     
@@ -2157,6 +2284,53 @@ class StatisticalAnalyzer:
         
         return prompt
     
+    def _create_pca_prompt(self, results: AnalysisResult) -> str:
+        """PCA 프롬프트"""
+        pca_results = results.results
+        
+        prompt = f"""
+        주성분 분석(PCA) 결과를 해석해주세요:
+        
+        설명된 분산:
+        {json.dumps(pca_results.get('explained_variance_ratio', []), indent=2)}
+        
+        주성분 수: {results.statistics.get('n_components_kaiser')}개 권장 (Kaiser 기준)
+        
+        다음을 분석해주세요:
+        1. 차원 축소의 효과성
+        2. 주요 주성분의 해석
+        3. 원래 변수들의 기여도
+        4. 추가 분석 방향
+        
+        {self._get_detail_instruction()}
+        """
+        
+        return prompt
+    
+    def _create_time_series_prompt(self, results: AnalysisResult) -> str:
+        """시계열 분석 프롬프트"""
+        ts_results = results.results
+        
+        prompt = f"""
+        시계열 분석 결과를 해석해주세요:
+        
+        기본 통계:
+        {json.dumps(ts_results.get('summary', {}), indent=2)}
+        
+        자기상관:
+        {json.dumps(ts_results.get('autocorrelation', {}), indent=2)}
+        
+        다음을 포함해서 설명해주세요:
+        1. 시계열의 추세와 패턴
+        2. 계절성 또는 주기성
+        3. 정상성 여부
+        4. 예측 모델 추천
+        
+        {self._get_detail_instruction()}
+        """
+        
+        return prompt
+    
     def _get_detail_instruction(self) -> str:
         """AI 상세도 지시문"""
         if self._ai_detail_level == 'simple':
@@ -2170,10 +2344,9 @@ class StatisticalAnalyzer:
     
     def _parse_ai_insights(self, ai_response: str) -> List[str]:
         """AI 응답을 인사이트 리스트로 파싱"""
-        # 번호나 불릿 포인트로 구분된 인사이트 추출
         insights = []
         
-        # 다양한 구분자 패턴
+        # 번호나 불릿 포인트로 구분된 인사이트 추출
         patterns = [
             r'^\d+\.\s*(.+)$',  # 1. insight
             r'^[-•]\s*(.+)$',   # - insight or • insight
@@ -2194,7 +2367,6 @@ class StatisticalAnalyzer:
             # 새로운 인사이트 시작 확인
             is_new_insight = False
             for pattern in patterns:
-                import re
                 match = re.match(pattern, line)
                 if match:
                     if current_insight:
@@ -2221,7 +2393,7 @@ class StatisticalAnalyzer:
 # === Optimization Engine ===
 
 class OptimizationEngine:
-    """최적화 엔진"""
+    """최적화 엔진 (통합 버전)"""
     
     def __init__(self, api_manager: Optional[APIManager] = None):
         self.api_manager = api_manager
@@ -2271,15 +2443,19 @@ class OptimizationEngine:
         scipy_constraints = []
         if constraints:
             for constraint in constraints:
-                if constraint['type'] == 'eq':
+                if 'fun' in constraint:
+                    scipy_constraints.append(constraint)
+                elif 'expression' in constraint:
+                    # 문자열 표현식을 함수로 변환
+                    def make_constraint_func(expr):
+                        def constraint_func(x):
+                            local_vars = {f'x{i}': x[i] for i in range(len(x))}
+                            return eval(expr, {"__builtins__": {}}, local_vars)
+                        return constraint_func
+                    
                     scipy_constraints.append({
-                        'type': 'eq',
-                        'fun': constraint['function']
-                    })
-                elif constraint['type'] == 'ineq':
-                    scipy_constraints.append({
-                        'type': 'ineq',
-                        'fun': constraint['function']
+                        'type': constraint.get('type', 'ineq'),
+                        'fun': make_constraint_func(constraint['expression'])
                     })
         
         # 최적화 수행
@@ -2290,20 +2466,22 @@ class OptimizationEngine:
                     objective_function,
                     bounds,
                     constraints=scipy_constraints,
-                    **kwargs
+                    seed=kwargs.get('random_state', RANDOM_STATE),
+                    maxiter=kwargs.get('max_iterations', MAX_ITERATIONS),
+                    tol=kwargs.get('tolerance', CONVERGENCE_TOL)
                 )
             elif method == 'shgo':
                 result = shgo(
                     objective_function,
                     bounds,
                     constraints=scipy_constraints,
-                    **kwargs
+                    options={'maxiter': kwargs.get('max_iterations', MAX_ITERATIONS)}
                 )
             elif method == 'dual_annealing':
                 result = dual_annealing(
                     objective_function,
                     bounds,
-                    **kwargs
+                    maxiter=kwargs.get('max_iterations', MAX_ITERATIONS)
                 )
         else:
             # 국소 최적화
@@ -2313,7 +2491,10 @@ class OptimizationEngine:
                 method=method,
                 bounds=bounds,
                 constraints=scipy_constraints,
-                **kwargs
+                options={
+                    'maxiter': kwargs.get('max_iterations', MAX_ITERATIONS),
+                    'ftol': kwargs.get('tolerance', CONVERGENCE_TOL)
+                }
             )
         
         # 민감도 분석
@@ -2325,139 +2506,99 @@ class OptimizationEngine:
                 bounds
             )
         
+        # 신뢰구간 계산
+        confidence_region = None
+        if kwargs.get('confidence_region', False):
+            confidence_region = self._calculate_confidence_region(
+                objective_function,
+                result.x,
+                bounds
+            )
+        
         # 결과 정리
         optimal_values = {f'x{i}': val for i, val in enumerate(result.x)}
         
         return OptimizationResult(
             optimal_values=optimal_values,
             optimal_responses={'objective': result.fun},
-            convergence_history=result.get('nfev'),
-            sensitivity=sensitivity
+            convergence_history=[result.fun],
+            sensitivity=sensitivity,
+            confidence_region=confidence_region,
+            constraints_satisfied=all(c['fun'](result.x) >= 0 for c in scipy_constraints if c['type'] == 'ineq')
         )
     
     def _multi_objective_optimization(self,
-                                    objective_functions: List[Callable],
+                                    objective_functions: Union[Callable, List[Callable]],
                                     constraints: Optional[List[Dict]],
                                     bounds: Optional[List[Tuple]],
                                     **kwargs) -> OptimizationResult:
         """다중 목적 최적화"""
-        if not PYMOO_AVAILABLE:
-            raise ImportError("pymoo가 설치되지 않았습니다")
+        if isinstance(objective_functions, Callable):
+            # 단일 함수가 여러 목적값을 반환하는 경우
+            objectives_list = objective_functions
+            n_objectives = kwargs.get('n_objectives', 2)
+        else:
+            objectives_list = objective_functions
+            n_objectives = len(objectives_list)
         
-        n_objectives = len(objective_functions)
-        n_variables = len(bounds) if bounds else kwargs.get('n_variables', 2)
+        method = kwargs.get('method', 'weighted_sum')
         
-        # PyMoo Problem 정의
-        class MultiObjectiveProblem(Problem):
-            def __init__(self):
-                super().__init__(
-                    n_var=n_variables,
-                    n_obj=n_objectives,
-                    n_constr=len(constraints) if constraints else 0,
-                    xl=[b[0] for b in bounds],
-                    xu=[b[1] for b in bounds]
-                )
+        if method == 'weighted_sum':
+            # 가중합 방법
+            weights = kwargs.get('weights', [1.0] * n_objectives)
             
-            def _evaluate(self, x, out, *args, **kwargs):
-                # 목적함수 평가
-                f = np.zeros((x.shape[0], n_objectives))
-                for i in range(x.shape[0]):
-                    for j, obj_func in enumerate(objective_functions):
-                        f[i, j] = obj_func(x[i])
-                
-                out["F"] = f
-                
-                # 제약조건 평가
-                if constraints:
-                    g = np.zeros((x.shape[0], len(constraints)))
-                    for i in range(x.shape[0]):
-                        for j, constraint in enumerate(constraints):
-                            if constraint['type'] == 'ineq':
-                                g[i, j] = -constraint['function'](x[i])
-                            else:
-                                g[i, j] = abs(constraint['function'](x[i]))
-                    out["G"] = g
+            if isinstance(objectives_list, list):
+                def combined_objective(x):
+                    return sum(w * obj(x) for w, obj in zip(weights, objectives_list))
+            else:
+                def combined_objective(x):
+                    obj_values = objectives_list(x)
+                    return sum(w * v for w, v in zip(weights, obj_values))
+            
+            # 단일 목적 최적화로 변환
+            result = self._single_objective_optimization(
+                combined_objective, constraints, bounds, **kwargs
+            )
+            
+            return result
         
-        problem = MultiObjectiveProblem()
+        elif method == 'pareto' and PYMOO_AVAILABLE:
+            # Pareto 최적화
+            return self._pareto_optimization(objectives_list, constraints, bounds, n_objectives, **kwargs)
         
-        # 알고리즘 선택
-        algorithm_name = kwargs.get('algorithm', 'NSGA2')
-        pop_size = kwargs.get('pop_size', 100)
-        n_gen = kwargs.get('n_gen', 100)
-        
-        if algorithm_name == 'NSGA2':
-            algorithm = NSGA2(pop_size=pop_size)
-        elif algorithm_name == 'NSGA3':
-            from pymoo.factory import get_reference_directions
-            ref_dirs = get_reference_directions("das-dennis", n_objectives, n_partitions=12)
-            algorithm = NSGA3(ref_dirs=ref_dirs, pop_size=pop_size)
-        
-        # 최적화 실행
-        res = pymoo_minimize(
-            problem,
-            algorithm,
-            termination=get_termination("n_gen", n_gen),
-            seed=kwargs.get('seed', 1),
-            verbose=kwargs.get('verbose', False)
-        )
-        
-        # Pareto front 추출
-        pareto_front = pd.DataFrame(
-            res.F,
-            columns=[f'f{i+1}' for i in range(n_objectives)]
-        )
-        
-        pareto_solutions = pd.DataFrame(
-            res.X,
-            columns=[f'x{i+1}' for i in range(n_variables)]
-        )
-        
-        pareto_front = pd.concat([pareto_solutions, pareto_front], axis=1)
-        
-        # 대표 솔루션 선택 (중심점에 가장 가까운 해)
-        ideal_point = pareto_front[[f'f{i+1}' for i in range(n_objectives)]].min()
-        distances = np.sqrt(((pareto_front[[f'f{i+1}' for i in range(n_objectives)]] - ideal_point) ** 2).sum(axis=1))
-        best_idx = distances.argmin()
-        
-        optimal_values = {f'x{i+1}': res.X[best_idx, i] for i in range(n_variables)}
-        optimal_responses = {f'f{i+1}': res.F[best_idx, i] for i in range(n_objectives)}
-        
-        return OptimizationResult(
-            optimal_values=optimal_values,
-            optimal_responses=optimal_responses,
-            pareto_front=pareto_front
-        )
+        else:
+            raise ValueError(f"지원하지 않는 다중 목적 최적화 방법: {method}")
     
     def _bayesian_optimization(self,
                               objective_function: Callable,
                               bounds: List[Tuple],
                               **kwargs) -> OptimizationResult:
         """베이지안 최적화"""
-        if not SKOPT_AVAILABLE:
+        if SKOPT_AVAILABLE:
+            # scikit-optimize 사용
+            dimensions = [Real(low, high) for low, high in bounds]
+            
+            result = gp_minimize(
+                func=objective_function,
+                dimensions=dimensions,
+                n_calls=kwargs.get('n_calls', 50),
+                n_initial_points=kwargs.get('n_initial_points', 10),
+                acq_func=kwargs.get('acquisition_function', 'EI'),
+                random_state=kwargs.get('random_state', RANDOM_STATE)
+            )
+            
+            optimal_values = {f'x{i}': val for i, val in enumerate(result.x)}
+            
+            return OptimizationResult(
+                optimal_values=optimal_values,
+                optimal_responses={'objective': result.fun},
+                convergence_history=result.func_vals.tolist()
+            )
+        else:
             # 대체 구현: Gaussian Process 기반 간단한 베이지안 최적화
             return self._simple_bayesian_optimization(
                 objective_function, bounds, **kwargs
             )
-        
-        # scikit-optimize 사용
-        dimensions = [Real(low, high) for low, high in bounds]
-        
-        result = gp_minimize(
-            func=objective_function,
-            dimensions=dimensions,
-            n_calls=kwargs.get('n_calls', 50),
-            n_initial_points=kwargs.get('n_initial_points', 10),
-            acq_func=kwargs.get('acquisition_function', 'EI'),
-            random_state=kwargs.get('random_state', 42)
-        )
-        
-        optimal_values = {f'x{i}': val for i, val in enumerate(result.x)}
-        
-        return OptimizationResult(
-            optimal_values=optimal_values,
-            optimal_responses={'objective': result.fun},
-            convergence_history=result.func_vals
-        )
     
     def _simple_bayesian_optimization(self,
                                     objective_function: Callable,
@@ -2534,6 +2675,7 @@ class OptimizationEngine:
         """강건 최적화"""
         uncertainty_params = kwargs.get('uncertainty', {})
         n_scenarios = kwargs.get('n_scenarios', 100)
+        risk_measure = kwargs.get('risk_measure', 'worst_case')  # worst_case, cvar, mean_std
         
         # 불확실성을 고려한 목적함수
         def robust_objective(x):
@@ -2551,8 +2693,18 @@ class OptimizationEngine:
                 
                 values.append(objective_function(x_perturbed))
             
-            # 평균 + 표준편차 (risk-averse)
-            return np.mean(values) + kwargs.get('risk_weight', 1.0) * np.std(values)
+            values = np.array(values)
+            
+            # 위험 척도에 따른 목적함수 값
+            if risk_measure == 'worst_case':
+                return np.max(values)  # 최악의 경우
+            elif risk_measure == 'cvar':
+                # Conditional Value at Risk (95%)
+                percentile = np.percentile(values, 95)
+                return np.mean(values[values >= percentile])
+            else:  # mean_std
+                # 평균 + 표준편차
+                return np.mean(values) + kwargs.get('risk_weight', 1.0) * np.std(values)
         
         # 일반 최적화로 해결
         result = self._single_objective_optimization(
@@ -2575,6 +2727,96 @@ class OptimizationEngine:
         result.robustness = robustness_analysis
         
         return result
+    
+    def _pareto_optimization(self, objectives_list, constraints, bounds, n_objectives, **kwargs):
+        """Pareto 최적화 (PyMoo 사용)"""
+        n_variables = len(bounds) if bounds else kwargs.get('n_variables', 2)
+        
+        # PyMoo Problem 정의
+        class MultiObjectiveProblem(Problem):
+            def __init__(self):
+                super().__init__(
+                    n_var=n_variables,
+                    n_obj=n_objectives,
+                    n_constr=len(constraints) if constraints else 0,
+                    xl=[b[0] for b in bounds],
+                    xu=[b[1] for b in bounds]
+                )
+            
+            def _evaluate(self, x, out, *args, **kwargs):
+                # 목적함수 평가
+                f = np.zeros((x.shape[0], n_objectives))
+                
+                if isinstance(objectives_list, list):
+                    for i in range(x.shape[0]):
+                        for j, obj_func in enumerate(objectives_list):
+                            f[i, j] = obj_func(x[i])
+                else:
+                    for i in range(x.shape[0]):
+                        f[i] = objectives_list(x[i])
+                
+                out["F"] = f
+                
+                # 제약조건 평가
+                if constraints:
+                    g = np.zeros((x.shape[0], len(constraints)))
+                    for i in range(x.shape[0]):
+                        for j, constraint in enumerate(constraints):
+                            if constraint['type'] == 'ineq':
+                                g[i, j] = -constraint['fun'](x[i])
+                            else:
+                                g[i, j] = abs(constraint['fun'](x[i]))
+                    out["G"] = g
+        
+        problem = MultiObjectiveProblem()
+        
+        # 알고리즘 선택
+        algorithm_name = kwargs.get('algorithm', 'NSGA2')
+        pop_size = kwargs.get('pop_size', 100)
+        n_gen = kwargs.get('n_gen', 100)
+        
+        if algorithm_name == 'NSGA2':
+            algorithm = NSGA2(pop_size=pop_size)
+        elif algorithm_name == 'NSGA3':
+            from pymoo.factory import get_reference_directions
+            ref_dirs = get_reference_directions("das-dennis", n_objectives, n_partitions=12)
+            algorithm = NSGA3(ref_dirs=ref_dirs, pop_size=pop_size)
+        
+        # 최적화 실행
+        res = pymoo_minimize(
+            problem,
+            algorithm,
+            termination=get_termination("n_gen", n_gen),
+            seed=kwargs.get('seed', RANDOM_STATE),
+            verbose=kwargs.get('verbose', False)
+        )
+        
+        # Pareto front 추출
+        pareto_front = pd.DataFrame(
+            res.F,
+            columns=[f'f{i+1}' for i in range(n_objectives)]
+        )
+        
+        pareto_solutions = pd.DataFrame(
+            res.X,
+            columns=[f'x{i+1}' for i in range(n_variables)]
+        )
+        
+        pareto_front = pd.concat([pareto_solutions, pareto_front], axis=1)
+        
+        # 대표 솔루션 선택 (중심점에 가장 가까운 해)
+        ideal_point = pareto_front[[f'f{i+1}' for i in range(n_objectives)]].min()
+        distances = np.sqrt(((pareto_front[[f'f{i+1}' for i in range(n_objectives)]] - ideal_point) ** 2).sum(axis=1))
+        best_idx = distances.argmin()
+        
+        optimal_values = {f'x{i}': res.X[best_idx, i] for i in range(n_variables)}
+        optimal_responses = {f'f{i+1}': res.F[best_idx, i] for i in range(n_objectives)}
+        
+        return OptimizationResult(
+            optimal_values=optimal_values,
+            optimal_responses=optimal_responses,
+            pareto_front=pareto_front
+        )
     
     def _sensitivity_analysis(self,
                             objective_function: Callable,
@@ -2612,9 +2854,34 @@ class OptimizationEngine:
         # 정규화
         total_sensitivity = sum(sensitivity.values())
         if total_sensitivity > 0:
-            sensitivity = {k: v/total_sensitivity for k, v in sensitivity.items()}
+            sensitivity = {k: v/total_sensitivity * 100 for k, v in sensitivity.items()}
         
         return sensitivity
+    
+    def _calculate_confidence_region(self,
+                                   objective_function: Callable,
+                                   optimal_point: np.ndarray,
+                                   bounds: List[Tuple],
+                                   confidence_level: float = 0.95) -> Dict:
+        """신뢰구간 계산"""
+        confidence_region = {}
+        
+        # 간단한 구현 - 실제로는 Hessian 행렬 기반 계산 필요
+        for i, (low, high) in enumerate(bounds):
+            # 표준편차 추정
+            std_estimate = (high - low) * 0.05
+            
+            # 신뢰구간
+            z_score = stats.norm.ppf((1 + confidence_level) / 2)
+            margin = z_score * std_estimate
+            
+            confidence_region[f'x{i}'] = {
+                'lower': max(optimal_point[i] - margin, low),
+                'upper': min(optimal_point[i] + margin, high),
+                'point_estimate': optimal_point[i]
+            }
+        
+        return confidence_region
     
     def _analyze_robustness(self,
                           objective_function: Callable,
@@ -2651,14 +2918,15 @@ class OptimizationEngine:
                 '50%': float(np.percentile(results, 50)),
                 '75%': float(np.percentile(results, 75)),
                 '95%': float(np.percentile(results, 95))
-            }
+            },
+            'reliability': float(np.mean(results <= optimal_point[0] * 1.1))  # 10% 마진 내 비율
         }
 
 
 # === Main DataProcessor Class ===
 
 class DataProcessor:
-    """데이터 처리 메인 엔진"""
+    """데이터 처리 메인 엔진 (통합 버전)"""
     
     def __init__(self, api_manager: Optional[APIManager] = None):
         self.api_manager = api_manager
@@ -2715,6 +2983,10 @@ class DataProcessor:
         elif missing_method == 'interpolate':
             numeric_cols = processed_data.select_dtypes(include=[np.number]).columns
             processed_data[numeric_cols] = processed_data[numeric_cols].interpolate()
+        elif missing_method == 'forward_fill':
+            processed_data = processed_data.fillna(method='ffill')
+        elif missing_method == 'backward_fill':
+            processed_data = processed_data.fillna(method='bfill')
         
         # 이상치 처리
         if outlier_method == 'iqr':
@@ -2740,7 +3012,7 @@ class DataProcessor:
         elif outlier_method == 'isolation_forest':
             numeric_cols = processed_data.select_dtypes(include=[np.number]).columns
             if len(numeric_cols) > 0:
-                iso_forest = IsolationForest(contamination=0.1, random_state=42)
+                iso_forest = IsolationForest(contamination=0.1, random_state=RANDOM_STATE)
                 outlier_mask = iso_forest.fit_predict(processed_data[numeric_cols].fillna(0))
                 processed_data = processed_data[outlier_mask == 1]
         
@@ -2749,26 +3021,29 @@ class DataProcessor:
             numeric_cols = processed_data.select_dtypes(include=[np.number]).columns
             
             for transform in transformations:
-                if transform == '정규화':
+                if transform == 'auto':
+                    processed_data, _ = self.transformer.auto_transform(processed_data)
+                elif transform in ['정규화', 'normalize']:
                     scaler = MinMaxScaler()
                     processed_data[numeric_cols] = scaler.fit_transform(processed_data[numeric_cols])
-                elif transform == '표준화':
+                elif transform in ['표준화', 'standardize']:
                     scaler = StandardScaler()
                     processed_data[numeric_cols] = scaler.fit_transform(processed_data[numeric_cols])
-                elif transform == '로그 변환':
+                elif transform in ['로그 변환', 'log']:
                     for col in numeric_cols:
-                        min_val = processed_data[col].min()
-                        if min_val <= 0:
-                            processed_data[col] = np.log(processed_data[col] - min_val + 1)
-                        else:
-                            processed_data[col] = np.log(processed_data[col])
-                elif transform == '제곱근 변환':
+                        processed_data[col] = self.transformer.apply_transform(
+                            processed_data[col], TransformMethod.LOG
+                        )
+                elif transform in ['제곱근 변환', 'sqrt']:
                     for col in numeric_cols:
-                        min_val = processed_data[col].min()
-                        if min_val < 0:
-                            processed_data[col] = np.sqrt(processed_data[col] - min_val)
-                        else:
-                            processed_data[col] = np.sqrt(processed_data[col])
+                        processed_data[col] = self.transformer.apply_transform(
+                            processed_data[col], TransformMethod.SQRT
+                        )
+                elif transform in ['Box-Cox', 'box_cox']:
+                    for col in numeric_cols:
+                        processed_data[col] = self.transformer.apply_transform(
+                            processed_data[col], TransformMethod.BOX_COX
+                        )
         
         # 처리 기록
         self._record_processing({
@@ -2856,7 +3131,8 @@ class DataProcessor:
             'results': result.results,
             'statistics': result.statistics,
             'visualizations': result.visualizations,
-            'ai_insights': result.ai_insights
+            'ai_insights': result.ai_insights,
+            'interpretation': result.interpretation
         }
     
     # === 최적화 ===
@@ -2894,11 +3170,13 @@ class DataProcessor:
             'optimal_responses': result.optimal_responses,
             'sensitivity': result.sensitivity,
             'robustness': result.robustness,
+            'confidence_region': result.confidence_region,
             'pareto_front': result.pareto_front.to_dict() if result.pareto_front is not None else None
         }
     
     # === 통합 파이프라인 ===
-def run_complete_analysis(self,
+    
+    def run_complete_analysis(self,
                             raw_data: Optional[pd.DataFrame] = None,
                             factors: Optional[List[Dict]] = None,
                             responses: Optional[List[Dict]] = None,
@@ -2922,7 +3200,8 @@ def run_complete_analysis(self,
                     'valid': validation_report.valid,
                     'issues': validation_report.issues,
                     'warnings': validation_report.warnings,
-                    'statistics': validation_report.statistics
+                    'statistics': validation_report.statistics,
+                    'recommendations': validation_report.recommendations
                 }
                 
                 # 전처리
@@ -2969,7 +3248,7 @@ def run_complete_analysis(self,
                         results['analysis']['anova'] = self.analyze_data(
                             processed_data,
                             'anova',
-                            factor_cols=categorical_cols[:1],
+                            factor_cols=categorical_cols[:2],  # 최대 2개
                             response_col=responses[0]['name']
                         )
                     except Exception as e:
@@ -2986,8 +3265,17 @@ def run_complete_analysis(self,
                                 predictors=numeric_factors[:3],  # 최대 3개 인자
                                 response=responses[0]['name']
                             )
+                            
+                            # RSM 분석 (인자가 2개 이상인 경우)
+                            if len(numeric_factors) >= 2:
+                                results['analysis']['rsm'] = self.analyze_data(
+                                    processed_data,
+                                    'rsm',
+                                    factors=numeric_factors[:3],
+                                    response=responses[0]['name']
+                                )
                         except Exception as e:
-                            logger.warning(f"회귀분석 실패: {e}")
+                            logger.warning(f"회귀/RSM 분석 실패: {e}")
                 
                 # PCA (변수가 많은 경우)
                 numeric_cols = processed_data.select_dtypes(include=[np.number]).columns
@@ -3013,12 +3301,21 @@ def run_complete_analysis(self,
                         def objective(x):
                             # 회귀모델을 사용한 예측
                             x_df = pd.DataFrame([x], columns=numeric_factors[:len(x)])
+                            
+                            # 다항식 특징 추가 (회귀 분석에서 사용한 경우)
+                            poly_degree = results['analysis']['regression']['statistics'].get('polynomial_degree', 1)
+                            if poly_degree > 1:
+                                poly = PolynomialFeatures(degree=poly_degree, include_bias=False)
+                                x_poly = poly.fit_transform(x_df)
+                                x_df = pd.DataFrame(x_poly, columns=poly.get_feature_names_out(numeric_factors[:len(x)]))
+                            
                             x_with_const = sm.add_constant(x_df)
+                            
                             try:
                                 prediction = reg_model.predict(x_with_const)[0]
                                 return -prediction if optimization_goal == 'maximize' else prediction
                             except:
-                                return 0
+                                return float('inf')
                         
                         bounds = [(f['low'], f['high']) for f in factors if f.get('type', 'continuous') == 'continuous'][:3]
                         
@@ -3027,7 +3324,9 @@ def run_complete_analysis(self,
                                 'single_objective',
                                 objective_func=objective,
                                 bounds=bounds,
-                                method='differential_evolution'
+                                method='differential_evolution',
+                                sensitivity_analysis=True,
+                                confidence_region=True
                             )
                 except Exception as e:
                     logger.warning(f"최적화 실패: {e}")
@@ -3041,27 +3340,124 @@ def run_complete_analysis(self,
         
         return results
     
-    # === 시각화 데이터 생성 ===
+    # === 프로토콜 처리 (v9.1 기능) ===
+    
+    def process_extracted_protocol(self, raw_protocol: Dict) -> Dict:
+        """추출된 프로토콜 데이터 정제 및 표준화"""
+        
+        processed = {
+            'materials': self._standardize_materials(raw_protocol.get('materials', [])),
+            'conditions': self._normalize_conditions(raw_protocol.get('conditions', {})),
+            'procedure': self._structure_steps(raw_protocol.get('procedure', [])),
+            'metadata': {
+                'extraction_date': datetime.now(),
+                'confidence_score': self._calculate_confidence(raw_protocol),
+                'completeness': self._assess_completeness(raw_protocol),
+                'processing_version': '1.0'
+            }
+        }
+        
+        # AI를 통한 보완
+        if self.api_manager and processed['metadata']['completeness'] < 0.8:
+            processed = self._enhance_protocol_with_ai(processed)
+        
+        return processed
+    
+    def merge_protocols(self, protocols: List[Dict]) -> Dict:
+        """여러 소스에서 추출된 프로토콜 병합"""
+        if not protocols:
+            return {}
+        
+        if len(protocols) == 1:
+            return protocols[0]
+        
+        # 기준 프로토콜 선택 (가장 완성도 높은 것)
+        base_protocol = max(protocols, 
+                           key=lambda p: p.get('metadata', {}).get('completeness', 0))
+        
+        merged = copy.deepcopy(base_protocol)
+        
+        # 각 섹션별 병합
+        for protocol in protocols:
+            if protocol is base_protocol:
+                continue
+            
+            # 재료 병합
+            merged['materials'] = self._merge_materials(
+                merged.get('materials', {}), 
+                protocol.get('materials', {})
+            )
+            
+            # 조건 병합
+            merged['conditions'] = self._merge_conditions(
+                merged.get('conditions', {}),
+                protocol.get('conditions', {})
+            )
+            
+            # 절차 병합
+            merged['procedure'] = self._merge_procedures(
+                merged.get('procedure', []),
+                protocol.get('procedure', [])
+            )
+        
+        # 병합 후 재평가
+        merged['metadata']['completeness'] = self._assess_completeness(merged)
+        merged['metadata']['merge_count'] = len(protocols)
+        
+        return merged
+    
+    # === 시각화 데이터 준비 ===
     
     def prepare_visualization_data(self,
                                  data: pd.DataFrame,
                                  viz_type: str,
                                  **kwargs) -> Dict[str, Any]:
         """시각화를 위한 데이터 준비"""
-        if viz_type == 'scatter_matrix':
-            return self._prepare_scatter_matrix(data, **kwargs)
-        elif viz_type == 'heatmap':
-            return self._prepare_heatmap(data, **kwargs)
-        elif viz_type == 'surface_3d':
-            return self._prepare_surface_3d(data, **kwargs)
-        elif viz_type == 'pareto_chart':
-            return self._prepare_pareto_chart(data, **kwargs)
-        elif viz_type == 'box_plot':
-            return self._prepare_box_plot(data, **kwargs)
-        elif viz_type == 'contour':
-            return self._prepare_contour(data, **kwargs)
-        else:
+        viz_functions = {
+            'scatter': self._prepare_scatter,
+            'scatter_matrix': self._prepare_scatter_matrix,
+            'line': self._prepare_line,
+            'bar': self._prepare_bar,
+            'box': self._prepare_box_plot,
+            'heatmap': self._prepare_heatmap,
+            'surface_3d': self._prepare_surface_3d,
+            'contour': self._prepare_contour,
+            'pareto': self._prepare_pareto_chart,
+            'parallel_coordinates': self._prepare_parallel_coordinates
+        }
+        
+        if viz_type not in viz_functions:
             raise ValueError(f"지원하지 않는 시각화 유형: {viz_type}")
+        
+        return viz_functions[viz_type](data, **kwargs)
+    
+    def _prepare_scatter(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """산점도 데이터 준비"""
+        x_col = kwargs.get('x')
+        y_col = kwargs.get('y')
+        color_col = kwargs.get('color')
+        size_col = kwargs.get('size')
+        
+        if not x_col or not y_col:
+            raise ValueError("x와 y 컬럼을 지정해야 합니다")
+        
+        plot_data = {
+            'x': data[x_col].tolist(),
+            'y': data[y_col].tolist(),
+            'x_label': x_col,
+            'y_label': y_col,
+            'type': 'scatter'
+        }
+        
+        if color_col and color_col in data.columns:
+            plot_data['color'] = data[color_col].tolist()
+            plot_data['color_label'] = color_col
+        
+        if size_col and size_col in data.columns:
+            plot_data['size'] = data[size_col].tolist()
+            plot_data['size_label'] = size_col
+        
+        return plot_data
     
     def _prepare_scatter_matrix(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
         """산점도 행렬 데이터 준비"""
@@ -3085,6 +3481,95 @@ def run_complete_analysis(self,
             'data': plot_data,
             'n_vars': len(numeric_cols),
             'variables': numeric_cols
+        }
+    
+    def _prepare_line(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """선 그래프 데이터 준비"""
+        x_col = kwargs.get('x')
+        y_cols = kwargs.get('y', [])
+        
+        if not x_col:
+            x_data = list(range(len(data)))
+            x_label = 'Index'
+        else:
+            x_data = data[x_col].tolist()
+            x_label = x_col
+        
+        if not y_cols:
+            y_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+            if x_col in y_cols:
+                y_cols.remove(x_col)
+        
+        lines = []
+        for y_col in y_cols:
+            if y_col in data.columns:
+                lines.append({
+                    'name': y_col,
+                    'y': data[y_col].tolist()
+                })
+        
+        return {
+            'type': 'line',
+            'x': x_data,
+            'x_label': x_label,
+            'lines': lines
+        }
+    
+    def _prepare_bar(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """막대 그래프 데이터 준비"""
+        category_col = kwargs.get('category')
+        value_col = kwargs.get('value')
+        agg_func = kwargs.get('agg_func', 'mean')
+        
+        if category_col and value_col:
+            grouped = data.groupby(category_col)[value_col].agg(agg_func)
+            
+            return {
+                'type': 'bar',
+                'categories': grouped.index.tolist(),
+                'values': grouped.values.tolist(),
+                'category_label': category_col,
+                'value_label': f"{agg_func}({value_col})"
+            }
+        else:
+            numeric_cols = data.select_dtypes(include=[np.number]).columns
+            means = data[numeric_cols].mean()
+            
+            return {
+                'type': 'bar',
+                'categories': means.index.tolist(),
+                'values': means.values.tolist(),
+                'category_label': 'Variables',
+                'value_label': 'Mean Value'
+            }
+    
+    def _prepare_box_plot(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """박스플롯 데이터 준비"""
+        group_col = kwargs.get('group')
+        value_col = kwargs.get('value')
+        
+        plot_data = []
+        
+        if group_col and value_col:
+            for group in data[group_col].unique():
+                group_data = data[data[group_col] == group][value_col].dropna()
+                plot_data.append({
+                    'name': str(group),
+                    'y': group_data.tolist(),
+                    'boxpoints': 'outliers'
+                })
+        else:
+            numeric_cols = data.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                plot_data.append({
+                    'name': col,
+                    'y': data[col].dropna().tolist(),
+                    'boxpoints': 'outliers'
+                })
+        
+        return {
+            'type': 'box',
+            'data': plot_data
         }
     
     def _prepare_heatmap(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
@@ -3143,6 +3628,20 @@ def run_complete_analysis(self,
             'z_label': z_col
         }
     
+    def _prepare_contour(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """등고선 플롯 데이터 준비"""
+        surface_data = self._prepare_surface_3d(data, **kwargs)
+        
+        return {
+            'type': 'contour',
+            'x': surface_data['x'],
+            'y': surface_data['y'],
+            'z': surface_data['z'],
+            'x_label': surface_data['x_label'],
+            'y_label': surface_data['y_label'],
+            'colorscale': kwargs.get('colorscale', 'Viridis')
+        }
+    
     def _prepare_pareto_chart(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
         """파레토 차트 데이터 준비"""
         category_col = kwargs.get('category')
@@ -3164,53 +3663,32 @@ def run_complete_analysis(self,
             'categories': grouped.index.tolist(),
             'values': grouped.values.tolist(),
             'cumulative_percent': cumulative_percent.tolist(),
-            'threshold_80': 80  # 80% 기준선
+            'threshold_80': 80
         }
     
-    def _prepare_box_plot(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
-        """박스플롯 데이터 준비"""
-        group_col = kwargs.get('group')
-        value_col = kwargs.get('value')
+    def _prepare_parallel_coordinates(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """평행 좌표 플롯 데이터 준비"""
+        numeric_cols = kwargs.get('columns', data.select_dtypes(include=[np.number]).columns.tolist())
         
-        if group_col and value_col:
-            # 그룹별 박스플롯
-            plot_data = []
-            for group in data[group_col].unique():
-                group_data = data[data[group_col] == group][value_col].dropna()
-                plot_data.append({
-                    'name': str(group),
-                    'y': group_data.tolist(),
-                    'boxpoints': 'outliers'
-                })
-        else:
-            # 전체 변수 박스플롯
-            numeric_cols = data.select_dtypes(include=[np.number]).columns
-            plot_data = []
-            for col in numeric_cols:
-                plot_data.append({
-                    'name': col,
-                    'y': data[col].dropna().tolist(),
-                    'boxpoints': 'outliers'
-                })
+        # 정규화
+        normalized_data = data[numeric_cols].copy()
+        for col in numeric_cols:
+            col_min = normalized_data[col].min()
+            col_max = normalized_data[col].max()
+            if col_max > col_min:
+                normalized_data[col] = (normalized_data[col] - col_min) / (col_max - col_min)
+        
+        dimensions = []
+        for col in numeric_cols:
+            dimensions.append({
+                'label': col,
+                'values': normalized_data[col].tolist(),
+                'range': [data[col].min(), data[col].max()]
+            })
         
         return {
-            'type': 'box',
-            'data': plot_data
-        }
-    
-    def _prepare_contour(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
-        """등고선 플롯 데이터 준비"""
-        # 3D 표면과 유사하지만 2D 투영
-        surface_data = self._prepare_surface_3d(data, **kwargs)
-        
-        return {
-            'type': 'contour',
-            'x': surface_data['x'],
-            'y': surface_data['y'],
-            'z': surface_data['z'],
-            'x_label': surface_data['x_label'],
-            'y_label': surface_data['y_label'],
-            'colorscale': kwargs.get('colorscale', 'Viridis')
+            'type': 'parallel_coordinates',
+            'dimensions': dimensions
         }
     
     # === 유틸리티 메서드 ===
@@ -3232,11 +3710,15 @@ def run_complete_analysis(self,
             validation = analysis_results['validation']
             if not validation['valid']:
                 recommendations.append("데이터 품질 개선이 필요합니다.")
-            for warning in validation.get('warnings', []):
-                if '결측치' in warning:
-                    recommendations.append("결측치 처리 방법을 검토하세요.")
-                if '이상치' in warning:
+            
+            for issue in validation.get('issues', []):
+                if '결측치' in issue:
+                    recommendations.append("결측치 처리 전략을 재검토하세요.")
+                if '이상치' in issue:
                     recommendations.append("이상치 제거 또는 변환을 고려하세요.")
+            
+            # 검증 권장사항 추가
+            recommendations.extend(validation.get('recommendations', []))
         
         # 통계 분석 기반
         if 'descriptive' in analysis_results.get('analysis', {}):
@@ -3245,7 +3727,7 @@ def run_complete_analysis(self,
                 non_normal = [k for k, v in desc['results']['normality_tests'].items() 
                              if not v.get('is_normal', True)]
                 if non_normal:
-                    recommendations.append(f"정규성 가정 위반: {', '.join(non_normal[:3])} 변환 고려")
+                    recommendations.append(f"변환 필요: {', '.join(non_normal[:3])}")
         
         # 상관분석 기반
         if 'correlation' in analysis_results.get('analysis', {}):
@@ -3256,6 +3738,33 @@ def run_complete_analysis(self,
             if high_corr:
                 recommendations.append(f"다중공선성 주의: {', '.join(high_corr[:3])}")
         
+        # 회귀분석 기반
+        if 'regression' in analysis_results.get('analysis', {}):
+            reg = analysis_results['analysis']['regression']
+            r_squared = reg.get('results', {}).get('model_summary', {}).get('r_squared', 0)
+            if r_squared < 0.5:
+                recommendations.append("모델 설명력이 낮습니다. 추가 변수나 변환을 고려하세요.")
+            
+            # VIF 확인
+            vif_data = reg.get('results', {}).get('vif', {})
+            high_vif_vars = [var for var, vif in vif_data.items() if vif > 10]
+            if high_vif_vars:
+                recommendations.append(f"다중공선성 제거 필요: {', '.join(high_vif_vars)}")
+        
+        # RSM 분석 기반
+        if 'rsm' in analysis_results.get('analysis', {}):
+            rsm = analysis_results['analysis']['rsm']
+            surface_type = rsm.get('results', {}).get('surface_type', '')
+            if surface_type == 'saddle_point':
+                recommendations.append("안장점 발견 - 추가 실험으로 최적 영역 탐색 필요")
+            
+            stationary_point = rsm.get('results', {}).get('stationary_point', {})
+            if stationary_point.get('coordinates'):
+                coords = stationary_point['coordinates']
+                out_of_bounds = any(v < -1 or v > 1 for v in coords.values())
+                if out_of_bounds:
+                    recommendations.append("정상점이 실험 영역 밖에 있습니다 - 실험 영역 확장 고려")
+        
         # 최적화 기반
         if analysis_results.get('optimization'):
             opt = analysis_results['optimization']
@@ -3264,15 +3773,417 @@ def run_complete_analysis(self,
                                       key=lambda x: x[1], reverse=True)[:2]
                 if sensitive_vars:
                     recommendations.append(
-                        f"민감한 변수: {', '.join([v[0] for v in sensitive_vars])} - 정밀 제어 필요"
+                        f"민감 변수 정밀 제어: {', '.join([v[0] for v in sensitive_vars])}"
                     )
+            
+            if opt.get('robustness'):
+                cv = opt['robustness'].get('cv', 0)
+                if cv > 0.2:
+                    recommendations.append("최적 조건의 강건성이 낮습니다 - 불확실성 관리 필요")
         
         # AI 인사이트 추가
         for analysis in analysis_results.get('analysis', {}).values():
             if isinstance(analysis, dict) and 'ai_insights' in analysis:
                 recommendations.extend(analysis['ai_insights'][:2])
         
-        return recommendations[:10]  # 최대 10개
+        # 중복 제거 및 제한
+        unique_recommendations = []
+        for rec in recommendations:
+            if rec not in unique_recommendations:
+                unique_recommendations.append(rec)
+        
+        return unique_recommendations[:10]  # 최대 10개
+    
+    # === 프로토콜 처리 헬퍼 메서드 ===
+    
+    def _standardize_materials(self, materials: Union[List, Dict]) -> Dict:
+        """재료 정보 표준화"""
+        standardized = {
+            'polymers': [],
+            'solvents': [],
+            'additives': [],
+            'catalysts': [],
+            'others': []
+        }
+        
+        if isinstance(materials, list):
+            for material in materials:
+                category = self._classify_material(material)
+                standardized[category].append(self._parse_material_info(material))
+        
+        elif isinstance(materials, dict):
+            for category, items in materials.items():
+                if category in standardized:
+                    standardized[category] = [self._parse_material_info(item) for item in items]
+        
+        return standardized
+    
+    def _normalize_conditions(self, conditions: Dict) -> Dict:
+        """실험 조건 정규화"""
+        normalized = {}
+        
+        # 표준 조건 매핑
+        condition_map = {
+            'temp': ['temperature', 'temp', 'T', '온도'],
+            'time': ['time', 'duration', 't', '시간'],
+            'pressure': ['pressure', 'P', '압력'],
+            'speed': ['speed', 'rpm', 'stirring', '속도', '교반'],
+            'concentration': ['concentration', 'conc', 'C', '농도']
+        }
+        
+        for key, value in conditions.items():
+            # 표준 키 찾기
+            standard_key = key
+            for std_key, variations in condition_map.items():
+                if key.lower() in [v.lower() for v in variations]:
+                    standard_key = std_key
+                    break
+            
+            # 값 파싱
+            normalized[standard_key] = self._parse_condition_value(value)
+        
+        return normalized
+    
+    def _structure_steps(self, procedure: Union[List, str]) -> List[Dict]:
+        """실험 절차 구조화"""
+        if isinstance(procedure, str):
+            steps = self._split_procedure_text(procedure)
+        else:
+            steps = procedure
+        
+        structured = []
+        for i, step in enumerate(steps):
+            structured.append({
+                'step_number': i + 1,
+                'description': step if isinstance(step, str) else step.get('description', ''),
+                'duration': self._extract_duration(step),
+                'temperature': self._extract_temperature(step),
+                'critical': self._is_critical_step(step)
+            })
+        
+        return structured
+    
+    def _calculate_confidence(self, protocol: Dict) -> float:
+        """프로토콜 신뢰도 계산"""
+        score = 0.0
+        weights = {
+            'materials': 0.3,
+            'conditions': 0.3,
+            'procedure': 0.4
+        }
+        
+        # 재료 정보 평가
+        if 'materials' in protocol:
+            materials = protocol['materials']
+            if isinstance(materials, dict):
+                total_materials = sum(len(v) for v in materials.values() if isinstance(v, list))
+                if total_materials > 0:
+                    score += weights['materials'] * min(total_materials / 5, 1.0)
+        
+        # 조건 정보 평가
+        if 'conditions' in protocol:
+            n_conditions = len(protocol['conditions'])
+            score += weights['conditions'] * min(n_conditions / 4, 1.0)
+        
+        # 절차 정보 평가
+        if 'procedure' in protocol:
+            n_steps = len(protocol['procedure'])
+            score += weights['procedure'] * min(n_steps / 5, 1.0)
+        
+        return round(score, 2)
+    
+    def _assess_completeness(self, protocol: Dict) -> float:
+        """프로토콜 완성도 평가"""
+        required_elements = {
+            'materials': ['polymers', 'solvents'],
+            'conditions': ['temp', 'time'],
+            'procedure': 3  # 최소 단계 수
+        }
+        
+        completeness = 0.0
+        
+        # 재료 확인
+        if 'materials' in protocol:
+            materials = protocol['materials']
+            if isinstance(materials, dict):
+                for req in required_elements['materials']:
+                    if req in materials and materials[req]:
+                        completeness += 0.2
+        
+        # 조건 확인
+        if 'conditions' in protocol:
+            conditions = protocol['conditions']
+            for req in required_elements['conditions']:
+                if req in conditions:
+                    completeness += 0.2
+        
+        # 절차 확인
+        if 'procedure' in protocol:
+            if len(protocol['procedure']) >= required_elements['procedure']:
+                completeness += 0.2
+        
+        return min(completeness, 1.0)
+    
+    def _classify_material(self, material: Union[str, Dict]) -> str:
+        """재료 분류"""
+        if isinstance(material, dict):
+            material_name = material.get('name', '').lower()
+        else:
+            material_name = str(material).lower()
+        
+        # 키워드 기반 분류
+        polymer_keywords = ['polymer', 'poly', 'resin', 'plastic', '폴리머', '수지']
+        solvent_keywords = ['solvent', 'solution', 'alcohol', 'water', 'acetone', '용매', '용액']
+        catalyst_keywords = ['catalyst', 'initiator', 'accelerator', '촉매', '개시제']
+        additive_keywords = ['additive', 'stabilizer', 'plasticizer', 'filler', '첨가제', '안정제']
+        
+        for keyword in polymer_keywords:
+            if keyword in material_name:
+                return 'polymers'
+        
+        for keyword in solvent_keywords:
+            if keyword in material_name:
+                return 'solvents'
+        
+        for keyword in catalyst_keywords:
+            if keyword in material_name:
+                return 'catalysts'
+        
+        for keyword in additive_keywords:
+            if keyword in material_name:
+                return 'additives'
+        
+        return 'others'
+    
+    def _parse_material_info(self, material: Union[str, Dict]) -> Dict:
+        """재료 정보 파싱"""
+        if isinstance(material, dict):
+            return material
+        
+        # 문자열에서 정보 추출
+        info = {'name': str(material)}
+        
+        # 농도 추출 (예: "10% solution")
+        conc_match = re.search(r'(\d+(?:\.\d+)?)\s*%', str(material))
+        if conc_match:
+            info['concentration'] = float(conc_match.group(1))
+        
+        # 무게/부피 추출 (예: "5g", "10mL")
+        amount_match = re.search(r'(\d+(?:\.\d+)?)\s*(g|mg|kg|mL|L)', str(material))
+        if amount_match:
+            info['amount'] = float(amount_match.group(1))
+            info['unit'] = amount_match.group(2)
+        
+        return info
+    
+    def _parse_condition_value(self, value: Union[str, float, Dict]) -> Dict:
+        """조건 값 파싱"""
+        if isinstance(value, dict):
+            return value
+        
+        result = {}
+        
+        if isinstance(value, (int, float)):
+            result['value'] = float(value)
+        else:
+            # 문자열에서 숫자와 단위 추출
+            match = re.search(r'(\d+(?:\.\d+)?)\s*([°℃CKFfahrenheit|min|h|hr|hours|bar|atm|psi|Pa|rpm]*)', str(value))
+            if match:
+                result['value'] = float(match.group(1))
+                if match.group(2):
+                    result['unit'] = match.group(2)
+        
+        return result
+    
+    def _split_procedure_text(self, text: str) -> List[str]:
+        """절차 텍스트를 단계로 분리"""
+        # 번호나 불릿으로 분리
+        steps = re.split(r'\n\s*(?:\d+[\.\)]\s*|\*\s*|-\s*|•\s*)', text)
+        
+        # 빈 단계 제거
+        steps = [step.strip() for step in steps if step.strip()]
+        
+        # 문장 단위로도 분리 시도
+        if len(steps) <= 1:
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            steps = [s.strip() for s in sentences if s.strip() and len(s) > 20]
+        
+        return steps
+    
+    def _extract_duration(self, step: Union[str, Dict]) -> Optional[float]:
+        """단계에서 시간 정보 추출"""
+        if isinstance(step, dict):
+            text = step.get('description', '')
+        else:
+            text = str(step)
+        
+        # 시간 패턴 찾기
+        time_patterns = [
+            (r'(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h|시간)', 60),  # 시간 → 분
+            (r'(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|m|분)', 1),  # 분
+            (r'(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s|초)', 1/60),  # 초 → 분
+        ]
+        
+        for pattern, multiplier in time_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return float(match.group(1)) * multiplier
+        
+        return None
+    
+    def _extract_temperature(self, step: Union[str, Dict]) -> Optional[float]:
+        """단계에서 온도 정보 추출"""
+        if isinstance(step, dict):
+            text = step.get('description', '')
+        else:
+            text = str(step)
+        
+        # 온도 패턴 찾기
+        temp_patterns = [
+            r'(\d+(?:\.\d+)?)\s*°C',
+            r'(\d+(?:\.\d+)?)\s*℃',
+            r'(\d+(?:\.\d+)?)\s*degrees?\s*C',
+            r'(\d+(?:\.\d+)?)\s*celsius'
+        ]
+        
+        for pattern in temp_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return float(match.group(1))
+        
+        return None
+    
+    def _is_critical_step(self, step: Union[str, Dict]) -> bool:
+        """중요 단계 여부 판단"""
+        if isinstance(step, dict):
+            text = step.get('description', '').lower()
+        else:
+            text = str(step).lower()
+        
+        # 중요 키워드
+        critical_keywords = [
+            'critical', 'important', 'crucial', 'essential',
+            'must', 'ensure', 'carefully', 'caution',
+            'do not', "don't", 'avoid', 'never',
+            '중요', '필수', '주의', '반드시', '절대'
+        ]
+        
+        return any(keyword in text for keyword in critical_keywords)
+    
+    def _enhance_protocol_with_ai(self, protocol: Dict) -> Dict:
+        """AI를 통한 프로토콜 보완"""
+        if not self.api_manager:
+            return protocol
+        
+        prompt = f"""
+        다음 실험 프로토콜을 검토하고 누락된 정보를 보완해주세요:
+        
+        {json.dumps(protocol, indent=2, ensure_ascii=False)}
+        
+        특히 다음 사항을 확인하고 추가해주세요:
+        1. 누락된 필수 재료나 조건
+        2. 안전 주의사항
+        3. 일반적인 실험 조건 (명시되지 않은 경우)
+        4. 예상되는 문제점과 해결 방법
+        
+        JSON 형식으로 응답해주세요.
+        """
+        
+        try:
+            response = self.api_manager.generate_ai_response(
+                prompt=prompt,
+                model='gemini',
+                system_prompt="당신은 고분자 실험 전문가입니다."
+            )
+            
+            # 응답 파싱
+            enhanced = json.loads(response)
+            
+            # 원본과 병합
+            return self.merge_protocols([protocol, enhanced])
+            
+        except Exception as e:
+            logger.error(f"AI 프로토콜 보완 실패: {e}")
+            return protocol
+    
+    def _merge_materials(self, materials1: Dict, materials2: Dict) -> Dict:
+        """재료 정보 병합"""
+        merged = copy.deepcopy(materials1)
+        
+        for category, items in materials2.items():
+            if category not in merged:
+                merged[category] = items
+            else:
+                # 중복 제거하며 병합
+                existing_names = {item.get('name', str(item)).lower() for item in merged[category]}
+                
+                for item in items:
+                    item_name = item.get('name', str(item)).lower()
+                    if item_name not in existing_names:
+                        merged[category].append(item)
+        
+        return merged
+    
+    def _merge_conditions(self, conditions1: Dict, conditions2: Dict) -> Dict:
+        """조건 정보 병합"""
+        merged = copy.deepcopy(conditions1)
+        
+        for key, value in conditions2.items():
+            if key not in merged:
+                merged[key] = value
+            elif isinstance(value, dict) and isinstance(merged[key], dict):
+                # 더 상세한 정보 우선
+                if len(value) > len(merged[key]):
+                    merged[key] = value
+        
+        return merged
+    
+    def _merge_procedures(self, procedure1: List, procedure2: List) -> List:
+        """절차 정보 병합"""
+        if not procedure1:
+            return procedure2
+        if not procedure2:
+            return procedure1
+        
+        # 더 상세한 절차 선택
+        if len(procedure1) >= len(procedure2):
+            return procedure1
+        else:
+            return procedure2
+    
+    # === 편의 메서드 ===
+    
+    def quick_analysis(self, data: pd.DataFrame, target_column: Optional[str] = None) -> Dict[str, Any]:
+        """빠른 데이터 분석"""
+        results = {}
+        
+        # 데이터 검증
+        validation = self.validator.validate(data)
+        results['validation'] = {
+            'valid': validation.valid,
+            'issues': validation.issues,
+            'warnings': validation.warnings
+        }
+        
+        # 기술통계
+        results['descriptive'] = self.analyze_data(data, 'descriptive')
+        
+        # 상관관계
+        results['correlation'] = self.analyze_data(data, 'correlation')
+        
+        # 타겟 컬럼이 있으면 회귀분석
+        if target_column and target_column in data.columns:
+            predictors = [col for col in data.select_dtypes(include=[np.number]).columns 
+                         if col != target_column][:5]  # 최대 5개
+            
+            if predictors:
+                results['regression'] = self.analyze_data(
+                    data, 'regression', 
+                    predictors=predictors,
+                    response=target_column
+                )
+        
+        return results
     
     def export_results(self, results: Union[Dict, pd.DataFrame], 
                       filename: str, 
@@ -3301,7 +4212,7 @@ def run_complete_analysis(self,
                         # 분석 결과
                         for analysis_name, analysis_data in results.get('analysis', {}).items():
                             if isinstance(analysis_data, dict):
-                                # 간단한 결과는 시트로
+                                # 요약 데이터
                                 summary_data = {
                                     'Metric': [],
                                     'Value': []
@@ -3335,6 +4246,12 @@ def run_complete_analysis(self,
                             resp_row = {'Type': 'Optimal Responses'}
                             resp_row.update(opt.get('optimal_responses', {}))
                             opt_data.append(resp_row)
+                            
+                            # 민감도
+                            if opt.get('sensitivity'):
+                                sens_row = {'Type': 'Sensitivity'}
+                                sens_row.update(opt['sensitivity'])
+                                opt_data.append(sens_row)
                             
                             pd.DataFrame(opt_data).to_excel(
                                 writer, 
@@ -3437,26 +4354,7 @@ def get_data_processor(api_manager: Optional[APIManager] = None) -> DataProcesso
 def quick_analysis(data: pd.DataFrame, target_column: Optional[str] = None) -> Dict[str, Any]:
     """빠른 데이터 분석"""
     processor = get_data_processor()
-    
-    results = {
-        'validation': processor.validate_data(data),
-        'descriptive': processor.analyze_data(data, 'descriptive'),
-        'correlation': processor.analyze_data(data, 'correlation')
-    }
-    
-    # 타겟 컬럼이 있으면 회귀분석
-    if target_column and target_column in data.columns:
-        predictors = [col for col in data.select_dtypes(include=[np.number]).columns 
-                     if col != target_column][:5]
-        if predictors:
-            results['regression'] = processor.analyze_data(
-                data, 
-                'regression',
-                predictors=predictors,
-                response=target_column
-            )
-    
-    return results
+    return processor.quick_analysis(data, target_column)
 
 
 def create_doe_design(factors: List[Dict], design_type: str = 'auto', n_runs: Optional[int] = None) -> pd.DataFrame:
@@ -3517,3 +4415,4 @@ if __name__ == "__main__":
     print(f"분석 완료: {list(quick_results.keys())}")
     
     print("\n테스트 완료!")
+            std_estimate =
