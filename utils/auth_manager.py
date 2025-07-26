@@ -1296,6 +1296,21 @@ def check_authentication() -> bool:
     
     return False
 
+# 싱글톤 인스턴스
+_auth_manager_instance = None
+
+def get_auth_manager():
+    """AuthManager 싱글톤 인스턴스 반환"""
+    global _auth_manager_instance
+    
+    if _auth_manager_instance is None:
+        # database_manager 가져오기
+        from utils.database_manager import get_database_manager
+        db_manager = get_database_manager()
+        
+        _auth_manager_instance = AuthManager(db_manager)
+    
+    return _auth_manager_instance
 
 # ===========================================================================
 # 🧪 테스트 코드
