@@ -2011,25 +2011,50 @@ class PolymerDOEApp:
         """폴백 마켓플레이스"""
         st.title("🛍️ 모듈 마켓플레이스")
         
-        if self.module_registry:
-            st.markdown("### 📦 사용 가능한 모듈")
+        if st.button("상세 정보", key=f"info_{module['name']}"):
+            # 모달 또는 expander로 상세 정보 표시
+            with st.container():
+                st.markdown(f"### 📦 {module['display_name']} 상세 정보")
+        
+                # 탭으로 정보 구성
+                tabs = st.tabs(["개요", "문서", "예제", "의존성", "버전 히스토리"])
+        
+                with tabs[0]:  # 개요
+                    st.markdown(f"**버전**: {module['version']}")
+                    st.markdown(f"**작성자**: {module['author']}")
+                    st.markdown(f"**라이선스**: {module.get('license', 'MIT')}")
+                    st.markdown(f"**설치 횟수**: {module.get('downloads', 0):,}")
+                    st.markdown(f"**평점**: ⭐ {module.get('rating', 0)}/5.0")
+                    st.markdown(f"**최종 업데이트**: {module.get('last_updated', 'N/A')}")
             
-            modules = self.module_registry.list_modules()
+                with tabs[1]:  # 문서
+                    st.markdown("#### 사용법")
+                    st.code(module.get('usage_example', '# 사용 예제 코드'), language='python')
+                    st.markdown("#### API 레퍼런스")
+                    st.markdown(module.get('api_docs', '상세 API 문서'))
             
-            if modules:
-                for module in modules:
-                    with st.expander(f"{module['display_name']} v{module['version']}"):
-                        st.write(f"**작성자**: {module['author']}")
-                        st.write(f"**카테고리**: {module['category']}")
-                        st.write(f"**설명**: {module['description']}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("설치", key=f"install_{module['name']}"):
-                                st.success(f"{module['display_name']} 모듈을 설치했습니다!")
-                        with col2:
-                            if st.button("상세 정보", key=f"info_{module['name']}"):
-                                st.info("상세 정보 페이지 준비 중")
+                with tabs[2]:  # 예제
+                    st.markdown("#### 예제 프로젝트")
+                    examples = module.get('examples', [])
+                    if examples:
+                        for example in examples:
+                            with st.expander(example['title']):
+                                st.code(example['code'], language='python')
+                    else:
+                        st.info("예제가 아직 등록되지 않았습니다.")
+                
+                with tabs[3]:  # 의존성
+                    st.markdown("#### 필수 패키지")
+                    dependencies = module.get('dependencies', {})
+                    for dep, version in dependencies.items():
+                        st.write(f"• {dep} {version}")
+                
+                with tabs[4]:  # 버전 히스토리
+                    st.markdown("#### 버전 히스토리")
+                    history = module.get('version_history', [])
+                    for ver in history:
+                        st.write(f"**v{ver['version']}** - {ver['date']}")
+                        st.write(f"  {ver['changes']}")
             else:
                 st.info("사용 가능한 모듈이 없습니다.")
         else:
