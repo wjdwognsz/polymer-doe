@@ -703,6 +703,28 @@ GOOGLE_SHEETS_CONFIG = {
     }
 }
 
+API_PROVIDERS = {
+    # AI 엔진
+    'google_gemini': {'name': 'Google Gemini', 'required': True},
+    'xai_grok': {'name': 'xAI Grok', 'required': False},
+    'groq': {'name': 'Groq', 'required': False},
+    'deepseek': {'name': 'DeepSeek', 'required': False},
+    'sambanova': {'name': 'SambaNova', 'required': False},
+    'huggingface': {'name': 'HuggingFace', 'required': False},
+    
+    # 데이터베이스
+    'materials_project': {'name': 'Materials Project', 'required': False},
+    'materials_commons': {'name': 'Materials Commons', 'required': False},
+    'zenodo': {'name': 'Zenodo', 'required': False},
+    'protocols_io': {'name': 'protocols.io', 'required': False},
+    'figshare': {'name': 'Figshare', 'required': False},
+    'github': {'name': 'GitHub', 'required': False},
+    
+    # Google 서비스
+    'google_sheets': {'name': 'Google Sheets', 'required': False},
+    'google_oauth': {'name': 'Google OAuth', 'required': False}
+}
+
 # ============================================================================
 # 🔒 보안 설정
 # ============================================================================
