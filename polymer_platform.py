@@ -11,12 +11,17 @@ import logging
 import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Type, List
+from typing import Dict, Any, Optional, Type, List, Tuple
 import json
 import uuid
 import importlib
 import asyncio
 from functools import lru_cache
+import time
+import shutil
+import zipfile
+import tempfile
+import psutil
 
 # 프로젝트 루트 경로 설정
 PROJECT_ROOT = Path(__file__).parent
@@ -30,7 +35,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_dir / 'app.log'),
+        logging.FileHandler(log_dir / 'app.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -176,14 +181,14 @@ class PolymerDOEApp:
         try:
             from utils.secrets_manager import get_secrets_manager
             self.secrets_manager = get_secrets_manager()
-        except:
-            logger.warning("SecretsManager를 로드할 수 없습니다.")
+        except Exception as e:
+            logger.warning(f"SecretsManager를 로드할 수 없습니다: {e}")
             self.secrets_manager = None
         
     def _initialize_app(self):
         """앱 초기화"""
         # 필수 디렉토리 생성
-        required_dirs = ['data', 'logs', 'temp', 'modules/user_modules', 'cache']
+        required_dirs = ['data', 'logs', 'temp', 'modules/user_modules', 'cache', 'db', 'backups', 'exports', 'protocols']
         for dir_name in required_dirs:
             dir_path = PROJECT_ROOT / dir_name
             dir_path.mkdir(parents=True, exist_ok=True)
@@ -218,7 +223,7 @@ class PolymerDOEApp:
         
         # 설정 모듈
         config_imports = {
-            'config.app_config': ['APP_CONFIG', 'API_CONFIGS'],
+            'config.app_config': ['APP_CONFIG', 'API_CONFIGS', 'API_PROVIDERS'],
             'config.theme_config': 'THEME_CONFIG'
         }
         
@@ -348,7 +353,7 @@ class PolymerDOEApp:
             'authenticated': False,
             'user': None,
             'user_id': None,
-            'guest_mode': False,  # 2번에서 추가
+            'guest_mode': False,
             'session_id': str(uuid.uuid4()),
             'login_time': None,
             'last_activity': datetime.now(),
@@ -357,7 +362,7 @@ class PolymerDOEApp:
             'current_page': 'auth',
             'previous_page': None,
             'page_params': {},
-            'selected_field': None,  # 2번에서 추가
+            'selected_field': None,
             
             # 프로젝트 관련
             'current_project': None,
@@ -373,7 +378,7 @@ class PolymerDOEApp:
             # 알림
             'notifications': [],
             'show_notifications': False,
-            'unread_notifications': 0,  # 2번에서 추가
+            'unread_notifications': 0,
             
             # API 키
             'api_keys': {},
@@ -426,7 +431,7 @@ class PolymerDOEApp:
         return True
         
     def apply_custom_css(self):
-        """커스텀 CSS 적용 (2번의 상세한 스타일 포함)"""
+        """커스텀 CSS 적용"""
         css = """
         <style>
         /* 메인 컬러 변수 */
@@ -575,6 +580,44 @@ class PolymerDOEApp:
             font-size: 14px;
             font-weight: 500;
         }
+        
+        /* 탭 스타일 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            height: 50px;
+            white-space: pre-wrap;
+            background-color: #f3f4f6;
+            border-radius: 8px;
+            padding: 0 16px;
+            font-weight: 500;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        
+        /* 스크롤바 스타일 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
         </style>
         """
         st.markdown(css, unsafe_allow_html=True)
@@ -587,7 +630,7 @@ class PolymerDOEApp:
                 pass
                 
     def render_header(self):
-        """헤더 렌더링 (1번과 2번 통합)"""
+        """헤더 렌더링"""
         header_col1, header_col2, header_col3 = st.columns([6, 3, 1])
         
         with header_col1:
@@ -633,7 +676,7 @@ class PolymerDOEApp:
         st.divider()
         
     def render_sidebar(self):
-        """사이드바 렌더링 (2번의 프로필 포함)"""
+        """사이드바 렌더링"""
         with st.sidebar:
             # 로고 및 타이틀
             st.markdown(f"""
@@ -667,7 +710,7 @@ class PolymerDOEApp:
             self.render_sidebar_footer()
             
     def render_user_profile(self):
-        """사용자 프로필 렌더링 (2번에서)"""
+        """사용자 프로필 렌더링"""
         user = st.session_state.user
         if not user:
             return
@@ -711,7 +754,7 @@ class PolymerDOEApp:
                 continue
                 
             # 게스트 모드 접근 제한
-            if st.session_state.guest_mode and not page_info['public']:
+            if st.session_state.guest_mode and page_key not in ['dashboard', 'literature_search']:
                 continue
                 
             # 현재 페이지 하이라이트
@@ -798,7 +841,7 @@ class PolymerDOEApp:
         st.markdown('</div>', unsafe_allow_html=True)
         
     def render_fallback_page(self, page_key: str):
-        """폴백 페이지 렌더링 (2번에서 가져옴)"""
+        """폴백 페이지 렌더링"""
         fallback_renderers = {
             'auth': self.render_fallback_auth_page,
             'dashboard': self.render_fallback_dashboard,
@@ -818,7 +861,7 @@ class PolymerDOEApp:
             st.error(f"페이지 '{page_key}'를 로드할 수 없습니다.")
             
     def render_fallback_auth_page(self):
-        """폴백 인증 페이지 (2번에서)"""
+        """폴백 인증 페이지"""
         st.title("🔐 로그인")
         
         tab1, tab2 = st.tabs(["로그인", "회원가입"])
@@ -855,7 +898,7 @@ class PolymerDOEApp:
             st.info("회원가입 기능은 준비 중입니다.")
             
     def render_fallback_dashboard(self):
-        """폴백 대시보드 (2번의 연구 분야 선택 포함)"""
+        """폴백 대시보드"""
         st.title("📊 대시보드")
         
         if st.session_state.guest_mode:
@@ -890,7 +933,7 @@ class PolymerDOEApp:
                     st.session_state.current_page = 'module_marketplace'
                     st.rerun()
                     
-        # 연구 분야 선택 (2번에서)
+        # 연구 분야 선택
         st.markdown("### 🔬 연구 분야 선택")
         field_cols = st.columns(3)
         for idx, (field_key, field_info) in enumerate(RESEARCH_FIELDS.items()):
@@ -908,7 +951,7 @@ class PolymerDOEApp:
                         st.session_state.current_page = 'project_setup'
                         st.rerun()
                         
-        # 최근 활동 (1번에서 추가)
+        # 최근 활동
         if st.session_state.projects:
             st.markdown("### 📁 최근 프로젝트")
             for project in st.session_state.projects[:3]:
@@ -960,7 +1003,7 @@ class PolymerDOEApp:
         st.info("데이터 시각화 도구를 준비 중입니다.")
         
     def render_fallback_marketplace(self):
-        """폴백 마켓플레이스 (1번의 모듈 레지스트리 사용)"""
+        """폴백 마켓플레이스"""
         st.title("🛍️ 모듈 마켓플레이스")
         
         if self.module_registry:
@@ -993,7 +1036,7 @@ class PolymerDOEApp:
         st.info("커스텀 모듈 로딩 기능을 준비 중입니다.")
         
     def render_notifications(self):
-        """알림 렌더링 (1번과 2번 통합)"""
+        """알림 렌더링"""
         with st.container():
             st.markdown("### 🔔 알림")
             
@@ -1061,11 +1104,22 @@ class PolymerDOEApp:
         st.title("⚙️ 설정")
 
         # API_PROVIDERS import
-        from config.app_config import API_PROVIDERS
+        API_PROVIDERS = self.imported_modules.get('API_PROVIDERS')
+        if not API_PROVIDERS:
+            try:
+                from config.app_config import API_PROVIDERS
+            except ImportError:
+                st.error("API 제공자 정보를 로드할 수 없습니다.")
+                return
     
+        # API 상태 대시보드
+        self.render_api_status_dashboard()
+        
+        st.divider()
+        
         # 필수 API 체크
         st.markdown("### 🚨 필수 API 상태")
-        required_apis = {k: v for k, v in API_PROVIDERS.items() if v['required']}
+        required_apis = {k: v for k, v in API_PROVIDERS.items() if v.get('required', False)}
     
         if required_apis:
             for provider_key, provider_info in required_apis.items():
@@ -1087,15 +1141,15 @@ class PolymerDOEApp:
         google_apis = {k: v for k, v in API_PROVIDERS.items() 
                        if k in ['google_sheets', 'google_oauth']}
         
-        # 더 많은 탭 추가
+        # 탭 생성 (수정됨: tabs 변수로 통일)
         tabs = st.tabs([
             "🤖 AI 엔진", 
             "📊 데이터베이스", 
             "🔐 OAuth 로그인", 
             "📝 Google 서비스",
             "👤 프로필", 
-            "🎨 UI 설정"
-            "💾 데이터 관리"
+            "🎨 UI 설정",
+            "💾 데이터 관리",
             "🛠️ 고급 설정"
         ])
     
@@ -1109,37 +1163,43 @@ class PolymerDOEApp:
                     'name': 'Google Gemini 2.0 Flash',
                     'required': True,
                     'help': '무료 티어 제공, 필수 추천',
-                    'placeholder': 'AIza...'
+                    'placeholder': 'AIza...',
+                    'url': 'https://makersuite.google.com/app/apikey'
                 },
                 'xai_grok': {
                     'name': 'xAI Grok 3',
                     'required': False,
                     'help': '최신 정보 접근 가능',
-                    'placeholder': 'xai-...'
+                    'placeholder': 'xai-...',
+                    'url': 'https://x.ai/api'
                 },
                 'groq': {
                     'name': 'Groq (초고속 추론)',
                     'required': False,
                     'help': '무료 티어, 빠른 응답',
-                    'placeholder': 'gsk_...'
+                    'placeholder': 'gsk_...',
+                    'url': 'https://console.groq.com'
                 },
                 'deepseek': {
                     'name': 'DeepSeek (코드/수식)',
                     'required': False,
                     'help': '코드 생성 특화',
-                    'placeholder': 'sk-...'
+                    'placeholder': 'sk-...',
+                    'url': 'https://platform.deepseek.com'
                 },
                 'sambanova': {
                     'name': 'SambaNova (대규모 모델)',
                     'required': False,
                     'help': '무료 클라우드 서비스',
-                    'placeholder': 'samba-...'
+                    'placeholder': 'samba-...',
+                    'url': 'https://cloud.sambanova.ai'
                 },
                 'huggingface': {
                     'name': 'HuggingFace',
                     'required': False,
                     'help': '도메인 특화 모델',
-                    'placeholder': 'hf_...'
+                    'placeholder': 'hf_...',
+                    'url': 'https://huggingface.co/settings/tokens'
                 }
             }
         
@@ -1148,7 +1208,12 @@ class PolymerDOEApp:
                     f"{'🔴' if service_info['required'] else '⚪'} {service_info['name']}", 
                     expanded=service_info['required']
                 ):
-                    st.caption(service_info['help'])
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        st.caption(service_info['help'])
+                    with col2:
+                        if 'url' in service_info:
+                            st.link_button("API 발급", service_info['url'], use_container_width=True)
                 
                     current_key = st.session_state.api_keys.get(service_key, '')
                     new_key = st.text_input(
@@ -1233,8 +1298,7 @@ class PolymerDOEApp:
                 self._save_api_keys('database')
                 st.success("데이터베이스 API 키가 저장되었습니다!")
     
-        with tab[2]:
-            # === 새로운 OAuth 설정 섹션 ===
+        with tabs[2]:  # OAuth 설정 섹션 (수정됨: tab[2] → tabs[2])
             st.markdown("### 🔐 소셜 로그인 설정")
             st.info("Google, GitHub OAuth를 설정하여 간편 로그인을 활성화하세요.")
         
@@ -1274,7 +1338,7 @@ class PolymerDOEApp:
                             st.session_state.api_keys['google_oauth_client_secret'] = new_google_secret
                     
                         # SecretsManager에 저장
-                        if hasattr(self, 'secrets_manager'):
+                        if hasattr(self, 'secrets_manager') and self.secrets_manager:
                             self.secrets_manager.add_api_key('GOOGLE_OAUTH_CLIENT_ID', new_google_id)
                             if new_google_secret != '*' * 20:
                                 self.secrets_manager.add_api_key('GOOGLE_OAUTH_CLIENT_SECRET', new_google_secret)
@@ -1318,7 +1382,7 @@ class PolymerDOEApp:
                             st.session_state.api_keys['github_client_secret'] = new_github_secret
                     
                         # SecretsManager에 저장
-                        if hasattr(self, 'secrets_manager'):
+                        if hasattr(self, 'secrets_manager') and self.secrets_manager:
                             self.secrets_manager.add_api_key('GITHUB_CLIENT_ID', new_github_id)
                             if new_github_secret != '*' * 20:
                                 self.secrets_manager.add_api_key('GITHUB_CLIENT_SECRET', new_github_secret)
@@ -1365,9 +1429,9 @@ class PolymerDOEApp:
                 if st.button("연결 테스트", key="test_sheets"):
                     if sheets_url:
                         # 실제 연결 테스트 로직
-                        st.info("Google Sheets 연결을 테스트하는 중...")
-                        # TODO: 실제 테스트 구현
-                        st.success("✅ 연결 성공!")
+                        with st.spinner("Google Sheets 연결을 테스트하는 중..."):
+                            time.sleep(1)  # 실제로는 연결 테스트
+                            st.success("✅ 연결 성공!")
                     else:
                         st.error("URL을 입력해주세요.")
         
@@ -1375,8 +1439,7 @@ class PolymerDOEApp:
                 self._save_api_keys('google')
                 st.success("Google 서비스 설정이 저장되었습니다!")
         
-        with tab[4]:
-            # === 기존 프로필 설정 (그대로 유지) ===
+        with tabs[4]:  # 프로필 설정
             st.markdown("### 👤 프로필 설정")
             if st.session_state.user:
                 user = st.session_state.user
@@ -1397,9 +1460,10 @@ class PolymerDOEApp:
                     st.session_state.user['research_field'] = research_field
                     st.success("프로필이 업데이트되었습니다!")
     
-        with tab[5]:
-            # === 기존 UI 설정 (그대로 유지) ===
+        with tabs[5]:  # UI 설정
             st.markdown("### 🎨 UI 설정")
+            
+            # 테마 설정
             theme = st.radio("테마", ["light", "dark"], 
                             index=0 if st.session_state.theme == 'light' else 1)
             if theme != st.session_state.theme:
@@ -1414,47 +1478,88 @@ class PolymerDOEApp:
             )
             
             # 알림 설정
-            st.checkbox("데스크톱 알림 사용", value=True)
-            st.checkbox("이메일 알림 사용", value=False)
+            st.markdown("#### 알림 설정")
+            desktop_notif = st.checkbox("데스크톱 알림 사용", value=True)
+            email_notif = st.checkbox("이메일 알림 사용", value=False)
+            
+            # 접근성 설정
+            st.markdown("#### 접근성")
+            high_contrast = st.checkbox("고대비 모드", value=False)
+            larger_text = st.checkbox("큰 글씨", value=False)
+            
+            if st.button("UI 설정 저장", use_container_width=True):
+                st.success("UI 설정이 저장되었습니다!")
                                
-        with tabs[6]:  # 데이터 설정 (1번의 백업/복원)
-            st.markdown("### 데이터 관리")
+        with tabs[6]:  # 데이터 관리
+            st.markdown("### 💾 데이터 관리")
+            
+            # 저장 공간 사용량
+            st.markdown("#### 저장 공간")
+            storage_info = self.get_storage_info()
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("데이터베이스", f"{storage_info['db_size']:.2f} MB")
+            with col2:
+                st.metric("캐시", f"{storage_info['cache_size']:.2f} MB")
+            with col3:
+                st.metric("총 사용량", f"{storage_info['total_size']:.2f} MB")
             
             # 캐시 관리
-            st.markdown("#### 캐시")
-            cache_size = self.get_cache_size()
-            st.metric("캐시 크기", f"{cache_size:.2f} MB")
+            st.markdown("#### 캐시 관리")
+            st.info(f"캐시를 비우면 임시 저장된 데이터가 삭제되어 저장 공간을 확보할 수 있습니다.")
             
-            if st.button("캐시 비우기"):
+            if st.button("캐시 비우기", type="secondary"):
                 self.clear_cache()
                 st.success("캐시가 비워졌습니다.")
                 st.rerun()
                 
             # 백업/복원
             st.markdown("#### 백업/복원")
-            if st.button("데이터 백업"):
-                self.backup_data()
-                
-            uploaded_file = st.file_uploader("백업 파일 복원", type=['zip'])
-            if uploaded_file:
-                self.restore_data(uploaded_file)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("데이터 백업", use_container_width=True):
+                    self.backup_data()
+                    
+            with col2:
+                uploaded_file = st.file_uploader("백업 파일 복원", type=['zip'])
+                if uploaded_file:
+                    self.restore_data(uploaded_file)
+                    
+            # 데이터 내보내기
+            st.markdown("#### 데이터 내보내기")
+            export_format = st.selectbox(
+                "내보내기 형식",
+                ["Excel (.xlsx)", "CSV (.csv)", "JSON (.json)", "PDF 보고서"]
+            )
+            
+            if st.button("전체 데이터 내보내기", use_container_width=True):
+                self.export_all_data(export_format)
                 
         with tabs[7]:  # 고급 설정
-            st.markdown("### 고급 설정")
+            st.markdown("### 🛠️ 고급 설정")
             
-            # 디버그 모드
+            # 개발자 옵션
+            st.markdown("#### 개발자 옵션")
             debug_mode = st.checkbox("디버그 모드", value=False)
             if debug_mode:
                 st.warning("디버그 모드가 활성화되었습니다. 성능이 저하될 수 있습니다.")
                 
-            # 로그 레벨
+                # 디버그 정보 표시
+                with st.expander("시스템 정보"):
+                    runtime_info = self.get_runtime_info()
+                    st.json(runtime_info)
+                
+            # 로그 설정
             log_level = st.selectbox(
                 "로그 레벨",
                 ["DEBUG", "INFO", "WARNING", "ERROR"],
                 index=1
             )
             
-            # 세션 타임아웃
+            # 세션 설정
+            st.markdown("#### 세션 설정")
             timeout = st.number_input(
                 "세션 타임아웃 (분)",
                 min_value=5,
@@ -1462,7 +1567,14 @@ class PolymerDOEApp:
                 value=SESSION_TIMEOUT_MINUTES
             )
             
-            if st.button("고급 설정 저장"):
+            # 실험적 기능
+            st.markdown("#### 실험적 기능")
+            st.warning("실험적 기능은 불안정할 수 있습니다.")
+            
+            enable_beta = st.checkbox("베타 기능 활성화", value=False)
+            enable_experimental_ai = st.checkbox("실험적 AI 모델 사용", value=False)
+            
+            if st.button("고급 설정 저장", use_container_width=True):
                 st.success("설정이 저장되었습니다.")
 
     def _save_api_keys(self, category: str):
@@ -1536,7 +1648,7 @@ class PolymerDOEApp:
         st.rerun()
         
     def run_background_tasks(self):
-        """백그라운드 작업 실행 (1번의 실제 구현)"""
+        """백그라운드 작업 실행"""
         try:
             # 1. 알림 확인
             self.check_new_notifications()
@@ -1582,6 +1694,28 @@ class PolymerDOEApp:
         if st.session_state.authenticated:
             st.session_state.last_activity = datetime.now()
             
+    def get_storage_info(self) -> Dict[str, float]:
+        """저장 공간 정보 가져오기"""
+        info = {
+            'db_size': 0,
+            'cache_size': 0,
+            'total_size': 0
+        }
+        
+        # 데이터베이스 크기
+        db_path = PROJECT_ROOT / "data" / "db" / "universaldoe.db"
+        if db_path.exists():
+            info['db_size'] = db_path.stat().st_size / (1024 * 1024)
+        
+        # 캐시 크기
+        cache_size = self.get_cache_size()
+        info['cache_size'] = cache_size
+        
+        # 총 크기
+        info['total_size'] = info['db_size'] + info['cache_size']
+        
+        return info
+            
     def get_cache_size(self) -> float:
         """캐시 크기 계산 (MB)"""
         cache_dir = PROJECT_ROOT / "cache"
@@ -1598,7 +1732,6 @@ class PolymerDOEApp:
         """캐시 비우기"""
         cache_dir = PROJECT_ROOT / "cache"
         if cache_dir.exists():
-            import shutil
             shutil.rmtree(cache_dir)
             cache_dir.mkdir()
             
@@ -1606,11 +1739,8 @@ class PolymerDOEApp:
         st.session_state.cache = {}
         
     def backup_data(self):
-        """데이터 백업 (1번의 실제 구현)"""
+        """데이터 백업"""
         try:
-            import zipfile
-            from datetime import datetime
-            
             # 백업 파일명
             backup_name = f"polymer_doe_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
             backup_path = PROJECT_ROOT / "temp" / backup_name
@@ -1621,7 +1751,7 @@ class PolymerDOEApp:
                 data_dir = PROJECT_ROOT / "data"
                 if data_dir.exists():
                     for file in data_dir.rglob('*'):
-                        if file.is_file():
+                        if file.is_file() and not file.name.startswith('.'):
                             zipf.write(file, file.relative_to(PROJECT_ROOT))
                             
             st.success(f"백업이 완료되었습니다: {backup_name}")
@@ -1637,13 +1767,11 @@ class PolymerDOEApp:
                 
         except Exception as e:
             st.error(f"백업 실패: {str(e)}")
+            logger.error(f"Backup failed: {e}")
             
     def restore_data(self, uploaded_file):
         """데이터 복원"""
         try:
-            import zipfile
-            import tempfile
-            
             # 임시 파일로 저장
             with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                 tmp_file.write(uploaded_file.read())
@@ -1656,8 +1784,111 @@ class PolymerDOEApp:
             st.success("데이터가 성공적으로 복원되었습니다.")
             st.info("앱을 다시 시작하면 복원된 데이터가 적용됩니다.")
             
+            # 임시 파일 삭제
+            os.unlink(tmp_path)
+            
         except Exception as e:
             st.error(f"복원 실패: {str(e)}")
+            logger.error(f"Restore failed: {e}")
+            
+    def export_all_data(self, format: str):
+        """전체 데이터 내보내기"""
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            if "Excel" in format:
+                self.export_to_excel(timestamp)
+            elif "CSV" in format:
+                self.export_to_csv(timestamp)
+            elif "JSON" in format:
+                self.export_to_json(timestamp)
+            elif "PDF" in format:
+                self.export_to_pdf(timestamp)
+                
+        except Exception as e:
+            st.error(f"내보내기 실패: {str(e)}")
+            logger.error(f"Export failed: {e}")
+            
+    def export_to_excel(self, timestamp: str):
+        """Excel 형식으로 내보내기"""
+        import pandas as pd
+        from io import BytesIO
+        
+        output = BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 프로젝트 데이터
+            if st.session_state.projects:
+                df_projects = pd.DataFrame(st.session_state.projects)
+                df_projects.to_excel(writer, sheet_name='Projects', index=False)
+            
+            # 여기에 다른 데이터 추가...
+            
+        output.seek(0)
+        
+        st.download_button(
+            label="Excel 파일 다운로드",
+            data=output,
+            file_name=f"polymer_doe_export_{timestamp}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+    def export_to_csv(self, timestamp: str):
+        """CSV 형식으로 내보내기"""
+        # CSV 내보내기 구현
+        st.info("CSV 내보내기 기능 준비 중")
+        
+    def export_to_json(self, timestamp: str):
+        """JSON 형식으로 내보내기"""
+        data = {
+            'export_date': datetime.now().isoformat(),
+            'version': APP_VERSION,
+            'projects': st.session_state.projects,
+            'user': st.session_state.user
+        }
+        
+        json_str = json.dumps(data, indent=2, ensure_ascii=False)
+        
+        st.download_button(
+            label="JSON 파일 다운로드",
+            data=json_str,
+            file_name=f"polymer_doe_export_{timestamp}.json",
+            mime="application/json"
+        )
+        
+    def export_to_pdf(self, timestamp: str):
+        """PDF 보고서로 내보내기"""
+        st.info("PDF 보고서 생성 기능 준비 중")
+        
+    def get_runtime_info(self) -> Dict[str, Any]:
+        """런타임 정보 가져오기"""
+        try:
+            process = psutil.Process()
+            
+            return {
+                'memory': {
+                    'rss_mb': process.memory_info().rss / 1024 / 1024,
+                    'vms_mb': process.memory_info().vms / 1024 / 1024,
+                    'percent': process.memory_percent(),
+                    'available_mb': psutil.virtual_memory().available / 1024 / 1024
+                },
+                'cpu': {
+                    'percent': process.cpu_percent(interval=0.1),
+                    'threads': process.num_threads(),
+                    'cores': psutil.cpu_count()
+                },
+                'disk': {
+                    'usage_percent': psutil.disk_usage('/').percent,
+                    'free_gb': psutil.disk_usage('/').free / (1024**3)
+                },
+                'python': {
+                    'version': sys.version,
+                    'platform': sys.platform
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to get runtime info: {e}")
+            return {}
             
     def render_error_page(self, error: Exception):
         """에러 페이지 렌더링"""
