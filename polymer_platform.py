@@ -1059,7 +1059,34 @@ class PolymerDOEApp:
             return
         
         st.title("⚙️ 설정")
+
+        # API_PROVIDERS import
+        from config.app_config import API_PROVIDERS
     
+        # 필수 API 체크
+        st.markdown("### 🚨 필수 API 상태")
+        required_apis = {k: v for k, v in API_PROVIDERS.items() if v['required']}
+    
+        if required_apis:
+            for provider_key, provider_info in required_apis.items():
+                # 해당 API 키가 설정되어 있는지 확인
+                is_configured = st.session_state.api_keys.get(provider_key, '')
+            
+                if is_configured:
+                    st.success(f"✅ {provider_info['name']} - 설정됨")
+                else:
+                    st.error(f"❌ {provider_info['name']} - 미설정 (필수)")
+    
+        # API 카테고리별 그룹화
+        ai_apis = {k: v for k, v in API_PROVIDERS.items() 
+                   if k in ['google_gemini', 'xai_grok', 'groq', 'deepseek', 'sambanova', 'huggingface']}
+    
+        db_apis = {k: v for k, v in API_PROVIDERS.items() 
+                   if k in ['materials_project', 'materials_commons', 'zenodo', 'protocols_io', 'figshare', 'github']}
+    
+        google_apis = {k: v for k, v in API_PROVIDERS.items() 
+                       if k in ['google_sheets', 'google_oauth']}
+        
         # 더 많은 탭 추가
         tabs = st.tabs([
             "🤖 AI 엔진", 
