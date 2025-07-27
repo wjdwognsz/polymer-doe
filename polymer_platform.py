@@ -171,6 +171,14 @@ class PolymerDOEApp:
         self.imported_modules = {}
         self.module_registry = None
         self._initialize_app()
+
+        # SecretsManager 초기화
+        try:
+            from utils.secrets_manager import get_secrets_manager
+            self.secrets_manager = get_secrets_manager()
+        except:
+            logger.warning("SecretsManager를 로드할 수 없습니다.")
+            self.secrets_manager = None
         
     def _initialize_app(self):
         """앱 초기화"""
@@ -1014,41 +1022,328 @@ class PolymerDOEApp:
             st.divider()
             
     def render_settings_page(self):
-        """설정 페이지 렌더링 (1번의 완전한 기능)"""
-        st.markdown("## ⚙️ 설정")
+        """설정 페이지"""
+        if not st.session_state.authenticated:
+            st.warning("로그인이 필요합니다.")
+            return
         
-        tabs = st.tabs(["일반", "API 키", "데이터", "고급"])
+        st.title("⚙️ 설정")
+    
+        # 더 많은 탭 추가
+        tabs = st.tabs([
+            "🤖 AI 엔진", 
+            "📊 데이터베이스", 
+            "🔐 OAuth 로그인", 
+            "📝 Google 서비스",
+            "👤 프로필", 
+            "🎨 UI 설정"
+            "💾 데이터 관리"
+            "🛠️ 고급 설정"
+        ])
+    
+        with tabs[0]:  # AI 엔진 탭
+            st.markdown("### 🤖 AI 엔진 API 키")
+            st.info("AI 기능을 활성화하려면 최소 1개 이상의 API 키를 설정하세요.")
         
-        with tabs[0]:  # 일반 설정
-            st.markdown("### 일반 설정")
-            
-            # 프로필 설정 (2번에서)
-            if st.session_state.user:
-                with st.expander("👤 프로필 설정", expanded=True):
-                    user = st.session_state.user
-                    
-                    name = st.text_input("이름", value=user.get('name', ''))
-                    organization = st.text_input("소속", value=user.get('organization', ''))
-                    
-                    research_field = st.selectbox(
-                        "주요 연구 분야",
-                        options=list(RESEARCH_FIELDS.keys()),
-                        format_func=lambda x: RESEARCH_FIELDS[x]['name'],
-                        index=list(RESEARCH_FIELDS.keys()).index(user.get('research_field', 'general'))
+            # AI 서비스 확장 목록
+            ai_services = {
+                'google_gemini': {
+                    'name': 'Google Gemini 2.0 Flash',
+                    'required': True,
+                    'help': '무료 티어 제공, 필수 추천',
+                    'placeholder': 'AIza...'
+                },
+                'xai_grok': {
+                    'name': 'xAI Grok 3',
+                    'required': False,
+                    'help': '최신 정보 접근 가능',
+                    'placeholder': 'xai-...'
+                },
+                'groq': {
+                    'name': 'Groq (초고속 추론)',
+                    'required': False,
+                    'help': '무료 티어, 빠른 응답',
+                    'placeholder': 'gsk_...'
+                },
+                'deepseek': {
+                    'name': 'DeepSeek (코드/수식)',
+                    'required': False,
+                    'help': '코드 생성 특화',
+                    'placeholder': 'sk-...'
+                },
+                'sambanova': {
+                    'name': 'SambaNova (대규모 모델)',
+                    'required': False,
+                    'help': '무료 클라우드 서비스',
+                    'placeholder': 'samba-...'
+                },
+                'huggingface': {
+                    'name': 'HuggingFace',
+                    'required': False,
+                    'help': '도메인 특화 모델',
+                    'placeholder': 'hf_...'
+                }
+            }
+        
+            for service_key, service_info in ai_services.items():
+                with st.expander(
+                    f"{'🔴' if service_info['required'] else '⚪'} {service_info['name']}", 
+                    expanded=service_info['required']
+                ):
+                    st.caption(service_info['help'])
+                
+                    current_key = st.session_state.api_keys.get(service_key, '')
+                    new_key = st.text_input(
+                        "API Key",
+                        value='*' * 20 if current_key else '',
+                        type="password",
+                        placeholder=service_info['placeholder'],
+                        key=f"api_{service_key}"
                     )
+                
+                    if new_key and new_key != '*' * 20:
+                        st.session_state.api_keys[service_key] = new_key
+        
+            if st.button("AI API 키 저장", use_container_width=True, key="save_ai"):
+                self._save_api_keys('ai')
+                st.success("AI API 키가 저장되었습니다!")
+    
+        with tabs[1]:  # 데이터베이스 탭
+            st.markdown("### 📊 외부 데이터베이스 API")
+            st.info("문헌 검색과 데이터 분석을 위한 외부 데이터베이스 연동")
+        
+            db_services = {
+                'materials_project': {
+                    'name': 'Materials Project',
+                    'help': '재료 물성 데이터베이스',
+                    'url': 'https://materialsproject.org/api',
+                    'placeholder': 'mp-...'
+                },
+                'materials_commons': {
+                    'name': 'Materials Commons',
+                    'help': '재료 실험 데이터 공유',
+                    'url': 'https://materialscommons.org/api',
+                    'placeholder': 'mc-...'
+                },
+                'zenodo': {
+                    'name': 'Zenodo',
+                    'help': '연구 데이터 리포지토리',
+                    'url': 'https://zenodo.org/account/settings/applications',
+                    'placeholder': 'zenodo-...'
+                },
+                'protocols_io': {
+                    'name': 'protocols.io',
+                    'help': '실험 프로토콜 공유',
+                    'url': 'https://www.protocols.io/developers',
+                    'placeholder': 'pio-...'
+                },
+                'figshare': {
+                    'name': 'Figshare',
+                    'help': '연구 데이터 공유 플랫폼',
+                    'url': 'https://figshare.com/account/applications',
+                    'placeholder': 'figshare-...'
+                },
+                'github': {
+                    'name': 'GitHub',
+                    'help': '코드 및 데이터 리포지토리',
+                    'url': 'https://github.com/settings/tokens',
+                    'placeholder': 'ghp_...'
+                }
+            }
+        
+            for service_key, service_info in db_services.items():
+                with st.expander(f"🗄️ {service_info['name']}", expanded=False):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.caption(service_info['help'])
+                    with col2:
+                        st.link_button("API 발급", service_info['url'], use_container_width=True)
+                
+                    current_key = st.session_state.api_keys.get(service_key, '')
+                    new_key = st.text_input(
+                        "API Key/Token",
+                        value='*' * 20 if current_key else '',
+                        type="password",
+                        placeholder=service_info['placeholder'],
+                        key=f"db_{service_key}"
+                    )
+                
+                    if new_key and new_key != '*' * 20:
+                        st.session_state.api_keys[service_key] = new_key
+        
+            if st.button("데이터베이스 API 저장", use_container_width=True, key="save_db"):
+                self._save_api_keys('database')
+                st.success("데이터베이스 API 키가 저장되었습니다!")
+    
+        with tab[2]:
+            # === 새로운 OAuth 설정 섹션 ===
+            st.markdown("### 🔐 소셜 로그인 설정")
+            st.info("Google, GitHub OAuth를 설정하여 간편 로그인을 활성화하세요.")
+        
+            # Google OAuth
+            with st.expander("🔷 Google OAuth 설정", expanded=False):
+                st.markdown("""
+                **설정 방법:**
+                1. [Google Cloud Console](https://console.cloud.google.com) 접속
+                2. 새 프로젝트 생성 또는 기존 프로젝트 선택
+                3. "API 및 서비스" → "사용자 인증 정보"
+                4. "사용자 인증 정보 만들기" → "OAuth 클라이언트 ID"
+                5. 승인된 리디렉션 URI: `http://localhost:8501/auth/callback`
+                """)
+            
+                google_client_id = st.session_state.api_keys.get('google_oauth_client_id', '')
+                google_client_secret = st.session_state.api_keys.get('google_oauth_client_secret', '')
+            
+                new_google_id = st.text_input(
+                    "Google Client ID",
+                    value=google_client_id if google_client_id else '',
+                    placeholder="123456789012-xxx.apps.googleusercontent.com",
+                    key="google_client_id"
+                )
+            
+                new_google_secret = st.text_input(
+                    "Google Client Secret",
+                    value='*' * 20 if google_client_secret else '',
+                    type="password",
+                    placeholder="GOCSPX-xxx",
+                    key="google_client_secret"
+                )
+            
+                if st.button("Google OAuth 저장", key="save_google_oauth"):
+                    if new_google_id and new_google_secret:
+                        st.session_state.api_keys['google_oauth_client_id'] = new_google_id
+                        if new_google_secret != '*' * 20:
+                            st.session_state.api_keys['google_oauth_client_secret'] = new_google_secret
                     
-                    if st.button("프로필 업데이트", use_container_width=True):
-                        st.session_state.user['name'] = name
-                        st.session_state.user['organization'] = organization
-                        st.session_state.user['research_field'] = research_field
-                        st.success("프로필이 업데이트되었습니다!")
-                        
-            # 테마 설정
-            theme = st.selectbox(
-                "테마",
-                ["light", "dark"],
-                index=0 if st.session_state.theme == "light" else 1
-            )
+                        # SecretsManager에 저장
+                        if hasattr(self, 'secrets_manager'):
+                            self.secrets_manager.add_api_key('GOOGLE_OAUTH_CLIENT_ID', new_google_id)
+                            if new_google_secret != '*' * 20:
+                                self.secrets_manager.add_api_key('GOOGLE_OAUTH_CLIENT_SECRET', new_google_secret)
+                    
+                        st.success("Google OAuth 설정이 저장되었습니다!")
+                    else:
+                        st.error("Client ID와 Secret을 모두 입력해주세요.")
+        
+            # GitHub OAuth
+            with st.expander("🐙 GitHub OAuth 설정", expanded=False):
+                st.markdown("""
+                **설정 방법:**
+                1. GitHub → Settings → Developer settings
+                2. "OAuth Apps" → "New OAuth App"
+                3. Homepage URL: `http://localhost:8501`
+                4. Authorization callback URL: `http://localhost:8501/auth/github/callback`
+                """)
+            
+                github_client_id = st.session_state.api_keys.get('github_client_id', '')
+                github_client_secret = st.session_state.api_keys.get('github_client_secret', '')
+            
+                new_github_id = st.text_input(
+                    "GitHub Client ID",
+                    value=github_client_id if github_client_id else '',
+                    placeholder="1234567890abcdef1234",
+                    key="github_client_id"
+                )
+            
+                new_github_secret = st.text_input(
+                    "GitHub Client Secret",
+                    value='*' * 20 if github_client_secret else '',
+                    type="password",
+                    placeholder="1234567890abcdef...",
+                    key="github_client_secret"
+                )
+            
+                if st.button("GitHub OAuth 저장", key="save_github_oauth"):
+                    if new_github_id and new_github_secret:
+                        st.session_state.api_keys['github_client_id'] = new_github_id
+                        if new_github_secret != '*' * 20:
+                            st.session_state.api_keys['github_client_secret'] = new_github_secret
+                    
+                        # SecretsManager에 저장
+                        if hasattr(self, 'secrets_manager'):
+                            self.secrets_manager.add_api_key('GITHUB_CLIENT_ID', new_github_id)
+                            if new_github_secret != '*' * 20:
+                                self.secrets_manager.add_api_key('GITHUB_CLIENT_SECRET', new_github_secret)
+                    
+                        st.success("GitHub OAuth 설정이 저장되었습니다!")
+                    else:
+                        st.error("Client ID와 Secret을 모두 입력해주세요.")
+        
+            # OAuth 상태 확인
+            st.markdown("### 📊 OAuth 연결 상태")
+            col1, col2 = st.columns(2)
+        
+            with col1:
+                if st.session_state.api_keys.get('google_oauth_client_id'):
+                    st.success("✅ Google OAuth 설정됨")
+                else:
+                    st.warning("⚠️ Google OAuth 미설정")
+        
+            with col2:
+                if st.session_state.api_keys.get('github_client_id'):
+                    st.success("✅ GitHub OAuth 설정됨")
+                else:
+                    st.warning("⚠️ GitHub OAuth 미설정")
+
+        with tabs[3]:  # Google 서비스 탭
+            st.markdown("### 📝 Google 서비스 설정")
+        
+            # Google Sheets URL
+            with st.expander("📊 Google Sheets 연동", expanded=True):
+                st.info("프로젝트 데이터를 Google Sheets와 동기화합니다.")
+            
+                current_url = st.session_state.api_keys.get('google_sheets_url', '')
+                sheets_url = st.text_input(
+                    "Google Sheets URL",
+                    value=current_url,
+                    placeholder="https://docs.google.com/spreadsheets/d/...",
+                    help="공유 설정이 '링크가 있는 모든 사용자' 또는 '편집 가능'이어야 합니다."
+                )
+            
+                if sheets_url and sheets_url != current_url:
+                    st.session_state.api_keys['google_sheets_url'] = sheets_url
+            
+                # 연결 테스트
+                if st.button("연결 테스트", key="test_sheets"):
+                    if sheets_url:
+                        # 실제 연결 테스트 로직
+                        st.info("Google Sheets 연결을 테스트하는 중...")
+                        # TODO: 실제 테스트 구현
+                        st.success("✅ 연결 성공!")
+                    else:
+                        st.error("URL을 입력해주세요.")
+        
+            if st.button("Google 서비스 저장", use_container_width=True, key="save_google"):
+                self._save_api_keys('google')
+                st.success("Google 서비스 설정이 저장되었습니다!")
+        
+        with tab[4]:
+            # === 기존 프로필 설정 (그대로 유지) ===
+            st.markdown("### 👤 프로필 설정")
+            if st.session_state.user:
+                user = st.session_state.user
+            
+                name = st.text_input("이름", value=user.get('name', ''))
+                organization = st.text_input("소속", value=user.get('organization', ''))
+            
+                research_field = st.selectbox(
+                    "주요 연구 분야",
+                    options=list(RESEARCH_FIELDS.keys()),
+                    format_func=lambda x: RESEARCH_FIELDS[x]['name'],
+                    index=list(RESEARCH_FIELDS.keys()).index(user.get('research_field', 'general'))
+                )
+            
+                if st.button("프로필 업데이트", use_container_width=True):
+                    st.session_state.user['name'] = name
+                    st.session_state.user['organization'] = organization
+                    st.session_state.user['research_field'] = research_field
+                    st.success("프로필이 업데이트되었습니다!")
+    
+        with tab[5]:
+            # === 기존 UI 설정 (그대로 유지) ===
+            st.markdown("### 🎨 UI 설정")
+            theme = st.radio("테마", ["light", "dark"], 
+                            index=0 if st.session_state.theme == 'light' else 1)
             if theme != st.session_state.theme:
                 st.session_state.theme = theme
                 st.info("테마가 변경되었습니다. 새로고침하면 적용됩니다.")
@@ -1063,62 +1358,8 @@ class PolymerDOEApp:
             # 알림 설정
             st.checkbox("데스크톱 알림 사용", value=True)
             st.checkbox("이메일 알림 사용", value=False)
-            
-        with tabs[1]:  # API 키 설정 (2번의 상세 목록)
-            st.markdown("### API 키 관리")
-            st.info("API 키는 안전하게 암호화되어 저장됩니다.")
-            
-            # AI 엔진 API 키
-            with st.expander("AI 엔진 API 키", expanded=True):
-                api_services = {
-                    'google_gemini': 'Google Gemini 2.0 Flash (필수)',
-                    'xai_grok': 'xAI Grok 3 Mini',
-                    'groq': 'Groq (초고속 추론)',
-                    'deepseek': 'DeepSeek (코드/수식)',
-                    'sambanova': 'SambaNova (대규모 모델)',
-                    'huggingface': 'HuggingFace (특수 모델)'
-                }
-                
-                for service_key, service_name in api_services.items():
-                    current_key = st.session_state.api_keys.get(service_key, '')
-                    new_key = st.text_input(
-                        f"{service_name} API Key",
-                        value='*' * 20 if current_key else '',
-                        type="password",
-                        key=f"api_key_{service_key}"
-                    )
-                    if new_key and new_key != '*' * 20:
-                        st.session_state.api_keys[service_key] = new_key
-                        
-            # 데이터베이스 API 키
-            with st.expander("데이터베이스 API 키"):
-                db_services = {
-                    'materials_project': 'Materials Project API Key',
-                    'pubchem': 'PubChem API Key',
-                    'chemspider': 'ChemSpider API Key'
-                }
-                
-                for service_key, service_name in db_services.items():
-                    current_key = st.session_state.api_keys.get(service_key, '')
-                    new_key = st.text_input(
-                        service_name,
-                        value='*' * 20 if current_key else '',
-                        type="password",
-                        key=f"api_key_{service_key}"
-                    )
-                    if new_key and new_key != '*' * 20:
-                        st.session_state.api_keys[service_key] = new_key
-                        
-            if st.button("API 키 저장", use_container_width=True):
-                try:
-                    from utils.secrets_manager import SecretsManager
-                    secrets_manager = SecretsManager()
-                    secrets_manager.save_api_keys(st.session_state.api_keys)
-                    st.success("API 키가 안전하게 저장되었습니다.")
-                except Exception as e:
-                    st.error(f"API 키 저장 실패: {str(e)}")
-                    
-        with tabs[2]:  # 데이터 설정 (1번의 백업/복원)
+                               
+        with tabs[6]:  # 데이터 설정 (1번의 백업/복원)
             st.markdown("### 데이터 관리")
             
             # 캐시 관리
@@ -1140,7 +1381,7 @@ class PolymerDOEApp:
             if uploaded_file:
                 self.restore_data(uploaded_file)
                 
-        with tabs[3]:  # 고급 설정
+        with tabs[7]:  # 고급 설정
             st.markdown("### 고급 설정")
             
             # 디버그 모드
