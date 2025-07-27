@@ -11,7 +11,7 @@ import logging
 import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Type, List, Tuple
+from typing import Dict, Any, Optional, Type, List, Tuple, Union
 import json
 import uuid
 import importlib
@@ -21,7 +21,28 @@ import time
 import shutil
 import zipfile
 import tempfile
-import psutil
+import re
+from io import BytesIO, StringIO
+import base64
+
+# 조건부 임포트
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None
+    PSUTIL_AVAILABLE = False
+
+# 데이터 분석 라이브러리
+try:
+    import pandas as pd
+    import numpy as np
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+except ImportError as e:
+    st.error(f"필수 라이브러리를 설치해주세요: {e}")
+    st.stop()
 
 # 프로젝트 루트 경로 설정
 PROJECT_ROOT = Path(__file__).parent
@@ -31,6 +52,19 @@ sys.path.insert(0, str(PROJECT_ROOT))
 log_dir = PROJECT_ROOT / "logs"
 log_dir.mkdir(exist_ok=True)
 
+# 구조화된 로깅 설정
+class StructuredFormatter(logging.Formatter):
+    def format(self, record):
+        # 기본 포맷
+        result = super().format(record)
+        
+        # extra 필드 추가
+        if hasattr(record, 'extra_fields'):
+            extra = json.dumps(record.extra_fields)
+            result = f"{result} | {extra}"
+            
+        return result
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -39,6 +73,13 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# 구조화된 포맷터 적용
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(StructuredFormatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    ))
+
 logger = logging.getLogger(__name__)
 
 # 전역 상수
@@ -47,6 +88,8 @@ APP_VERSION = "2.0.0"
 APP_DESCRIPTION = "모든 고분자 연구자를 위한 AI 기반 실험 설계 플랫폼"
 SESSION_TIMEOUT_MINUTES = 30
 MIN_PASSWORD_LENGTH = 8
+MAX_FILE_UPLOAD_SIZE_MB = 500
+MAX_EXCEL_EXPORT_SIZE_MB = 10
 
 # 페이지 정의
 PAGES = {
@@ -140,33 +183,149 @@ PAGES = {
     }
 }
 
-# 연구 분야 정의
-RESEARCH_FIELDS = {
-    'general': {
-        'name': '🔬 일반 고분자',
-        'description': '범용 고분자 합성 및 특성 분석'
-    },
-    'bio': {
-        'name': '🧬 바이오 고분자',
-        'description': '생체재료, 의료용 고분자'
-    },
-    'energy': {
-        'name': '🔋 에너지 고분자',
-        'description': '전지, 태양전지용 고분자'
-    },
-    'electronic': {
-        'name': '💻 전자재료 고분자',
-        'description': '반도체, 디스플레이용 고분자'
-    },
-    'composite': {
-        'name': '🏗️ 복합재료',
-        'description': '고분자 복합재료 및 나노복합재'
-    },
-    'sustainable': {
-        'name': '♻️ 지속가능 고분자',
-        'description': '생분해성, 재활용 고분자'
+# 연구 분야 정의 (캐싱 가능)
+@st.cache_data(ttl=3600)
+def load_research_fields():
+    """연구 분야 데이터 로드 (캐싱)"""
+    return {
+        'general': {
+            'name': '🔬 일반 고분자',
+            'description': '범용 고분자 합성 및 특성 분석'
+        },
+        'bio': {
+            'name': '🧬 바이오 고분자',
+            'description': '생체재료, 의료용 고분자'
+        },
+        'energy': {
+            'name': '🔋 에너지 고분자',
+            'description': '전지, 태양전지용 고분자'
+        },
+        'electronic': {
+            'name': '💻 전자재료 고분자',
+            'description': '반도체, 디스플레이용 고분자'
+        },
+        'composite': {
+            'name': '🏗️ 복합재료',
+            'description': '고분자 복합재료 및 나노복합재'
+        },
+        'sustainable': {
+            'name': '♻️ 지속가능 고분자',
+            'description': '생분해성, 재활용 고분자'
+        }
     }
+
+RESEARCH_FIELDS = load_research_fields()
+
+# API 키 패턴 정의
+API_KEY_PATTERNS = {
+    'google_gemini': r'^AIza[0-9A-Za-z\-_]{35}$',
+    'openai': r'^sk-[A-Za-z0-9]{48}$',
+    'github': r'^ghp_[A-Za-z0-9]{36}$',
+    'huggingface': r'^hf_[A-Za-z0-9]{34}$',
+    'groq': r'^gsk_[A-Za-z0-9\-_]+$',
+    'deepseek': r'^sk-[A-Za-z0-9]+$'
 }
+
+
+class FallbackRenderers:
+    """폴백 페이지 렌더러 모음"""
+    
+    @staticmethod
+    def render_auth_page():
+        """폴백 인증 페이지"""
+        st.title("🔐 로그인")
+        
+        tab1, tab2 = st.tabs(["로그인", "회원가입"])
+        
+        with tab1:
+            with st.form("login_form"):
+                email = st.text_input("이메일", placeholder="your@email.com")
+                password = st.text_input("비밀번호", type="password")
+                remember = st.checkbox("로그인 상태 유지")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("로그인", type="primary", use_container_width=True):
+                        if email and password:
+                            st.session_state.authenticated = True
+                            st.session_state.user = {
+                                'email': email,
+                                'name': email.split('@')[0],
+                                'level': 'beginner',
+                                'experiment_count': 0
+                            }
+                            st.session_state.current_page = 'dashboard'
+                            st.rerun()
+                        else:
+                            st.error("이메일과 비밀번호를 입력하세요.")
+                            
+                with col2:
+                    if st.form_submit_button("게스트로 둘러보기", use_container_width=True):
+                        st.session_state.guest_mode = True
+                        st.session_state.current_page = 'dashboard'
+                        st.rerun()
+                        
+        with tab2:  # 회원가입 탭
+            with st.form("signup_form"):
+                st.markdown("#### 기본 정보")
+                col1, col2 = st.columns(2)
+                with col1:
+                    name = st.text_input("이름 *", placeholder="홍길동")
+                    email = st.text_input("이메일 *", placeholder="your@email.com")
+                with col2:
+                    organization = st.text_input("소속", placeholder="○○대학교")
+                    phone = st.text_input("전화번호", placeholder="010-1234-5678")
+        
+                st.markdown("#### 비밀번호 설정")
+                col1, col2 = st.columns(2)
+                with col1:
+                    password = st.text_input("비밀번호 *", type="password", 
+                                   help="8자 이상, 영문/숫자/특수문자 포함")
+                with col2:
+                    password_confirm = st.text_input("비밀번호 확인 *", type="password")
+        
+                # 비밀번호 강도 표시
+                if password:
+                    app = st.session_state.get('app_instance')
+                    if app:
+                        strength = app.check_password_strength(password)
+                        st.progress(strength['score'] / 6)  # 최대 6점으로 수정
+                        st.caption(f"비밀번호 강도: {strength['level']}")
+                        if strength['feedback']:
+                            for feedback in strength['feedback']:
+                                st.caption(f"⚠️ {feedback}")
+        
+                st.markdown("#### 연구 분야")
+                research_field = st.selectbox(
+                    "주요 연구 분야",
+                    options=list(RESEARCH_FIELDS.keys()),
+                    format_func=lambda x: RESEARCH_FIELDS[x]['name']
+                )
+        
+                terms = st.checkbox("이용약관 및 개인정보처리방침에 동의합니다")
+        
+                if st.form_submit_button("회원가입", type="primary", use_container_width=True):
+                    if all([name, email, password, password == password_confirm, terms]):
+                        # 실제 회원가입 처리
+                        st.session_state.user = {
+                            'email': email,
+                            'name': name,
+                            'organization': organization,
+                            'phone': phone,
+                            'research_field': research_field,
+                            'level': 'beginner',
+                            'experiment_count': 0,
+                            'created_at': datetime.now().isoformat()
+                        }
+                        st.success("회원가입이 완료되었습니다!")
+                        time.sleep(1)
+                        st.session_state.authenticated = True
+                        st.session_state.current_page = 'dashboard'
+                        st.rerun()
+                    else:
+                        st.error("모든 필수 항목을 입력하고 약관에 동의해주세요.")
+    
+    # 나머지 폴백 렌더러들은 여기에 추가...
 
 
 class PolymerDOEApp:
@@ -175,6 +334,11 @@ class PolymerDOEApp:
     def __init__(self):
         self.imported_modules = {}
         self.module_registry = None
+        self.fallback_renderers = FallbackRenderers()
+        
+        # 앱 인스턴스를 세션에 저장 (다른 곳에서 참조용)
+        st.session_state.app_instance = self
+        
         self._initialize_app()
 
         # SecretsManager 초기화
@@ -188,7 +352,10 @@ class PolymerDOEApp:
     def _initialize_app(self):
         """앱 초기화"""
         # 필수 디렉토리 생성
-        required_dirs = ['data', 'logs', 'temp', 'modules/user_modules', 'cache', 'db', 'backups', 'exports', 'protocols']
+        required_dirs = [
+            'data', 'logs', 'temp', 'modules/user_modules', 'cache', 
+            'db', 'backups', 'exports', 'protocols'
+        ]
         for dir_name in required_dirs:
             dir_path = PROJECT_ROOT / dir_name
             dir_path.mkdir(parents=True, exist_ok=True)
@@ -270,11 +437,20 @@ class PolymerDOEApp:
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
             
+    @st.cache_resource
+    def _get_module_registry(self):
+        """모듈 레지스트리 캐싱"""
+        try:
+            from modules.module_registry import ModuleRegistry
+            return ModuleRegistry()
+        except Exception as e:
+            logger.error(f"Failed to create module registry: {e}")
+            return None
+            
     def _initialize_module_registry(self):
         """모듈 레지스트리 초기화"""
         try:
-            from modules.module_registry import ModuleRegistry
-            self.module_registry = ModuleRegistry()
+            self.module_registry = self._get_module_registry()
             st.session_state.module_registry_initialized = True
             logger.info("Module registry initialized successfully")
         except Exception as e:
@@ -288,8 +464,14 @@ class PolymerDOEApp:
             module = importlib.import_module(module_path)
             page_class = getattr(module, class_name)
             return page_class
+        except ImportError as e:
+            logger.error(f"Module not found: {module_path} - {e}")
+            return None
+        except AttributeError as e:
+            logger.error(f"Class not found in module: {class_name} - {e}")
+            return None
         except Exception as e:
-            logger.error(f"Failed to import {module_path}.{class_name}: {e}")
+            logger.error(f"Unexpected error importing {module_path}.{class_name}: {e}")
             return None
             
     def run(self):
@@ -327,7 +509,13 @@ class PolymerDOEApp:
             self.run_background_tasks()
             
         except Exception as e:
-            logger.error(f"Application error: {e}")
+            logger.error(f"Application error: {e}", extra={
+                'extra_fields': {
+                    'user_id': st.session_state.get('user_id'),
+                    'session_id': st.session_state.get('session_id'),
+                    'page': st.session_state.get('current_page')
+                }
+            })
             logger.error(traceback.format_exc())
             self.render_error_page(e)
             
@@ -355,6 +543,7 @@ class PolymerDOEApp:
             'user_id': None,
             'guest_mode': False,
             'session_id': str(uuid.uuid4()),
+            'session_ip': None,  # IP 추적용
             'login_time': None,
             'last_activity': datetime.now(),
             
@@ -403,6 +592,13 @@ class PolymerDOEApp:
             if key not in st.session_state:
                 st.session_state[key] = value
                 
+        # IP 주소 저장 (보안용)
+        if 'session_ip' not in st.session_state:
+            try:
+                st.session_state.session_ip = st.context.headers.get("X-Forwarded-For", "unknown")
+            except:
+                st.session_state.session_ip = "unknown"
+                
     def check_offline_mode(self):
         """오프라인 모드 체크"""
         try:
@@ -414,9 +610,9 @@ class PolymerDOEApp:
             logger.info("Running in offline mode")
             
     def check_session_validity(self) -> bool:
-        """세션 유효성 검사"""
+        """세션 유효성 검사 (보안 강화)"""
         if not st.session_state.authenticated:
-            return True  # 로그인 페이지는 항상 접근 가능
+            return True
             
         # 세션 타임아웃 체크
         if 'last_activity' in st.session_state:
@@ -426,6 +622,15 @@ class PolymerDOEApp:
                 st.warning("세션이 만료되었습니다. 다시 로그인해주세요.")
                 return False
                 
+        # IP 변경 체크 (보안 강화)
+        try:
+            current_ip = st.context.headers.get("X-Forwarded-For", "unknown")
+            if st.session_state.session_ip != "unknown" and st.session_state.session_ip != current_ip:
+                logger.warning(f"Session IP changed: {st.session_state.session_ip} -> {current_ip}")
+                # 필요시 재인증 요구 (현재는 경고만)
+        except:
+            pass
+            
         # 활동 시간 업데이트
         st.session_state.last_activity = datetime.now()
         return True
@@ -843,7 +1048,7 @@ class PolymerDOEApp:
     def render_fallback_page(self, page_key: str):
         """폴백 페이지 렌더링"""
         fallback_renderers = {
-            'auth': self.render_fallback_auth_page,
+            'auth': self.fallback_renderers.render_auth_page,
             'dashboard': self.render_fallback_dashboard,
             'project_setup': self.render_fallback_project_setup,
             'experiment_design': self.render_fallback_experiment_design,
@@ -859,110 +1064,29 @@ class PolymerDOEApp:
             fallback_renderers[page_key]()
         else:
             st.error(f"페이지 '{page_key}'를 로드할 수 없습니다.")
-            
-    def render_fallback_auth_page(self):
-        """폴백 인증 페이지"""
-        st.title("🔐 로그인")
-        
-        tab1, tab2 = st.tabs(["로그인", "회원가입"])
-        
-        with tab1:
-            with st.form("login_form"):
-                email = st.text_input("이메일", placeholder="your@email.com")
-                password = st.text_input("비밀번호", type="password")
-                remember = st.checkbox("로그인 상태 유지")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.form_submit_button("로그인", type="primary", use_container_width=True):
-                        if email and password:
-                            st.session_state.authenticated = True
-                            st.session_state.user = {
-                                'email': email,
-                                'name': email.split('@')[0],
-                                'level': 'beginner',
-                                'experiment_count': 0
-                            }
-                            st.session_state.current_page = 'dashboard'
-                            st.rerun()
-                        else:
-                            st.error("이메일과 비밀번호를 입력하세요.")
-                            
-                with col2:
-                    if st.form_submit_button("게스트로 둘러보기", use_container_width=True):
-                        st.session_state.guest_mode = True
-                        st.session_state.current_page = 'dashboard'
-                        st.rerun()
-                        
-        with tab2:  # 회원가입 탭
-            with st.form("signup_form"):
-                st.markdown("#### 기본 정보")
-                col1, col2 = st.columns(2)
-                with col1:
-                    name = st.text_input("이름 *", placeholder="홍길동")
-                    email = st.text_input("이메일 *", placeholder="your@email.com")
-                with col2:
-                    organization = st.text_input("소속", placeholder="○○대학교")
-                    phone = st.text_input("전화번호", placeholder="010-1234-5678")
-        
-                st.markdown("#### 비밀번호 설정")
-                col1, col2 = st.columns(2)
-                with col1:
-                    password = st.text_input("비밀번호 *", type="password", 
-                                   help="8자 이상, 영문/숫자/특수문자 포함")
-                with col2:
-                    password_confirm = st.text_input("비밀번호 확인 *", type="password")
-        
-                # 비밀번호 강도 표시
-                if password:
-                    strength = self.check_password_strength(password)
-                    st.progress(strength['score'] / 5)
-                    st.caption(f"비밀번호 강도: {strength['level']}")
-        
-                st.markdown("#### 연구 분야")
-                research_field = st.selectbox(
-                    "주요 연구 분야",
-                    options=list(RESEARCH_FIELDS.keys()),
-                    format_func=lambda x: RESEARCH_FIELDS[x]['name']
-                )
-        
-                terms = st.checkbox("이용약관 및 개인정보처리방침에 동의합니다")
-        
-                if st.form_submit_button("회원가입", type="primary", use_container_width=True):
-                    if all([name, email, password, password == password_confirm, terms]):
-                        # 실제 회원가입 처리
-                        st.session_state.user = {
-                            'email': email,
-                            'name': name,
-                            'organization': organization,
-                            'phone': phone,
-                            'research_field': research_field,
-                            'level': 'beginner',
-                            'experiment_count': 0,
-                            'created_at': datetime.now().isoformat()
-                        }
-                        st.success("회원가입이 완료되었습니다!")
-                        time.sleep(1)
-                        st.session_state.authenticated = True
-                        st.session_state.current_page = 'dashboard'
-                        st.rerun()
-                    else:
-                        st.error("모든 필수 항목을 입력하고 약관에 동의해주세요.")
 
     def check_password_strength(self, password: str) -> Dict[str, Any]:
-        """비밀번호 강도 체크"""
-        import re
-    
+        """비밀번호 강도 체크 (보안 강화)"""
         score = 0
         feedback = []
+        
+        # 최소 길이 체크
+        if len(password) < MIN_PASSWORD_LENGTH:
+            feedback.append(f"최소 {MIN_PASSWORD_LENGTH}자 이상 필요")
+            return {'score': 0, 'level': '매우 약함', 'feedback': feedback}
+        
+        # 일반적인 패턴 체크
+        common_patterns = ['password', '12345', 'qwerty', 'admin', 'letmein', '111111']
+        if any(pattern in password.lower() for pattern in common_patterns):
+            feedback.append("일반적인 패턴이 포함되어 있습니다")
+            score -= 1
     
         # 길이 체크
-        if len(password) >= 8:
+        if len(password) >= MIN_PASSWORD_LENGTH:
             score += 1
-        else:
-            feedback.append("8자 이상 필요")
-    
         if len(password) >= 12:
+            score += 1
+        if len(password) >= 16:
             score += 1
     
         # 대문자
@@ -994,11 +1118,13 @@ class PolymerDOEApp:
             level = "약함"
         elif score <= 4:
             level = "보통"
-        else:
+        elif score <= 6:
             level = "강함"
+        else:
+            level = "매우 강함"
     
         return {
-            'score': score,
+            'score': max(0, score),  # 음수 방지
             'level': level,
             'feedback': feedback
         }
@@ -1297,7 +1423,6 @@ class PolymerDOEApp:
                     st.dataframe(experiment_data)
                 
                     # 다운로드 버튼
-                    import pandas as pd
                     df = pd.DataFrame(experiment_data)
                     csv = df.to_csv(index=False)
                     st.download_button(
@@ -1377,7 +1502,6 @@ class PolymerDOEApp:
             )
         
             if uploaded_file:
-                import pandas as pd
                 df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             
                 st.write("업로드된 데이터:")
@@ -1413,7 +1537,6 @@ class PolymerDOEApp:
                     st.write(df[responses].describe())
                 
                     # 분포 플롯
-                    import plotly.express as px
                     for resp in responses:
                         fig = px.histogram(df, x=resp, title=f"{resp} 분포")
                         st.plotly_chart(fig)
@@ -1461,8 +1584,6 @@ class PolymerDOEApp:
                     
                         # 잔차 플롯
                         st.markdown("#### 잔차 분석")
-                        import numpy as np
-                        import plotly.graph_objects as go
                     
                         x = np.random.normal(0, 1, 100)
                         fig = go.Figure(data=go.Scatter(x=x, y=np.random.normal(0, 1, 100), mode='markers'))
@@ -1526,8 +1647,6 @@ class PolymerDOEApp:
                         st.metric("상위 백분위", "상위 15%", "우수")
                 
                     # 비교 차트
-                    import plotly.graph_objects as go
-                
                     categories = ['수율', '순도', '안정성', '비용효율', '친환경성']
                     your_scores = [92, 98, 85, 75, 90]
                     avg_scores = [78, 92, 80, 70, 75]
@@ -1810,13 +1929,6 @@ class PolymerDOEApp:
         st.title("📊 시각화")
     
         # 샘플 데이터 생성
-        import pandas as pd
-        import numpy as np
-        import plotly.express as px
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-    
-        # 더미 데이터
         np.random.seed(42)
         n_points = 50
         data = pd.DataFrame({
@@ -2008,57 +2120,163 @@ class PolymerDOEApp:
             st.plotly_chart(fig, use_container_width=True)
         
     def render_fallback_marketplace(self):
-        """폴백 마켓플레이스"""
+        """모듈 마켓플레이스 페이지"""
         st.title("🛍️ 모듈 마켓플레이스")
         
-        if st.button("상세 정보", key=f"info_{module['name']}"):
-            # 모달 또는 expander로 상세 정보 표시
-            with st.container():
-                st.markdown(f"### 📦 {module['display_name']} 상세 정보")
+        # 카테고리 필터
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            category = st.selectbox(
+                "카테고리",
+                ["전체", "실험 설계", "데이터 분석", "시각화", "최적화"]
+            )
+        with col2:
+            sort_by = st.selectbox(
+                "정렬 기준",
+                ["인기순", "최신순", "평점순", "다운로드순"]
+            )
+        with col3:
+            price_filter = st.selectbox(
+                "가격",
+                ["전체", "무료", "유료"]
+            )
+            
+        # 검색
+        search = st.text_input("모듈 검색", placeholder="원하는 모듈을 검색하세요...")
         
-                # 탭으로 정보 구성
-                tabs = st.tabs(["개요", "문서", "예제", "의존성", "버전 히스토리"])
+        # 모듈 목록 (더미 데이터)
+        modules = [
+            {
+                'name': 'advanced_doe',
+                'display_name': '고급 실험 설계 모듈',
+                'author': 'PolymerDOE Team',
+                'category': '실험 설계',
+                'description': '혼합물 설계, Split-plot, 최적 설계 등 고급 기능 지원',
+                'version': '2.1.0',
+                'downloads': 1523,
+                'rating': 4.8,
+                'price': '무료',
+                'icon': '🧪'
+            },
+            {
+                'name': 'ml_optimizer',
+                'display_name': 'ML 기반 최적화',
+                'author': 'AI Lab',
+                'category': '최적화',
+                'description': '머신러닝을 활용한 실시간 실험 최적화',
+                'version': '1.5.2',
+                'downloads': 892,
+                'rating': 4.5,
+                'price': '$9.99',
+                'icon': '🤖'
+            },
+            {
+                'name': 'polymer_db',
+                'display_name': '고분자 DB 연동',
+                'author': 'DataConnect',
+                'category': '데이터베이스',
+                'description': 'PolyInfo, Materials Project 등 주요 DB 통합 검색',
+                'version': '3.0.1',
+                'downloads': 2341,
+                'rating': 4.9,
+                'price': '무료',
+                'icon': '🗄️'
+            }
+        ]
         
-                with tabs[0]:  # 개요
+        # 모듈 카드 표시
+        cols = st.columns(3)
+        for idx, module in enumerate(modules):
+            with cols[idx % 3]:
+                with st.container():
+                    # 모듈 카드
+                    st.markdown(f"""
+                    <div style='background-color: #f8f9fa; padding: 1.5rem; border-radius: 10px; 
+                              border: 1px solid #e9ecef; height: 100%;'>
+                        <h3>{module['icon']} {module['display_name']}</h3>
+                        <p style='color: #6c757d; font-size: 14px;'>by {module['author']}</p>
+                        <p>{module['description']}</p>
+                        <div style='display: flex; justify-content: space-between; align-items: center; 
+                                  margin-top: 1rem;'>
+                            <span>⭐ {module['rating']}</span>
+                            <span>⬇️ {module['downloads']:,}</span>
+                            <span style='font-weight: bold; color: #28a745;'>{module['price']}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("설치", key=f"install_{module['name']}", use_container_width=True):
+                            with st.spinner("설치 중..."):
+                                time.sleep(1)
+                            st.success("설치 완료!")
+                            
+                    with col_b:
+                        if st.button("상세", key=f"detail_{module['name']}", use_container_width=True):
+                            st.session_state.selected_module = module
+                            st.rerun()
+                            
+        # 선택된 모듈 상세 정보
+        if 'selected_module' in st.session_state and st.session_state.selected_module:
+            module = st.session_state.selected_module
+            st.divider()
+            st.markdown(f"### 📦 {module['display_name']} 상세 정보")
+            
+            tabs = st.tabs(["개요", "문서", "예제", "리뷰"])
+            
+            with tabs[0]:
+                col1, col2 = st.columns([2, 1])
+                with col1:
                     st.markdown(f"**버전**: {module['version']}")
+                    st.markdown(f"**카테고리**: {module['category']}")
                     st.markdown(f"**작성자**: {module['author']}")
-                    st.markdown(f"**라이선스**: {module.get('license', 'MIT')}")
-                    st.markdown(f"**설치 횟수**: {module.get('downloads', 0):,}")
-                    st.markdown(f"**평점**: ⭐ {module.get('rating', 0)}/5.0")
-                    st.markdown(f"**최종 업데이트**: {module.get('last_updated', 'N/A')}")
-            
-                with tabs[1]:  # 문서
-                    st.markdown("#### 사용법")
-                    st.code(module.get('usage_example', '# 사용 예제 코드'), language='python')
-                    st.markdown("#### API 레퍼런스")
-                    st.markdown(module.get('api_docs', '상세 API 문서'))
-            
-                with tabs[2]:  # 예제
-                    st.markdown("#### 예제 프로젝트")
-                    examples = module.get('examples', [])
-                    if examples:
-                        for example in examples:
-                            with st.expander(example['title']):
-                                st.code(example['code'], language='python')
-                    else:
-                        st.info("예제가 아직 등록되지 않았습니다.")
+                    st.markdown(f"**라이선스**: MIT")
+                with col2:
+                    st.metric("평점", f"⭐ {module['rating']}/5.0")
+                    st.metric("다운로드", f"{module['downloads']:,}")
+                    
+            with tabs[1]:
+                st.markdown("#### 사용법")
+                st.code("""
+from modules.advanced_doe import AdvancedDOE
+
+# 모듈 초기화
+doe = AdvancedDOE()
+
+# 혼합물 설계 생성
+design = doe.mixture_design(
+    components=['A', 'B', 'C'],
+    constraints={'sum': 100, 'min': 10}
+)
+                """, language='python')
                 
-                with tabs[3]:  # 의존성
-                    st.markdown("#### 필수 패키지")
-                    dependencies = module.get('dependencies', {})
-                    for dep, version in dependencies.items():
-                        st.write(f"• {dep} {version}")
+            with tabs[2]:
+                st.markdown("#### 예제 프로젝트")
+                st.info("고분자 블렌드 최적화 예제")
+                st.code("""
+# 3성분 고분자 블렌드 최적화
+components = ['PLA', 'PCL', 'PBS']
+properties = ['tensile_strength', 'elongation']
+
+# 실험 설계 생성
+design = doe.create_mixture_design(
+    components=components,
+    n_runs=15
+)
+                """, language='python')
                 
-                with tabs[4]:  # 버전 히스토리
-                    st.markdown("#### 버전 히스토리")
-                    history = module.get('version_history', [])
-                    for ver in history:
-                        st.write(f"**v{ver['version']}** - {ver['date']}")
-                        st.write(f"  {ver['changes']}")
-            else:
-                st.info("사용 가능한 모듈이 없습니다.")
-        else:
-            st.info("모듈 시스템을 초기화 중입니다.")
+            with tabs[3]:
+                st.markdown("#### 사용자 리뷰")
+                reviews = [
+                    {"user": "김연구원", "rating": 5, "comment": "정말 유용합니다! 시간을 많이 절약했어요."},
+                    {"user": "박박사", "rating": 4, "comment": "기능은 좋은데 문서가 조금 더 자세했으면..."}
+                ]
+                
+                for review in reviews:
+                    st.write(f"**{review['user']}** {'⭐' * review['rating']}")
+                    st.write(review['comment'])
+                    st.divider()
             
     def render_fallback_module_loader(self):
         """모듈 로더 페이지"""
@@ -2113,60 +2331,60 @@ class PolymerDOEApp:
             # 코드 에디터
             if template == "실험 설계 모듈":
                 default_code = """from modules.base_module import BaseModule
-    import numpy as np
-    import pandas as pd
+import numpy as np
+import pandas as pd
 
-    class CustomExperimentModule(BaseModule):
-        \"\"\"커스텀 실험 설계 모듈\"\"\"
+class CustomExperimentModule(BaseModule):
+    \"\"\"커스텀 실험 설계 모듈\"\"\"
     
-        def __init__(self):
-            super().__init__()
-            self.name = "Custom Experiment Design"
-            self.version = "1.0.0"
-            self.author = "Your Name"
-            self.description = "Custom experimental design module"
+    def __init__(self):
+        super().__init__()
+        self.name = "Custom Experiment Design"
+        self.version = "1.0.0"
+        self.author = "Your Name"
+        self.description = "Custom experimental design module"
         
-        def get_info(self):
-            return {
-                'name': self.name,
-                'version': self.version,
-                'author': self.author,
-                'description': self.description
-            }
+    def get_info(self):
+        return {
+            'name': self.name,
+            'version': self.version,
+            'author': self.author,
+            'description': self.description
+        }
     
-        def validate_inputs(self, factors, responses):
-            # 입력 검증 로직
-            if len(factors) < 2:
-                return False, "최소 2개 이상의 요인이 필요합니다"
-            return True, "Valid"
+    def validate_inputs(self, factors, responses):
+        # 입력 검증 로직
+        if len(factors) < 2:
+            return False, "최소 2개 이상의 요인이 필요합니다"
+        return True, "Valid"
     
-        def generate_design(self, factors, **kwargs):
-            # 실험 설계 생성 로직
-            n_factors = len(factors)
-            n_runs = 2**n_factors  # 예: 완전요인설계
+    def generate_design(self, factors, **kwargs):
+        # 실험 설계 생성 로직
+        n_factors = len(factors)
+        n_runs = 2**n_factors  # 예: 완전요인설계
         
-            design = []
-            for i in range(n_runs):
-                run = {'Run': i+1}
-                # 설계 생성 로직 구현
-                design.append(run)
+        design = []
+        for i in range(n_runs):
+            run = {'Run': i+1}
+            # 설계 생성 로직 구현
+            design.append(run)
             
-            return pd.DataFrame(design)
+        return pd.DataFrame(design)
     
-        def analyze_results(self, data):
-            # 결과 분석 로직
-            results = {
-                'summary': data.describe(),
-                'anova': None,  # ANOVA 분석
-                'model': None   # 회귀 모델
-            }
-            return results
+    def analyze_results(self, data):
+        # 결과 분석 로직
+        results = {
+            'summary': data.describe(),
+            'anova': None,  # ANOVA 분석
+            'model': None   # 회귀 모델
+        }
+        return results
     
-        def export_data(self, data, filename):
-            # 데이터 내보내기
-            data.to_csv(filename, index=False)
-            return True
-    """
+    def export_data(self, data, filename):
+        # 데이터 내보내기
+        data.to_csv(filename, index=False)
+        return True
+"""
             else:
                 default_code = "# 여기에 모듈 코드를 작성하세요\n"
         
@@ -2315,6 +2533,12 @@ class PolymerDOEApp:
                                 
             st.divider()
 
+    def validate_api_key(self, provider: str, key: str) -> bool:
+        """API 키 형식 검증"""
+        if provider in API_KEY_PATTERNS:
+            return bool(re.match(API_KEY_PATTERNS[provider], key))
+        return True  # 패턴이 없는 경우 통과
+
     def render_api_status_dashboard(self):
         """API 키 설정 상태 대시보드"""
         st.markdown("### 📊 API 설정 현황")
@@ -2323,7 +2547,7 @@ class PolymerDOEApp:
         categories = {
             'AI 엔진': ['google_gemini', 'xai_grok', 'groq', 'deepseek', 'sambanova', 'huggingface'],
             '데이터베이스': ['materials_project', 'zenodo', 'protocols_io', 'figshare', 'github'],
-            'Google 서비스': ['google_sheets_url', 'google_oauth_id', 'google_oauth_secret']
+            'Google 서비스': ['google_sheets_url', 'google_oauth_client_id', 'google_oauth_client_secret']
         }
     
         cols = st.columns(len(categories))
@@ -2376,9 +2600,14 @@ class PolymerDOEApp:
             for provider_key, provider_info in required_apis.items():
                 # 해당 API 키가 설정되어 있는지 확인
                 is_configured = st.session_state.api_keys.get(provider_key, '')
+                
+                # API 키 검증
+                is_valid = self.validate_api_key(provider_key, is_configured) if is_configured else False
             
-                if is_configured:
+                if is_configured and is_valid:
                     st.success(f"✅ {provider_info['name']} - 설정됨")
+                elif is_configured and not is_valid:
+                    st.warning(f"⚠️ {provider_info['name']} - 형식 오류")
                 else:
                     st.error(f"❌ {provider_info['name']} - 미설정 (필수)")
     
@@ -2392,7 +2621,7 @@ class PolymerDOEApp:
         google_apis = {k: v for k, v in API_PROVIDERS.items() 
                        if k in ['google_sheets', 'google_oauth']}
         
-        # 탭 생성 (수정됨: tabs 변수로 통일)
+        # 탭 생성
         tabs = st.tabs([
             "🤖 AI 엔진", 
             "📊 데이터베이스", 
@@ -2476,7 +2705,12 @@ class PolymerDOEApp:
                     )
                 
                     if new_key and new_key != '*' * 20:
-                        st.session_state.api_keys[service_key] = new_key
+                        # API 키 검증
+                        if self.validate_api_key(service_key, new_key):
+                            st.session_state.api_keys[service_key] = new_key
+                            st.success("✅ 유효한 API 키 형식입니다.")
+                        else:
+                            st.error("❌ 잘못된 API 키 형식입니다.")
         
             if st.button("AI API 키 저장", use_container_width=True, key="save_ai"):
                 self._save_api_keys('ai')
@@ -2543,13 +2777,16 @@ class PolymerDOEApp:
                     )
                 
                     if new_key and new_key != '*' * 20:
-                        st.session_state.api_keys[service_key] = new_key
+                        if self.validate_api_key(service_key, new_key):
+                            st.session_state.api_keys[service_key] = new_key
+                        else:
+                            st.warning("API 키 형식을 확인해주세요.")
         
             if st.button("데이터베이스 API 저장", use_container_width=True, key="save_db"):
                 self._save_api_keys('database')
                 st.success("데이터베이스 API 키가 저장되었습니다!")
     
-        with tabs[2]:  # OAuth 설정 섹션 (수정됨: tab[2] → tabs[2])
+        with tabs[2]:  # OAuth 설정 섹션
             st.markdown("### 🔐 소셜 로그인 설정")
             st.info("Google, GitHub OAuth를 설정하여 간편 로그인을 활성화하세요.")
         
@@ -2836,7 +3073,7 @@ class PolymerDOEApp:
             for key, value in st.session_state.api_keys.items():
                 if value and value != '*' * 20:  # 실제 값이 입력된 경우
                     # 키 이름 변환 (예: google_gemini -> GOOGLE_GEMINI_API_KEY)
-                    if key in ['google_sheets_url', 'google_oauth_id', 'google_oauth_secret']:
+                    if key in ['google_sheets_url', 'google_oauth_client_id', 'google_oauth_client_secret']:
                         secret_key = key.upper()
                     else:
                         secret_key = f"{key.upper()}_API_KEY"
@@ -2844,7 +3081,13 @@ class PolymerDOEApp:
                     self.secrets_manager.add_api_key(secret_key, value)
                     saved_count += 1
         
-            logger.info(f"{category} 카테고리에서 {saved_count}개의 API 키 저장됨")
+            logger.info(f"{category} 카테고리에서 {saved_count}개의 API 키 저장됨", extra={
+                'extra_fields': {
+                    'category': category,
+                    'count': saved_count,
+                    'user_id': st.session_state.get('user_id')
+                }
+            })
         else:
             logger.warning("SecretsManager를 사용할 수 없습니다.")
     
@@ -2880,6 +3123,15 @@ class PolymerDOEApp:
         
     def logout(self):
         """로그아웃 처리"""
+        # 로그 기록
+        logger.info("User logged out", extra={
+            'extra_fields': {
+                'user_id': st.session_state.get('user_id'),
+                'session_id': st.session_state.session_id,
+                'session_duration': str(datetime.now() - st.session_state.get('login_time', datetime.now()))
+            }
+        })
+        
         # 세션 초기화
         keys_to_keep = ['session_id', 'theme', 'language']
         for key in list(st.session_state.keys()):
@@ -2893,55 +3145,61 @@ class PolymerDOEApp:
         st.session_state.notifications = []
         st.session_state.guest_mode = False
         
-        # 로그 기록
-        logger.info(f"User logged out - Session: {st.session_state.session_id}")
-        
         st.rerun()
         
     def run_background_tasks(self):
         """백그라운드 작업 실행"""
         try:
-            # 1. 알림 확인
-            self.check_new_notifications()
-            
-            # 2. 자동 저장
-            if st.session_state.get('current_project'):
-                self.auto_save_project()
-                
-            # 3. 캐시 정리
-            self.cleanup_old_cache()
-            
-            # 4. 세션 갱신
-            self.refresh_session()
+            # 비동기 작업을 동기적으로 실행
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.run_background_tasks_async())
             
         except Exception as e:
             logger.error(f"Background task error: {e}")
             
-    def check_new_notifications(self):
-        """새 알림 확인"""
+    async def run_background_tasks_async(self):
+        """비동기 백그라운드 작업"""
+        tasks = [
+            self.check_new_notifications_async(),
+            self.auto_save_project_async(),
+            self.cleanup_old_cache_async(),
+            self.refresh_session_async()
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 에러 로깅
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Background task {i} failed: {result}")
+            
+    async def check_new_notifications_async(self):
+        """새 알림 확인 (비동기)"""
         # 실제 구현에서는 데이터베이스나 API에서 알림을 가져옴
-        pass
+        await asyncio.sleep(0.1)  # 시뮬레이션
         
-    def auto_save_project(self):
-        """프로젝트 자동 저장"""
-        # 실제 구현에서는 현재 프로젝트 상태를 저장
-        pass
+    async def auto_save_project_async(self):
+        """프로젝트 자동 저장 (비동기)"""
+        if st.session_state.get('current_project'):
+            # 실제 구현에서는 현재 프로젝트 상태를 저장
+            await asyncio.sleep(0.1)  # 시뮬레이션
         
-    def cleanup_old_cache(self):
-        """오래된 캐시 정리"""
+    async def cleanup_old_cache_async(self):
+        """오래된 캐시 정리 (비동기)"""
         cache_dir = PROJECT_ROOT / "cache"
         if cache_dir.exists():
+            current_time = time.time()
             for file in cache_dir.iterdir():
                 if file.is_file():
                     # 7일 이상 된 파일 삭제
-                    if (datetime.now() - datetime.fromtimestamp(file.stat().st_mtime)).days > 7:
+                    if current_time - file.stat().st_mtime > 7 * 24 * 60 * 60:
                         try:
                             file.unlink()
                         except:
                             pass
                             
-    def refresh_session(self):
-        """세션 갱신"""
+    async def refresh_session_async(self):
+        """세션 갱신 (비동기)"""
         if st.session_state.authenticated:
             st.session_state.last_activity = datetime.now()
             
@@ -2989,6 +3247,10 @@ class PolymerDOEApp:
         # 세션 캐시도 초기화
         st.session_state.cache = {}
         
+        # Streamlit 캐시 초기화
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        
     def backup_data(self):
         """데이터 백업"""
         try:
@@ -2997,7 +3259,7 @@ class PolymerDOEApp:
             backup_path = PROJECT_ROOT / "temp" / backup_name
             
             # ZIP 파일 생성
-            with zipfile.ZipFile(backup_path, 'w') as zipf:
+            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 # 데이터 디렉토리 백업
                 data_dir = PROJECT_ROOT / "data"
                 if data_dir.exists():
@@ -3061,35 +3323,57 @@ class PolymerDOEApp:
             logger.error(f"Export failed: {e}")
             
     def export_to_excel(self, timestamp: str):
-        """Excel 형식으로 내보내기"""
-        import pandas as pd
-        from io import BytesIO
-        
-        output = BytesIO()
-        
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 프로젝트 데이터
-            if st.session_state.projects:
-                df_projects = pd.DataFrame(st.session_state.projects)
-                df_projects.to_excel(writer, sheet_name='Projects', index=False)
+        """Excel 형식으로 내보내기 (파일 크기 제한 추가)"""
+        try:
+            output = BytesIO()
             
-            # 여기에 다른 데이터 추가...
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # 프로젝트 데이터
+                if st.session_state.projects:
+                    df_projects = pd.DataFrame(st.session_state.projects)
+                    df_projects.to_excel(writer, sheet_name='Projects', index=False)
+                
+                # 실험 설계 데이터
+                if st.session_state.current_project and 'design' in st.session_state.current_project:
+                    df_design = pd.DataFrame(st.session_state.current_project['design'])
+                    df_design.to_excel(writer, sheet_name='Experiment Design', index=False)
+                
+                # 분석 데이터
+                if 'analysis_data' in st.session_state and st.session_state.analysis_data.get('df') is not None:
+                    st.session_state.analysis_data['df'].to_excel(writer, sheet_name='Analysis Data', index=False)
+                
+                # 메타데이터
+                metadata = {
+                    'export_date': datetime.now().isoformat(),
+                    'app_version': APP_VERSION,
+                    'user': st.session_state.user.get('email', 'unknown') if st.session_state.user else 'guest'
+                }
+                pd.DataFrame([metadata]).to_excel(writer, sheet_name='Metadata', index=False)
             
-        output.seek(0)
-        
-        st.download_button(
-            label="Excel 파일 다운로드",
-            data=output,
-            file_name=f"polymer_doe_export_{timestamp}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            # 파일 크기 확인
+            output.seek(0, 2)  # 파일 끝으로 이동
+            size_mb = output.tell() / (1024 * 1024)
+            
+            if size_mb > MAX_EXCEL_EXPORT_SIZE_MB:
+                st.error(f"파일 크기가 너무 큽니다 ({size_mb:.1f}MB). 최대 {MAX_EXCEL_EXPORT_SIZE_MB}MB까지 가능합니다.")
+                st.info("데이터를 분할하거나 CSV 형식을 사용해주세요.")
+                return
+                
+            output.seek(0)
+            
+            st.download_button(
+                label="Excel 파일 다운로드",
+                data=output,
+                file_name=f"polymer_doe_export_{timestamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        except Exception as e:
+            st.error(f"Excel 내보내기 실패: {str(e)}")
+            logger.error(f"Excel export failed: {e}")
         
     def export_to_csv(self, timestamp: str):
         """CSV 형식으로 내보내기"""
-        import pandas as pd
-        from io import StringIO
-        import zipfile
-    
         # ZIP 파일로 여러 CSV 묶기
         zip_buffer = BytesIO()
     
@@ -3144,10 +3428,16 @@ class PolymerDOEApp:
             'export_date': datetime.now().isoformat(),
             'version': APP_VERSION,
             'projects': st.session_state.projects,
-            'user': st.session_state.user
+            'current_project': st.session_state.current_project,
+            'user': st.session_state.user,
+            'analysis_data': None
         }
         
-        json_str = json.dumps(data, indent=2, ensure_ascii=False)
+        # DataFrame을 dict로 변환
+        if 'analysis_data' in st.session_state and st.session_state.analysis_data.get('df') is not None:
+            data['analysis_data'] = st.session_state.analysis_data['df'].to_dict('records')
+        
+        json_str = json.dumps(data, indent=2, ensure_ascii=False, default=str)
         
         st.download_button(
             label="JSON 파일 다운로드",
@@ -3159,10 +3449,6 @@ class PolymerDOEApp:
     def export_to_pdf(self, timestamp: str):
         """PDF 보고서로 내보내기"""
         try:
-            # 간단한 HTML 기반 PDF 생성
-            from io import BytesIO
-            import base64
-        
             # HTML 보고서 생성
             html_content = f"""
             <html>
@@ -3256,37 +3542,64 @@ class PolymerDOEApp:
         
     def get_runtime_info(self) -> Dict[str, Any]:
         """런타임 정보 가져오기"""
-        try:
-            process = psutil.Process()
-            
-            return {
-                'memory': {
-                    'rss_mb': process.memory_info().rss / 1024 / 1024,
-                    'vms_mb': process.memory_info().vms / 1024 / 1024,
-                    'percent': process.memory_percent(),
-                    'available_mb': psutil.virtual_memory().available / 1024 / 1024
-                },
-                'cpu': {
-                    'percent': process.cpu_percent(interval=0.1),
-                    'threads': process.num_threads(),
-                    'cores': psutil.cpu_count()
-                },
-                'disk': {
-                    'usage_percent': psutil.disk_usage('/').percent,
-                    'free_gb': psutil.disk_usage('/').free / (1024**3)
-                },
-                'python': {
-                    'version': sys.version,
-                    'platform': sys.platform
-                }
+        info = {
+            'python': {
+                'version': sys.version,
+                'platform': sys.platform
+            },
+            'streamlit': {
+                'version': st.__version__
+            },
+            'session': {
+                'id': st.session_state.get('session_id', 'unknown'),
+                'authenticated': st.session_state.get('authenticated', False),
+                'uptime': str(datetime.now() - st.session_state.get('login_time', datetime.now()))
             }
-        except Exception as e:
-            logger.error(f"Failed to get runtime info: {e}")
-            return {}
+        }
+        
+        # psutil이 설치된 경우만 시스템 정보 추가
+        if PSUTIL_AVAILABLE:
+            try:
+                process = psutil.Process()
+                
+                info.update({
+                    'memory': {
+                        'rss_mb': process.memory_info().rss / 1024 / 1024,
+                        'vms_mb': process.memory_info().vms / 1024 / 1024,
+                        'percent': process.memory_percent(),
+                        'available_mb': psutil.virtual_memory().available / 1024 / 1024
+                    },
+                    'cpu': {
+                        'percent': process.cpu_percent(interval=0.1),
+                        'threads': process.num_threads(),
+                        'cores': psutil.cpu_count()
+                    },
+                    'disk': {
+                        'usage_percent': psutil.disk_usage('/').percent,
+                        'free_gb': psutil.disk_usage('/').free / (1024**3)
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Failed to get system info: {e}")
+                
+        return info
             
     def render_error_page(self, error: Exception):
         """에러 페이지 렌더링"""
         st.error("애플리케이션 오류가 발생했습니다")
+        
+        error_id = str(uuid.uuid4())[:8]
+        st.caption(f"오류 ID: {error_id}")
+        
+        # 오류 로깅
+        logger.error(f"Application error {error_id}: {error}", extra={
+            'extra_fields': {
+                'error_id': error_id,
+                'user_id': st.session_state.get('user_id'),
+                'page': st.session_state.get('current_page'),
+                'traceback': traceback.format_exc()
+            }
+        })
         
         with st.expander("오류 상세 정보"):
             st.code(traceback.format_exc())
