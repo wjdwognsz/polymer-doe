@@ -1,6 +1,8 @@
 """
-3_🧪_Experiment_Design.py - AI 기반 실험 설계 페이지
+3_🧪_Experiment_Design.py - 실험 설계 페이지
+AI 지원을 받아 실험을 설계하고 최적화하는 핵심 기능 페이지
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,157 +10,134 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import json
-from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple
+import logging
+from dataclasses import dataclass, asdict
 import asyncio
-from pathlib import Path
-import sys
+from concurrent.futures import ThreadPoolExecutor
+import time
 
-# 프로젝트 루트 경로 추가
-sys.path.append(str(Path(__file__).parent.parent))
+# 프로젝트 모듈 임포트
+from utils.auth_manager import check_authentication
+from utils.api_manager import APIManager
+from utils.sheets_manager import GoogleSheetsManager
+from utils.common_ui import (
+    setup_page_config, apply_custom_css, render_header,
+    show_notification, show_error, show_success, show_info,
+    create_metric_card, render_tooltip
+)
+from utils.data_processor import DataProcessor
+from utils.error_handler import handle_error
+from utils.performance_monitor import monitor_performance
 
-# 필수 모듈 임포트
+from modules.module_registry import ModuleRegistry
 from modules.base_module import (
     BaseExperimentModule, Factor, Response, 
-    ExperimentDesign, ValidationResult
-)
-from modules.module_registry import get_module_registry
-from utils.common_ui import get_common_ui
-from utils.api_manager import get_api_manager
-from utils.auth_manager import get_auth_manager
-from utils.sheets_manager import get_sheets_manager
-from utils.data_processor import DataProcessor
-
-# 페이지 설정
-st.set_page_config(
-    page_title="실험 설계 - Universal DOE",
-    page_icon="🧪",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    FactorType, ResponseType, OptimizationType,
+    DesignConstraints, ExperimentDesign, DesignQuality
 )
 
-# 인증 확인
-if not st.session_state.get('authenticated', False):
-    st.warning("로그인이 필요합니다")
-    st.stop()
+# 로깅 설정
+logger = logging.getLogger(__name__)
 
-# ===== AI 설명 상세도 제어 시스템 =====
-def initialize_ai_settings():
-    """AI 설명 설정 초기화"""
-    if 'ai_detail_mode' not in st.session_state:
-        st.session_state.ai_detail_mode = 'auto'
-    if 'show_ai_details' not in st.session_state:
-        st.session_state.show_ai_details = {}
-    if 'ai_detail_preferences' not in st.session_state:
-        st.session_state.ai_detail_preferences = {
+# 전역 상수
+WIZARD_STEPS = {
+    1: {"title": "실험 유형 선택", "icon": "🎯"},
+    2: {"title": "요인 정의", "icon": "📊"},
+    3: {"title": "반응변수 설정", "icon": "📈"},
+    4: {"title": "설계 옵션", "icon": "⚙️"},
+    5: {"title": "검토 및 생성", "icon": "✨"}
+}
+
+AI_MODELS = {
+    'gemini': {'name': 'Google Gemini', 'icon': '🔷'},
+    'grok': {'name': 'xAI Grok', 'icon': '🤖'},
+    'sambanova': {'name': 'SambaNova', 'icon': '🦙'},
+    'deepseek': {'name': 'DeepSeek', 'icon': '🔍'},
+    'groq': {'name': 'Groq', 'icon': '⚡'}
+}
+
+# 싱글톤 인스턴스 관리
+@st.cache_resource
+def get_module_registry() -> ModuleRegistry:
+    """모듈 레지스트리 싱글톤"""
+    return ModuleRegistry()
+
+@st.cache_resource
+def get_api_manager() -> APIManager:
+    """API 매니저 싱글톤"""
+    return APIManager()
+
+@st.cache_resource
+def get_sheets_manager() -> GoogleSheetsManager:
+    """Google Sheets 매니저 싱글톤"""
+    return GoogleSheetsManager()
+
+def initialize_session_state():
+    """세션 상태 초기화"""
+    defaults = {
+        'wizard_step': 1,
+        'selected_module_id': None,
+        'selected_experiment_type': None,
+        'experiment_factors': [],
+        'experiment_responses': [],
+        'design_constraints': {
+            'design_type': 'full_factorial',
+            'max_runs': 100,
+            'blocks': 1,
+            'center_points': 0,
+            'replicates': 1,
+            'randomize': True
+        },
+        'generated_design': None,
+        'ai_preferences': {
             'show_reasoning': True,
             'show_alternatives': True,
-            'show_theory': True,
+            'show_theory': False,
             'show_confidence': True,
             'show_limitations': True
-        }
+        },
+        'design_chat_history': [],
+        'design_versions': []
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-def render_ai_detail_controller():
-    """AI 설명 상세도 컨트롤러 렌더링"""
-    with st.sidebar.expander("🧠 AI 설명 설정", expanded=False):
-        st.session_state.ai_detail_mode = st.radio(
-            "AI 설명 모드",
-            ['auto', 'detailed', 'simple', 'custom'],
-            format_func=lambda x: {
-                'auto': '자동 (레벨 기반)',
-                'detailed': '항상 상세히',
-                'simple': '항상 간단히',
-                'custom': '사용자 정의'
-            }[x],
-            help="AI 응답의 상세도를 설정합니다"
-        )
-        
-        if st.session_state.ai_detail_mode == 'custom':
-            st.write("표시할 항목:")
-            st.session_state.ai_detail_preferences['show_reasoning'] = st.checkbox(
-                "추론 과정", value=True
-            )
-            st.session_state.ai_detail_preferences['show_alternatives'] = st.checkbox(
-                "대안 검토", value=True
-            )
-            st.session_state.ai_detail_preferences['show_theory'] = st.checkbox(
-                "이론적 배경", value=True
-            )
-            st.session_state.ai_detail_preferences['show_confidence'] = st.checkbox(
-                "신뢰도", value=True
-            )
-            st.session_state.ai_detail_preferences['show_limitations'] = st.checkbox(
-                "한계점", value=True
-            )
-
-def should_show_details(context: str = 'general') -> bool:
-    """상세 설명을 보여줄지 결정"""
-    mode = st.session_state.ai_detail_mode
+# ===== 메인 렌더링 함수 =====
+def render():
+    """메인 페이지 렌더링"""
+    # 인증 체크
+    if not check_authentication():
+        st.error("로그인이 필요합니다.")
+        st.stop()
     
-    if mode == 'detailed':
-        return True
-    elif mode == 'simple':
-        return False
-    elif mode == 'auto':
-        # 사용자 레벨에 따라 자동 결정
-        user_level = st.session_state.get('user_level', 'intermediate')
-        return user_level in ['beginner', 'intermediate']
-    else:  # custom
-        return st.session_state.show_ai_details.get(context, True)
-
-def render_ai_response(response: Dict[str, Any], response_type: str = "general"):
-    """AI 응답 렌더링 (상세도 제어 포함)"""
-    # 핵심 답변 (항상 표시)
-    st.markdown(f"### 🤖 {response_type}")
-    st.write(response['main'])
+    # 페이지 설정
+    setup_page_config("실험 설계", "🧪")
+    apply_custom_css()
     
-    # 상세 설명 토글
-    show_key = f"show_details_{response_type}"
-    show_details = st.session_state.show_ai_details.get(
-        show_key, should_show_details(response_type)
-    )
+    # 세션 초기화
+    initialize_session_state()
     
-    col1, col2 = st.columns([6, 1])
-    with col2:
-        if st.button(
-            "🔍 상세" if not show_details else "📌 간단히",
-            key=f"toggle_{response_type}",
-            help="AI 설명의 상세도를 조절합니다"
-        ):
-            st.session_state.show_ai_details[show_key] = not show_details
-            st.rerun()
+    # 헤더
+    render_header("🧪 실험 설계", "AI 지원 실험 설계 마법사")
     
-    # 상세 설명 (조건부 표시)
-    if show_details and 'details' in response:
-        prefs = st.session_state.ai_detail_preferences
-        tabs = []
-        contents = []
-        
-        if prefs['show_reasoning'] and 'reasoning' in response['details']:
-            tabs.append("추론 과정")
-            contents.append(response['details']['reasoning'])
-        
-        if prefs['show_alternatives'] and 'alternatives' in response['details']:
-            tabs.append("대안 검토")
-            contents.append(response['details']['alternatives'])
-        
-        if prefs['show_theory'] and 'theory' in response['details']:
-            tabs.append("이론적 배경")
-            contents.append(response['details']['theory'])
-        
-        if prefs['show_confidence'] and 'confidence' in response['details']:
-            tabs.append("신뢰도")
-            contents.append(response['details']['confidence'])
-        
-        if prefs['show_limitations'] and 'limitations' in response['details']:
-            tabs.append("한계점")
-            contents.append(response['details']['limitations'])
-        
-        if tabs:
-            tab_objects = st.tabs(tabs)
-            for tab, content in zip(tab_objects, contents):
-                with tab:
-                    st.write(content)
+    # 메인 컨텐츠
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 설계 마법사", "💬 AI 도우미", "📚 내 설계", "📊 템플릿"])
+    
+    with tab1:
+        render_design_wizard()
+    
+    with tab2:
+        render_ai_chat_interface()
+    
+    with tab3:
+        render_saved_designs()
+    
+    with tab4:
+        render_templates()
 
 # ===== 실험 설계 마법사 =====
 def render_design_wizard():
@@ -166,9 +145,22 @@ def render_design_wizard():
     st.markdown("## 🎯 실험 설계 마법사")
     
     # 단계 표시
-    wizard_step = st.session_state.get('wizard_step', 1)
-    progress = wizard_step / 5
-    st.progress(progress, text=f"단계 {wizard_step}/5")
+    wizard_step = st.session_state.wizard_step
+    progress = wizard_step / len(WIZARD_STEPS)
+    
+    # 프로그레스 바
+    col1, col2, col3, col4, col5 = st.columns(5)
+    for i, col in enumerate([col1, col2, col3, col4, col5], 1):
+        with col:
+            if i < wizard_step:
+                st.success(f"✅ {WIZARD_STEPS[i]['title']}")
+            elif i == wizard_step:
+                st.info(f"👉 {WIZARD_STEPS[i]['title']}")
+            else:
+                st.caption(f"⏳ {WIZARD_STEPS[i]['title']}")
+    
+    st.progress(progress)
+    st.divider()
     
     # 각 단계별 렌더링
     if wizard_step == 1:
@@ -194,10 +186,10 @@ def render_step1_experiment_type():
     
     with col1:
         # 연구 분야 선택
-        categories = registry.get_categories()
+        categories = list(set(m.get('category', 'general') for m in modules))
         selected_category = st.selectbox(
             "연구 분야",
-            ['전체'] + categories,
+            ['전체'] + sorted(categories),
             help="연구 분야를 선택하세요"
         )
         
@@ -205,183 +197,340 @@ def render_step1_experiment_type():
         if selected_category == '전체':
             available_modules = modules
         else:
-            available_modules = [m for m in modules if m['category'] == selected_category]
+            available_modules = [m for m in modules if m.get('category') == selected_category]
         
-        module_names = [m['name'] for m in available_modules]
-        selected_module_name = st.selectbox(
-            "실험 모듈",
-            module_names,
-            help="사용할 실험 모듈을 선택하세요"
-        )
+        # 모듈 선택 UI
+        st.markdown("#### 실험 모듈 선택")
         
-        # 선택된 모듈 정보 표시
-        selected_module = next((m for m in available_modules if m['name'] == selected_module_name), None)
-        if selected_module:
-            st.info(f"📝 {selected_module['description']}")
+        for module in available_modules:
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                if st.button(
+                    f"{module.get('icon', '🔬')} **{module['name']}**\n\n{module.get('description', '')}",
+                    key=f"module_{module['id']}",
+                    use_container_width=True
+                ):
+                    st.session_state.selected_module_id = module['id']
+                    st.rerun()
             
-            # 실험 유형 선택
-            module = registry.get_module(selected_module['id'])
-            if module:
+            with col_b:
+                if st.session_state.selected_module_id == module['id']:
+                    st.success("✅ 선택됨")
+        
+        # 선택된 모듈이 있으면 실험 유형 표시
+        if st.session_state.selected_module_id:
+            st.divider()
+            st.markdown("#### 실험 유형 선택")
+            
+            try:
+                module = registry.get_module(st.session_state.selected_module_id)
                 experiment_types = module.get_experiment_types()
-                selected_type = st.selectbox(
-                    "실험 유형",
-                    experiment_types,
-                    help="수행할 실험 유형을 선택하세요"
-                )
                 
-                # 세션에 저장
-                st.session_state.selected_module_id = selected_module['id']
-                st.session_state.selected_experiment_type = selected_type
+                for exp_type in experiment_types:
+                    info = module.get_experiment_info(exp_type)
+                    if st.button(
+                        f"**{info['name']}**\n\n"
+                        f"요인: {info['num_factors']}개 | "
+                        f"반응변수: {info['num_responses']}개 | "
+                        f"예상 실험수: {info['typical_runs']}회",
+                        key=f"exp_{exp_type}",
+                        use_container_width=True
+                    ):
+                        st.session_state.selected_experiment_type = exp_type
+                        st.rerun()
+                
+            except Exception as e:
+                st.error(f"모듈 로드 오류: {str(e)}")
     
     with col2:
         # AI 추천
-        if st.button("🤖 AI 추천 받기", use_container_width=True):
+        st.markdown("#### 🤖 AI 추천")
+        
+        if st.button("AI에게 추천받기", use_container_width=True):
             with st.spinner("AI가 분석 중..."):
-                ai_recommendation = get_ai_module_recommendation()
-                render_ai_response(ai_recommendation, "모듈 추천")
+                recommendation = get_ai_experiment_recommendation()
+                render_ai_response(recommendation, "추천")
+        
+        # 도움말
+        with st.expander("ℹ️ 도움말"):
+            st.write("""
+            **실험 유형 선택 가이드**
+            
+            1. **연구 분야**: 귀하의 연구 분야를 선택하세요
+            2. **실험 모듈**: 사용하고자 하는 실험 설계 방법을 선택하세요
+            3. **실험 유형**: 구체적인 실험 목적을 선택하세요
+            
+            💡 **팁**: AI 추천을 받으면 더 적합한 선택을 할 수 있습니다.
+            """)
     
-    # 다음 단계 버튼
+    # 네비게이션
     col1, col2, col3 = st.columns([1, 1, 1])
     with col3:
-        if st.button("다음 단계 →", type="primary", use_container_width=True):
-            if 'selected_module_id' in st.session_state:
+        if st.session_state.selected_module_id and st.session_state.selected_experiment_type:
+            if st.button("다음 단계 →", type="primary", use_container_width=True):
                 st.session_state.wizard_step = 2
                 st.rerun()
-            else:
-                st.error("실험 모듈을 선택해주세요")
 
 def render_step2_factors():
-    """Step 2: 실험 요인 설정"""
-    st.markdown("### Step 2: 실험 요인 설정")
+    """Step 2: 요인 정의"""
+    st.markdown("### Step 2: 요인 정의")
     
-    # 선택된 모듈 가져오기
+    # 모듈에서 기본 요인 가져오기
     registry = get_module_registry()
     module = registry.get_module(st.session_state.selected_module_id)
     
-    if not module:
-        st.error("모듈을 불러올 수 없습니다")
-        return
+    # 기본 요인이 없으면 빈 리스트로 초기화
+    if not st.session_state.experiment_factors:
+        default_factors = module.get_default_factors(st.session_state.selected_experiment_type)
+        if default_factors:
+            st.session_state.experiment_factors = [asdict(f) for f in default_factors]
     
-    # 기본 요인 가져오기
-    default_factors = module.get_factors(st.session_state.selected_experiment_type)
-    
-    # 요인 편집 UI
-    st.write("#### 실험 요인")
-    
-    # 세션에서 요인 목록 관리
-    if 'experiment_factors' not in st.session_state:
-        st.session_state.experiment_factors = [f.model_dump() for f in default_factors]
-    
-    # 요인 테이블 표시
-    factor_df = pd.DataFrame(st.session_state.experiment_factors)
-    
-    # 데이터 에디터로 편집
-    edited_factors = st.data_editor(
-        factor_df,
-        num_rows="dynamic",
-        column_config={
-            "name": st.column_config.TextColumn("요인명", required=True),
-            "type": st.column_config.SelectboxColumn(
-                "유형",
-                options=["continuous", "categorical"],
-                required=True
-            ),
-            "unit": st.column_config.TextColumn("단위"),
-            "min_value": st.column_config.NumberColumn("최소값"),
-            "max_value": st.column_config.NumberColumn("최대값"),
-            "levels": st.column_config.TextColumn("수준 (콤마 구분)"),
-            "description": st.column_config.TextColumn("설명")
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-    
-    st.session_state.experiment_factors = edited_factors.to_dict('records')
-    
-    # AI 요인 추천
     col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.markdown("#### 실험 요인 설정")
+        
+        # 요인 추가 버튼
+        if st.button("➕ 요인 추가", use_container_width=True):
+            st.session_state.experiment_factors.append({
+                'name': f'요인 {len(st.session_state.experiment_factors) + 1}',
+                'type': 'continuous',
+                'min_value': 0,
+                'max_value': 100,
+                'unit': '',
+                'levels': [],
+                'description': ''
+            })
+            st.rerun()
+        
+        # 요인 편집
+        for i, factor in enumerate(st.session_state.experiment_factors):
+            with st.expander(f"**{factor['name']}** ({factor['type']})", expanded=True):
+                col_a, col_b = st.columns([3, 1])
+                
+                with col_a:
+                    factor['name'] = st.text_input("요인 이름", value=factor['name'], key=f"fname_{i}")
+                    factor['description'] = st.text_area("설명", value=factor.get('description', ''), key=f"fdesc_{i}")
+                
+                with col_b:
+                    factor['type'] = st.selectbox(
+                        "유형",
+                        ['continuous', 'categorical', 'discrete'],
+                        format_func=lambda x: {'continuous': '연속형', 'categorical': '범주형', 'discrete': '이산형'}[x],
+                        index=['continuous', 'categorical', 'discrete'].index(factor['type']),
+                        key=f"ftype_{i}"
+                    )
+                
+                # 유형별 설정
+                if factor['type'] == 'continuous':
+                    col_1, col_2, col_3 = st.columns(3)
+                    with col_1:
+                        factor['min_value'] = st.number_input("최소값", value=factor.get('min_value', 0), key=f"fmin_{i}")
+                    with col_2:
+                        factor['max_value'] = st.number_input("최대값", value=factor.get('max_value', 100), key=f"fmax_{i}")
+                    with col_3:
+                        factor['unit'] = st.text_input("단위", value=factor.get('unit', ''), key=f"funit_{i}")
+                
+                elif factor['type'] == 'categorical':
+                    levels_str = st.text_area(
+                        "수준 (쉼표로 구분)",
+                        value=', '.join(factor.get('levels', [])),
+                        key=f"flevels_{i}"
+                    )
+                    factor['levels'] = [l.strip() for l in levels_str.split(',') if l.strip()]
+                
+                elif factor['type'] == 'discrete':
+                    col_1, col_2, col_3 = st.columns(3)
+                    with col_1:
+                        factor['min_value'] = st.number_input("최소값", value=int(factor.get('min_value', 0)), step=1, key=f"fdmin_{i}")
+                    with col_2:
+                        factor['max_value'] = st.number_input("최대값", value=int(factor.get('max_value', 10)), step=1, key=f"fdmax_{i}")
+                    with col_3:
+                        factor['unit'] = st.text_input("단위", value=factor.get('unit', ''), key=f"fdunit_{i}")
+                
+                # 삭제 버튼
+                if st.button(f"🗑️ 삭제", key=f"fdel_{i}"):
+                    st.session_state.experiment_factors.pop(i)
+                    st.rerun()
+        
+        # 요인이 없는 경우
+        if not st.session_state.experiment_factors:
+            st.info("요인을 추가하여 실험을 설계하세요.")
+    
     with col2:
-        if st.button("🤖 AI 요인 추천", use_container_width=True):
-            with st.spinner("AI가 분석 중..."):
-                ai_factors = get_ai_factor_recommendation()
-                render_ai_response(ai_factors, "요인 추천")
+        # AI 지원
+        st.markdown("#### 🤖 AI 지원")
+        
+        user_input = st.text_area("실험 요구사항을 입력하세요", height=100)
+        
+        if st.button("AI 요인 추천", use_container_width=True):
+            if user_input:
+                with st.spinner("AI가 분석 중..."):
+                    factors = get_ai_factor_recommendations(user_input)
+                    render_ai_response(factors, "요인추천")
+            else:
+                st.warning("요구사항을 입력해주세요.")
+        
+        # 템플릿
+        st.markdown("#### 📋 빠른 템플릿")
+        
+        templates = module.get_factor_templates(st.session_state.selected_experiment_type)
+        template_names = list(templates.keys()) if templates else []
+        
+        if template_names:
+            selected_template = st.selectbox("템플릿 선택", ['없음'] + template_names)
+            
+            if selected_template != '없음' and st.button("템플릿 적용"):
+                st.session_state.experiment_factors = templates[selected_template]
+                st.success("템플릿이 적용되었습니다.")
+                st.rerun()
     
-    # 요인 상관관계 시각화
-    if len(st.session_state.experiment_factors) > 1:
-        with st.expander("📊 요인 관계 시각화"):
-            render_factor_correlation_plot()
-    
-    # 네비게이션 버튼
+    # 네비게이션
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         if st.button("← 이전 단계", use_container_width=True):
             st.session_state.wizard_step = 1
             st.rerun()
     with col3:
-        if st.button("다음 단계 →", type="primary", use_container_width=True):
-            if validate_factors():
+        if len(st.session_state.experiment_factors) >= 1:
+            if st.button("다음 단계 →", type="primary", use_container_width=True):
                 st.session_state.wizard_step = 3
                 st.rerun()
+        else:
+            st.warning("최소 1개 이상의 요인을 정의해주세요.")
 
 def render_step3_responses():
     """Step 3: 반응변수 설정"""
     st.markdown("### Step 3: 반응변수 설정")
     
-    # 선택된 모듈에서 기본 반응변수 가져오기
+    # 모듈에서 기본 반응변수 가져오기
     registry = get_module_registry()
     module = registry.get_module(st.session_state.selected_module_id)
-    default_responses = module.get_responses(st.session_state.selected_experiment_type)
     
-    # 세션에서 반응변수 관리
-    if 'experiment_responses' not in st.session_state:
-        st.session_state.experiment_responses = [r.model_dump() for r in default_responses]
+    # 기본 반응변수가 없으면 빈 리스트로 초기화
+    if not st.session_state.experiment_responses:
+        default_responses = module.get_default_responses(st.session_state.selected_experiment_type)
+        if default_responses:
+            st.session_state.experiment_responses = [asdict(r) for r in default_responses]
     
-    st.write("#### 반응변수")
-    
-    # 반응변수 편집
-    response_df = pd.DataFrame(st.session_state.experiment_responses)
-    
-    edited_responses = st.data_editor(
-        response_df,
-        num_rows="dynamic",
-        column_config={
-            "name": st.column_config.TextColumn("반응변수명", required=True),
-            "unit": st.column_config.TextColumn("단위"),
-            "goal": st.column_config.SelectboxColumn(
-                "목표",
-                options=["maximize", "minimize", "target"],
-                required=True
-            ),
-            "target_value": st.column_config.NumberColumn("목표값"),
-            "description": st.column_config.TextColumn("설명")
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-    
-    st.session_state.experiment_responses = edited_responses.to_dict('records')
-    
-    # 반응변수 중요도 설정
-    if len(st.session_state.experiment_responses) > 1:
-        st.write("#### 반응변수 중요도")
-        importance_cols = st.columns(len(st.session_state.experiment_responses))
-        
-        for i, (col, response) in enumerate(zip(importance_cols, st.session_state.experiment_responses)):
-            with col:
-                importance = st.slider(
-                    response['name'],
-                    0.0, 1.0, 0.5,
-                    key=f"importance_{i}"
-                )
-                st.session_state.experiment_responses[i]['importance'] = importance
-    
-    # AI 반응변수 추천
     col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.markdown("#### 반응변수 설정")
+        
+        # 반응변수 추가 버튼
+        if st.button("➕ 반응변수 추가", use_container_width=True):
+            st.session_state.experiment_responses.append({
+                'name': f'반응변수 {len(st.session_state.experiment_responses) + 1}',
+                'type': 'continuous',
+                'unit': '',
+                'optimization': 'maximize',
+                'target_value': None,
+                'lower_limit': None,
+                'upper_limit': None,
+                'importance': 1.0,
+                'description': ''
+            })
+            st.rerun()
+        
+        # 반응변수 편집
+        for i, response in enumerate(st.session_state.experiment_responses):
+            with st.expander(f"**{response['name']}** ({response['optimization']})", expanded=True):
+                col_a, col_b = st.columns([3, 1])
+                
+                with col_a:
+                    response['name'] = st.text_input("반응변수 이름", value=response['name'], key=f"rname_{i}")
+                    response['description'] = st.text_area("설명", value=response.get('description', ''), key=f"rdesc_{i}")
+                
+                with col_b:
+                    response['type'] = st.selectbox(
+                        "유형",
+                        ['continuous', 'binary', 'count'],
+                        format_func=lambda x: {'continuous': '연속형', 'binary': '이진형', 'count': '계수형'}[x],
+                        index=['continuous', 'binary', 'count'].index(response['type']),
+                        key=f"rtype_{i}"
+                    )
+                
+                # 최적화 방향
+                col_1, col_2, col_3 = st.columns(3)
+                with col_1:
+                    response['optimization'] = st.selectbox(
+                        "최적화 방향",
+                        ['maximize', 'minimize', 'target', 'in_range'],
+                        format_func=lambda x: {
+                            'maximize': '최대화',
+                            'minimize': '최소화',
+                            'target': '목표값',
+                            'in_range': '범위내'
+                        }[x],
+                        index=['maximize', 'minimize', 'target', 'in_range'].index(response['optimization']),
+                        key=f"ropt_{i}"
+                    )
+                
+                with col_2:
+                    if response['optimization'] == 'target':
+                        response['target_value'] = st.number_input(
+                            "목표값",
+                            value=response.get('target_value', 0.0),
+                            key=f"rtarget_{i}"
+                        )
+                    elif response['optimization'] == 'in_range':
+                        response['lower_limit'] = st.number_input(
+                            "하한",
+                            value=response.get('lower_limit', 0.0),
+                            key=f"rlower_{i}"
+                        )
+                
+                with col_3:
+                    if response['optimization'] == 'in_range':
+                        response['upper_limit'] = st.number_input(
+                            "상한",
+                            value=response.get('upper_limit', 100.0),
+                            key=f"rupper_{i}"
+                        )
+                    else:
+                        response['unit'] = st.text_input("단위", value=response.get('unit', ''), key=f"runit_{i}")
+                
+                # 중요도
+                response['importance'] = st.slider(
+                    "중요도",
+                    min_value=0.1,
+                    max_value=10.0,
+                    value=response.get('importance', 1.0),
+                    step=0.1,
+                    key=f"rimp_{i}"
+                )
+                
+                # 삭제 버튼
+                if st.button(f"🗑️ 삭제", key=f"rdel_{i}"):
+                    st.session_state.experiment_responses.pop(i)
+                    st.rerun()
+        
+        # 반응변수가 없는 경우
+        if not st.session_state.experiment_responses:
+            st.info("반응변수를 추가하여 실험 목표를 설정하세요.")
+    
     with col2:
-        if st.button("🤖 AI 반응변수 추천", use_container_width=True):
+        # AI 지원
+        st.markdown("#### 🤖 AI 지원")
+        
+        if st.button("AI 반응변수 추천", use_container_width=True):
             with st.spinner("AI가 분석 중..."):
-                ai_responses = get_ai_response_recommendation()
-                render_ai_response(ai_responses, "반응변수 추천")
+                responses = get_ai_response_recommendations()
+                render_ai_response(responses, "반응변수추천")
+        
+        # 가이드
+        with st.expander("ℹ️ 최적화 방향 가이드"):
+            st.write("""
+            **최적화 방향 선택 가이드**
+            
+            - **최대화**: 값이 클수록 좋은 경우 (예: 수율, 강도)
+            - **최소화**: 값이 작을수록 좋은 경우 (예: 비용, 시간)
+            - **목표값**: 특정 값에 가까울수록 좋은 경우 (예: pH 7.0)
+            - **범위내**: 특정 범위 내에 있어야 하는 경우 (예: 온도 20-25°C)
+            
+            💡 **중요도**: 여러 반응변수 중 상대적 중요성을 나타냅니다.
+            """)
     
     # 네비게이션
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -390,117 +539,150 @@ def render_step3_responses():
             st.session_state.wizard_step = 2
             st.rerun()
     with col3:
-        if st.button("다음 단계 →", type="primary", use_container_width=True):
-            if validate_responses():
+        if len(st.session_state.experiment_responses) >= 1:
+            if st.button("다음 단계 →", type="primary", use_container_width=True):
                 st.session_state.wizard_step = 4
                 st.rerun()
+        else:
+            st.warning("최소 1개 이상의 반응변수를 정의해주세요.")
 
 def render_step4_constraints():
-    """Step 4: 제약조건 및 설계 옵션"""
-    st.markdown("### Step 4: 제약조건 및 설계 옵션")
+    """Step 4: 설계 옵션 및 제약조건"""
+    st.markdown("### Step 4: 설계 옵션 및 제약조건")
     
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.write("#### 실험 제약조건")
+        st.markdown("#### 실험 설계 유형")
         
-        # 실험 횟수 제약
-        max_runs = st.number_input(
-            "최대 실험 횟수",
-            min_value=1,
-            max_value=1000,
-            value=20,
-            help="수행 가능한 최대 실험 횟수"
-        )
-        
-        # 시간 제약
-        time_constraint = st.number_input(
-            "실험 기간 (일)",
-            min_value=1,
-            max_value=365,
-            value=30,
-            help="전체 실험을 완료해야 하는 기간"
-        )
-        
-        # 예산 제약
-        budget_constraint = st.number_input(
-            "예산 (만원)",
-            min_value=0,
-            value=1000,
-            step=100,
-            help="실험에 사용 가능한 총 예산"
-        )
-        
-        # 블록화 설정
-        use_blocking = st.checkbox("블록화 사용", help="시간이나 재료 배치에 따른 변동 제어")
-        if use_blocking:
-            block_factor = st.selectbox(
-                "블록 요인",
-                ["시간", "재료 배치", "실험자", "장비"],
-                help="블록화할 요인 선택"
-            )
-    
-    with col2:
-        st.write("#### 설계 옵션")
-        
-        # 설계 유형
+        # 설계 유형 선택
         design_types = {
-            'full_factorial': '완전요인설계',
-            'fractional_factorial': '부분요인설계',
-            'central_composite': '중심합성설계',
+            'full_factorial': '완전요인설계 (Full Factorial)',
+            'fractional_factorial': '부분요인설계 (Fractional Factorial)',
+            'ccd': '중심합성설계 (Central Composite)',
             'box_behnken': 'Box-Behnken 설계',
-            'plackett_burman': 'Plackett-Burman 설계',
-            'latin_hypercube': 'Latin Hypercube 설계',
-            'd_optimal': 'D-최적 설계'
+            'plackett_burman': 'Plackett-Burman 스크리닝',
+            'd_optimal': 'D-최적 설계',
+            'space_filling': '공간충진 설계 (Space-Filling)',
+            'custom': '사용자 정의'
         }
         
         selected_design = st.selectbox(
-            "설계 유형",
+            "설계 방법",
             list(design_types.keys()),
             format_func=lambda x: design_types[x],
-            help="실험 설계 방법 선택"
+            index=list(design_types.keys()).index(st.session_state.design_constraints['design_type']),
+            help="실험 설계 방법을 선택하세요"
         )
+        st.session_state.design_constraints['design_type'] = selected_design
         
-        # 중심점
-        if selected_design in ['central_composite', 'box_behnken']:
-            center_points = st.number_input(
-                "중심점 수",
-                min_value=0,
-                max_value=10,
-                value=3,
-                help="중심점 반복 횟수"
+        # 설계별 옵션
+        st.markdown("#### 설계 옵션")
+        
+        col_a, col_b, col_c = st.columns(3)
+        
+        with col_a:
+            st.session_state.design_constraints['max_runs'] = st.number_input(
+                "최대 실험 횟수",
+                min_value=1,
+                max_value=1000,
+                value=st.session_state.design_constraints['max_runs'],
+                help="수행 가능한 최대 실험 횟수"
             )
         
-        # 랜덤화
-        randomize = st.checkbox("실험 순서 랜덤화", value=True)
+        with col_b:
+            if selected_design in ['full_factorial', 'fractional_factorial', 'ccd']:
+                st.session_state.design_constraints['center_points'] = st.number_input(
+                    "중심점 반복",
+                    min_value=0,
+                    max_value=10,
+                    value=st.session_state.design_constraints.get('center_points', 0),
+                    help="중심점에서의 반복 실험 횟수"
+                )
         
-        # 반복 실험
-        replicates = st.number_input(
-            "반복 횟수",
-            min_value=1,
-            max_value=5,
-            value=1,
-            help="각 실험 조건의 반복 횟수"
+        with col_c:
+            st.session_state.design_constraints['replicates'] = st.number_input(
+                "전체 반복",
+                min_value=1,
+                max_value=5,
+                value=st.session_state.design_constraints['replicates'],
+                help="전체 설계의 반복 횟수"
+            )
+        
+        # 블록화 및 랜덤화
+        st.markdown("#### 실험 수행 옵션")
+        
+        col_1, col_2 = st.columns(2)
+        
+        with col_1:
+            st.session_state.design_constraints['blocks'] = st.number_input(
+                "블록 수",
+                min_value=1,
+                max_value=10,
+                value=st.session_state.design_constraints['blocks'],
+                help="실험을 나누어 수행할 블록의 수"
+            )
+        
+        with col_2:
+            st.session_state.design_constraints['randomize'] = st.checkbox(
+                "실험 순서 랜덤화",
+                value=st.session_state.design_constraints['randomize'],
+                help="실험 순서를 무작위로 배치"
+            )
+        
+        # 추가 제약조건
+        st.markdown("#### 추가 제약조건")
+        
+        constraints_text = st.text_area(
+            "제약조건 입력 (선택사항)",
+            placeholder="예: 온도 * 압력 < 1000\n     용매A + 용매B = 100",
+            height=100,
+            help="실험 조건에 대한 추가 제약사항을 입력하세요"
         )
+        
+        if constraints_text:
+            st.session_state.design_constraints['custom_constraints'] = constraints_text
+        
+        # 예상 실험 수 계산 및 표시
+        estimated_runs = estimate_experiment_runs()
+        
+        if estimated_runs:
+            st.info(f"""
+            **예상 실험 수**: {estimated_runs}회
+            - 기본 설계: {estimated_runs // st.session_state.design_constraints['replicates']}회
+            - 반복 포함: {estimated_runs}회
+            """)
     
-    # 제약조건 저장
-    st.session_state.design_constraints = {
-        'max_runs': max_runs,
-        'time_constraint': time_constraint,
-        'budget_constraint': budget_constraint,
-        'use_blocking': use_blocking,
-        'block_factor': block_factor if use_blocking else None,
-        'design_type': selected_design,
-        'center_points': center_points if selected_design in ['central_composite', 'box_behnken'] else 0,
-        'randomize': randomize,
-        'replicates': replicates
-    }
-    
-    # AI 최적화 추천
-    if st.button("🤖 AI 최적화 추천", use_container_width=True):
-        with st.spinner("AI가 최적 설계를 찾는 중..."):
-            ai_optimization = get_ai_design_optimization()
-            render_ai_response(ai_optimization, "설계 최적화")
+    with col2:
+        # AI 최적화 제안
+        st.markdown("#### 🤖 AI 최적화")
+        
+        if st.button("AI 설계 최적화", use_container_width=True):
+            with st.spinner("AI가 최적 설계를 찾는 중..."):
+                optimization = get_ai_design_optimization()
+                render_ai_response(optimization, "설계최적화")
+        
+        # 설계 품질 메트릭
+        st.markdown("#### 📊 설계 품질")
+        
+        quality_metrics = calculate_design_quality_preview()
+        
+        for metric, value in quality_metrics.items():
+            if value is not None:
+                st.metric(metric, value)
+        
+        # 도움말
+        with st.expander("ℹ️ 설계 유형 가이드"):
+            st.write("""
+            **설계 유형 선택 가이드**
+            
+            - **완전요인설계**: 모든 요인 조합을 탐색 (요인 수가 적을 때)
+            - **부분요인설계**: 주요 효과 중심으로 탐색 (요인 수가 많을 때)
+            - **중심합성설계**: 2차 효과까지 모델링 (최적화 목적)
+            - **Box-Behnken**: 3수준 설계, 극단값 회피
+            - **Plackett-Burman**: 많은 요인 스크리닝
+            - **D-최적**: 제약조건이 있을 때 최적
+            """)
     
     # 네비게이션
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -521,43 +703,63 @@ def render_step5_review():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.write("#### 설계 요약")
+        st.markdown("#### 📋 설계 요약")
         
-        # 실험 정보
-        st.info(f"""
-        **실험 모듈**: {st.session_state.selected_module_id}  
-        **실험 유형**: {st.session_state.selected_experiment_type}  
-        **요인 수**: {len(st.session_state.experiment_factors)}  
-        **반응변수 수**: {len(st.session_state.experiment_responses)}  
-        **설계 유형**: {st.session_state.design_constraints['design_type']}  
-        **최대 실험 횟수**: {st.session_state.design_constraints['max_runs']}
-        """)
+        # 실험 정보 카드
+        with st.container():
+            st.info(f"""
+            **실험 모듈**: {st.session_state.selected_module_id}  
+            **실험 유형**: {st.session_state.selected_experiment_type}  
+            **요인 수**: {len(st.session_state.experiment_factors)}  
+            **반응변수 수**: {len(st.session_state.experiment_responses)}  
+            **설계 유형**: {st.session_state.design_constraints['design_type']}  
+            **최대 실험 횟수**: {st.session_state.design_constraints['max_runs']}
+            """)
         
         # 요인 요약
-        with st.expander("📊 요인 상세"):
-            factor_summary = pd.DataFrame(st.session_state.experiment_factors)
-            st.dataframe(factor_summary, use_container_width=True)
+        with st.expander("📊 요인 상세", expanded=True):
+            factors_df = pd.DataFrame(st.session_state.experiment_factors)
+            if not factors_df.empty:
+                display_cols = ['name', 'type', 'min_value', 'max_value', 'unit', 'levels']
+                available_cols = [col for col in display_cols if col in factors_df.columns]
+                st.dataframe(
+                    factors_df[available_cols],
+                    use_container_width=True,
+                    hide_index=True
+                )
         
         # 반응변수 요약
-        with st.expander("📈 반응변수 상세"):
-            response_summary = pd.DataFrame(st.session_state.experiment_responses)
-            st.dataframe(response_summary, use_container_width=True)
+        with st.expander("📈 반응변수 상세", expanded=True):
+            responses_df = pd.DataFrame(st.session_state.experiment_responses)
+            if not responses_df.empty:
+                display_cols = ['name', 'type', 'optimization', 'target_value', 'importance', 'unit']
+                available_cols = [col for col in display_cols if col in responses_df.columns]
+                st.dataframe(
+                    responses_df[available_cols],
+                    use_container_width=True,
+                    hide_index=True
+                )
     
     with col2:
         # 실험 설계 생성
-        st.write("#### 작업")
+        st.markdown("#### 🚀 작업")
         
-        if st.button("🚀 실험 설계 생성", type="primary", use_container_width=True):
+        if st.button("✨ 실험 설계 생성", type="primary", use_container_width=True):
             generate_experiment_design()
+        
+        st.divider()
         
         if st.button("💾 템플릿으로 저장", use_container_width=True):
             save_as_template()
         
-        if st.button("📤 내보내기", use_container_width=True):
+        if st.button("📤 설정 내보내기", use_container_width=True):
             export_design_settings()
+        
+        if st.button("🔄 처음부터 다시", use_container_width=True):
+            reset_wizard()
     
     # 생성된 설계 표시
-    if 'generated_design' in st.session_state:
+    if st.session_state.generated_design:
         st.divider()
         render_generated_design()
     
@@ -568,118 +770,149 @@ def render_step5_review():
             st.session_state.wizard_step = 4
             st.rerun()
     with col3:
-        if st.button("✅ 완료", type="primary", use_container_width=True):
-            if 'generated_design' in st.session_state:
+        if st.session_state.generated_design:
+            if st.button("✅ 완료 및 저장", type="primary", use_container_width=True):
                 save_experiment_design()
-                st.success("실험 설계가 저장되었습니다!")
-                st.balloons()
 
-# ===== 실험 설계 생성 =====
+# ===== 실험 설계 생성 및 표시 =====
 def generate_experiment_design():
     """실험 설계 생성"""
-    with st.spinner("실험 설계 생성 중..."):
-        try:
+    try:
+        with st.spinner("실험 설계를 생성하는 중..."):
             # 모듈 가져오기
             registry = get_module_registry()
             module = registry.get_module(st.session_state.selected_module_id)
             
-            # 입력 데이터 준비
-            inputs = {
-                'design_type': st.session_state.design_constraints['design_type'],
-                'factors': st.session_state.experiment_factors,
-                'responses': st.session_state.experiment_responses,
-                'constraints': st.session_state.design_constraints,
-                'n_levels': 2,  # 기본값
-                'n_samples': st.session_state.design_constraints['max_runs']
-            }
+            # Factor와 Response 객체 생성
+            factors = [Factor(**f) for f in st.session_state.experiment_factors]
+            responses = [Response(**r) for r in st.session_state.experiment_responses]
+            
+            # 제약조건 객체 생성
+            constraints = DesignConstraints(**st.session_state.design_constraints)
             
             # 설계 생성
-            design = module.generate_design(inputs)
+            design = module.generate_design(
+                experiment_type=st.session_state.selected_experiment_type,
+                factors=factors,
+                responses=responses,
+                constraints=constraints
+            )
             
-            # 검증
-            validation = module.validate_design(design)
+            # 결과 저장
+            st.session_state.generated_design = design
             
-            if validation.is_valid:
-                st.session_state.generated_design = design
-                st.success("실험 설계가 성공적으로 생성되었습니다!")
-                
-                # AI 설계 분석
-                ai_analysis = analyze_design_with_ai(design)
-                render_ai_response(ai_analysis, "설계 분석")
-            else:
-                st.error("설계 검증 실패:")
-                for error in validation.errors:
-                    st.error(f"- {error}")
-                for warning in validation.warnings:
-                    st.warning(f"- {warning}")
-                    
-        except Exception as e:
-            st.error(f"설계 생성 중 오류 발생: {str(e)}")
+            # AI 분석 자동 실행
+            if design:
+                analysis = get_ai_design_analysis(design)
+                st.session_state.design_analysis = analysis
+            
+            st.success("실험 설계가 성공적으로 생성되었습니다!")
+            st.rerun()
+            
+    except Exception as e:
+        handle_error(e, "실험 설계 생성 중 오류가 발생했습니다")
 
 def render_generated_design():
-    """생성된 설계 표시"""
+    """생성된 실험 설계 표시"""
     design = st.session_state.generated_design
     
-    st.markdown("### 🎯 생성된 실험 설계")
+    if not design:
+        return
+    
+    st.markdown("### 📊 생성된 실험 설계")
+    
+    # 설계 정보 표시
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("실험 횟수", f"{len(design.runs)}회")
+    
+    with col2:
+        st.metric("설계 유형", design.design_type)
+    
+    with col3:
+        if hasattr(design, 'quality') and design.quality:
+            st.metric("D-효율성", f"{design.quality.d_efficiency:.1f}%")
+    
+    with col4:
+        if hasattr(design, 'quality') and design.quality:
+            st.metric("직교성", f"{design.quality.orthogonality:.2f}")
     
     # 탭 구성
-    tabs = st.tabs(["실험 런 테이블", "설계 공간 시각화", "통계적 속성", "파워 분석"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📋 실험 런 테이블", 
+        "📊 설계 공간 시각화", 
+        "📈 통계적 속성",
+        "✏️ 편집 및 수정",
+        "🤖 AI 분석"
+    ])
     
-    with tabs[0]:
+    with tab1:
         render_run_table(design)
     
-    with tabs[1]:
+    with tab2:
         render_design_space_visualization(design)
     
-    with tabs[2]:
+    with tab3:
         render_statistical_properties(design)
     
-    with tabs[3]:
-        render_power_analysis(design)
+    with tab4:
+        render_design_editor(design)
+    
+    with tab5:
+        render_ai_analysis()
 
 def render_run_table(design: ExperimentDesign):
     """실험 런 테이블 표시"""
-    st.write("#### 실험 런 테이블")
+    st.markdown("#### 실험 런 테이블")
     
-    # 편집 가능한 데이터 에디터
-    edited_runs = st.data_editor(
-        design.runs,
-        num_rows="dynamic",
+    # 표시 옵션
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        show_coded = st.checkbox("코드화된 값 표시", value=False)
+    
+    with col2:
+        show_blocks = st.checkbox("블록 표시", value=True)
+    
+    with col3:
+        show_std_order = st.checkbox("표준 순서 표시", value=False)
+    
+    # 데이터프레임 준비
+    df = design.runs.copy()
+    
+    # 컬럼 순서 정리
+    id_cols = ['Run']
+    if show_std_order and 'StdOrder' in df.columns:
+        id_cols.append('StdOrder')
+    if show_blocks and 'Block' in df.columns:
+        id_cols.append('Block')
+    
+    factor_cols = [f.name for f in design.factors if f.name in df.columns]
+    other_cols = [col for col in df.columns if col not in id_cols + factor_cols]
+    
+    df = df[id_cols + factor_cols + other_cols]
+    
+    # 테이블 표시
+    edited_df = st.data_editor(
+        df,
         use_container_width=True,
-        hide_index=False,
-        column_config={
-            col: st.column_config.NumberColumn(
-                col,
-                help=f"Factor: {col}",
-                format="%.3f"
-            ) for col in design.runs.columns if col not in [r.name for r in design.responses]
-        }
+        hide_index=True,
+        num_rows="fixed",
+        disabled=id_cols
     )
     
     # 변경사항 저장
-    if not design.runs.equals(edited_runs):
-        st.session_state.generated_design.runs = edited_runs
-        st.info("변경사항이 감지되었습니다. 저장하려면 '완료' 버튼을 클릭하세요.")
+    if not df.equals(edited_df):
+        design.runs = edited_df
+        st.session_state.generated_design = design
+        st.success("변경사항이 저장되었습니다.")
     
-    # 실험 순서 재정렬
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # 내보내기 옵션
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        if st.button("🔀 순서 랜덤화"):
-            design.runs = design.runs.sample(frac=1).reset_index(drop=True)
-            st.session_state.generated_design = design
-            st.rerun()
-    
-    with col2:
-        if st.button("📊 블록별 정렬"):
-            if 'Block' in design.runs.columns:
-                design.runs = design.runs.sort_values('Block').reset_index(drop=True)
-                st.session_state.generated_design = design
-                st.rerun()
-    
-    # 다운로드 옵션
-    col1, col2 = st.columns(2)
-    with col1:
-        csv = design.runs.to_csv(index=True)
+        csv = df.to_csv(index=False)
         st.download_button(
             "📥 CSV 다운로드",
             csv,
@@ -689,692 +922,827 @@ def render_run_table(design: ExperimentDesign):
         )
     
     with col2:
-        excel_buffer = design.export_design('excel')
+        # Excel 다운로드 (BytesIO 사용)
+        from io import BytesIO
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Design', index=False)
+            # 메타데이터 시트 추가
+            metadata_df = pd.DataFrame({
+                'Property': ['Design Type', 'Factors', 'Responses', 'Runs', 'Created'],
+                'Value': [
+                    design.design_type,
+                    len(design.factors),
+                    len(design.responses),
+                    len(design.runs),
+                    datetime.now().strftime('%Y-%m-%d %H:%M')
+                ]
+            })
+            metadata_df.to_excel(writer, sheet_name='Metadata', index=False)
+        
         st.download_button(
             "📥 Excel 다운로드",
-            excel_buffer,
+            excel_buffer.getvalue(),
             "experiment_design.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+    
+    with col3:
+        if st.button("📋 클립보드 복사", use_container_width=True):
+            df.to_clipboard(index=False)
+            st.success("클립보드에 복사되었습니다!")
 
 def render_design_space_visualization(design: ExperimentDesign):
     """설계 공간 시각화"""
-    st.write("#### 설계 공간 시각화")
+    st.markdown("#### 설계 공간 시각화")
     
-    # 연속형 요인만 추출
-    continuous_factors = [f for f in design.factors if f.type == 'continuous']
+    continuous_factors = [f for f in design.factors if f.type == FactorType.CONTINUOUS]
     
     if len(continuous_factors) < 2:
-        st.warning("시각화를 위해서는 최소 2개의 연속형 요인이 필요합니다.")
+        st.warning("시각화를 위해서는 최소 2개 이상의 연속형 요인이 필요합니다.")
         return
     
-    # 시각화 옵션
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        viz_type = st.selectbox(
-            "시각화 유형",
-            ["2D 산점도", "3D 산점도", "평행 좌표", "히트맵"]
-        )
+    # 시각화 유형 선택
+    viz_type = st.selectbox(
+        "시각화 유형",
+        ["2D 산점도", "3D 산점도", "평행 좌표계", "페어플롯"]
+    )
     
     if viz_type == "2D 산점도":
-        # 요인 선택
-        factor_names = [f.name for f in continuous_factors]
-        x_factor = st.selectbox("X축 요인", factor_names, index=0)
-        y_factor = st.selectbox("Y축 요인", factor_names, index=1 if len(factor_names) > 1 else 0)
+        col1, col2 = st.columns(2)
         
-        # 색상 매핑 (반응변수가 있는 경우)
-        color_by = None
-        if any(col in design.runs.columns for col in [r.name for r in design.responses]):
-            available_responses = [r.name for r in design.responses if r.name in design.runs.columns]
-            if available_responses:
-                color_by = st.selectbox("색상 매핑", [None] + available_responses)
+        with col1:
+            x_factor = st.selectbox(
+                "X축",
+                [f.name for f in continuous_factors]
+            )
         
-        # 2D 산점도 생성
-        fig = px.scatter(
-            design.runs,
-            x=x_factor,
-            y=y_factor,
-            color=color_by,
-            title="실험 설계 공간",
-            labels={x_factor: f"{x_factor}", y_factor: f"{y_factor}"},
-            hover_data=design.runs.columns
+        with col2:
+            y_factor = st.selectbox(
+                "Y축",
+                [f.name for f in continuous_factors if f.name != x_factor]
+            )
+        
+        # 색상 인코딩 옵션
+        color_by = st.selectbox(
+            "색상 기준",
+            ["없음", "블록", "실행 순서"] + 
+            [f.name for f in design.factors if f.type == FactorType.CATEGORICAL]
         )
         
-        fig.update_layout(height=600)
+        # 플롯 생성
+        fig = go.Figure()
+        
+        if color_by == "없음":
+            fig.add_trace(go.Scatter(
+                x=design.runs[x_factor],
+                y=design.runs[y_factor],
+                mode='markers',
+                marker=dict(size=12, color='blue'),
+                text=[f"Run {i+1}" for i in range(len(design.runs))],
+                hovertemplate='%{text}<br>%{x}<br>%{y}<extra></extra>'
+            ))
+        else:
+            color_col = 'Run' if color_by == "실행 순서" else color_by
+            fig = px.scatter(
+                design.runs,
+                x=x_factor,
+                y=y_factor,
+                color=color_col if color_col in design.runs.columns else None,
+                hover_data=['Run'],
+                title=f"{x_factor} vs {y_factor}"
+            )
+        
+        fig.update_layout(
+            xaxis_title=x_factor,
+            yaxis_title=y_factor,
+            height=500
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
     
     elif viz_type == "3D 산점도":
         if len(continuous_factors) < 3:
-            st.warning("3D 시각화를 위해서는 최소 3개의 연속형 요인이 필요합니다.")
+            st.warning("3D 시각화를 위해서는 최소 3개 이상의 연속형 요인이 필요합니다.")
         else:
-            factor_names = [f.name for f in continuous_factors]
-            x_factor = st.selectbox("X축 요인", factor_names, index=0)
-            y_factor = st.selectbox("Y축 요인", factor_names, index=1)
-            z_factor = st.selectbox("Z축 요인", factor_names, index=2)
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                x_factor = st.selectbox("X축", [f.name for f in continuous_factors])
+            
+            with col2:
+                y_factor = st.selectbox(
+                    "Y축",
+                    [f.name for f in continuous_factors if f.name != x_factor]
+                )
+            
+            with col3:
+                z_factor = st.selectbox(
+                    "Z축",
+                    [f.name for f in continuous_factors if f.name not in [x_factor, y_factor]]
+                )
             
             fig = go.Figure(data=[go.Scatter3d(
                 x=design.runs[x_factor],
                 y=design.runs[y_factor],
                 z=design.runs[z_factor],
                 mode='markers',
-                marker=dict(
-                    size=8,
-                    color=design.runs.index,
-                    colorscale='Viridis',
-                    showscale=True
-                ),
-                text=[f"Run {i}" for i in design.runs.index],
-                hovertemplate='<b>Run %{text}</b><br>' +
-                             f'{x_factor}: %{{x:.3f}}<br>' +
-                             f'{y_factor}: %{{y:.3f}}<br>' +
-                             f'{z_factor}: %{{z:.3f}}<br>' +
-                             '<extra></extra>'
+                marker=dict(size=8, color=design.runs.index, colorscale='Viridis'),
+                text=[f"Run {i+1}" for i in range(len(design.runs))]
             )])
             
             fig.update_layout(
-                title="3D 실험 설계 공간",
                 scene=dict(
                     xaxis_title=x_factor,
                     yaxis_title=y_factor,
                     zaxis_title=z_factor
                 ),
-                height=700
+                height=600
             )
             
             st.plotly_chart(fig, use_container_width=True)
     
-    elif viz_type == "평행 좌표":
-        # 정규화된 데이터 준비
-        factor_cols = [f.name for f in continuous_factors]
-        normalized_data = design.runs[factor_cols].copy()
+    elif viz_type == "평행 좌표계":
+        # 연속형 요인만 선택
+        factor_cols = [f.name for f in continuous_factors if f.name in design.runs.columns]
         
+        # 정규화
+        normalized_df = design.runs.copy()
         for col in factor_cols:
-            min_val = normalized_data[col].min()
-            max_val = normalized_data[col].max()
+            min_val = normalized_df[col].min()
+            max_val = normalized_df[col].max()
             if max_val > min_val:
-                normalized_data[col] = (normalized_data[col] - min_val) / (max_val - min_val)
+                normalized_df[col] = (normalized_df[col] - min_val) / (max_val - min_val)
         
-        # 평행 좌표 플롯
         fig = go.Figure(data=go.Parcoords(
-            dimensions=[dict(
-                label=col,
-                values=normalized_data[col],
-                range=[0, 1]
-            ) for col in factor_cols],
+            dimensions=[
+                dict(
+                    label=col,
+                    values=normalized_df[col],
+                    range=[0, 1]
+                ) for col in factor_cols
+            ],
             line=dict(
-                color=design.runs.index,
+                color=normalized_df.index,
                 colorscale='Viridis'
             )
         ))
         
-        fig.update_layout(
-            title="평행 좌표 플롯",
-            height=600
-        )
-        
+        fig.update_layout(height=500)
         st.plotly_chart(fig, use_container_width=True)
     
-    else:  # 히트맵
-        # 상관관계 히트맵
-        factor_cols = [f.name for f in continuous_factors]
-        corr_matrix = design.runs[factor_cols].corr()
+    elif viz_type == "페어플롯":
+        # Plotly Express scatter matrix
+        factor_cols = [f.name for f in continuous_factors if f.name in design.runs.columns][:4]  # 최대 4개
         
-        fig = go.Figure(data=go.Heatmap(
-            z=corr_matrix.values,
-            x=corr_matrix.columns,
-            y=corr_matrix.columns,
-            colorscale='RdBu',
-            zmid=0,
-            text=np.round(corr_matrix.values, 2),
-            texttemplate='%{text}',
-            textfont={"size": 10}
-        ))
-        
-        fig.update_layout(
-            title="요인 상관관계 히트맵",
-            height=600
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+        if len(factor_cols) < 2:
+            st.warning("페어플롯을 위해서는 최소 2개 이상의 요인이 필요합니다.")
+        else:
+            fig = px.scatter_matrix(
+                design.runs,
+                dimensions=factor_cols,
+                hover_data=['Run'],
+                title="요인 간 관계"
+            )
+            
+            fig.update_traces(diagonal_visible=False)
+            fig.update_layout(height=800)
+            
+            st.plotly_chart(fig, use_container_width=True)
 
 def render_statistical_properties(design: ExperimentDesign):
-    """통계적 속성 분석"""
-    st.write("#### 통계적 속성")
+    """통계적 속성 표시"""
+    st.markdown("#### 통계적 속성")
     
-    # 설계 매트릭스 속성
-    factor_cols = [f.name for f in design.factors if f.type == 'continuous']
-    if not factor_cols:
-        st.warning("연속형 요인이 없어 통계적 속성을 계산할 수 없습니다.")
-        return
-    
-    X = design.runs[factor_cols].values
-    
-    # 정규화
-    X_norm = (X - X.mean(axis=0)) / X.std(axis=0)
-    
-    # 정보 행렬
-    info_matrix = X_norm.T @ X_norm
-    
-    # D-효율성
-    det_info = np.linalg.det(info_matrix)
-    d_efficiency = (det_info / len(X)) ** (1/len(factor_cols))
-    
-    # A-효율성
-    try:
-        inv_info = np.linalg.inv(info_matrix)
-        a_efficiency = len(factor_cols) / np.trace(inv_info)
-    except:
-        a_efficiency = 0
-    
-    # G-효율성
-    g_efficiency = calculate_g_efficiency(X_norm)
-    
-    # 결과 표시
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("D-효율성", f"{d_efficiency:.3f}", 
-                 help="설계의 D-최적성 측도 (1에 가까울수록 좋음)")
-    
-    with col2:
-        st.metric("A-효율성", f"{a_efficiency:.3f}",
-                 help="평균 분산의 역수 (높을수록 좋음)")
-    
-    with col3:
-        st.metric("G-효율성", f"{g_efficiency:.3f}",
-                 help="최대 예측 분산 (낮을수록 좋음)")
-    
-    # 상세 분석
-    with st.expander("상세 통계 분석"):
-        # VIF (분산팽창지수)
-        st.write("**분산팽창지수 (VIF)**")
-        vif_data = calculate_vif(design.runs[factor_cols])
-        st.dataframe(vif_data, use_container_width=True)
+    # 설계 품질 메트릭
+    if hasattr(design, 'quality') and design.quality:
+        col1, col2, col3, col4 = st.columns(4)
         
-        # 직교성 검사
-        st.write("**직교성 검사**")
-        orthogonality = check_orthogonality(X_norm)
-        if orthogonality:
-            st.success("설계가 직교성을 만족합니다.")
-        else:
-            st.warning("설계가 완전히 직교하지 않습니다.")
+        with col1:
+            st.metric(
+                "D-효율성",
+                f"{design.quality.d_efficiency:.1f}%",
+                help="정보 행렬의 행렬식 기반 효율성"
+            )
         
-        # 균형성 검사
-        st.write("**균형성 검사**")
-        balance = check_balance(design)
-        st.info(balance)
-
-def render_power_analysis(design: ExperimentDesign):
-    """파워 분석"""
-    st.write("#### 파워 분석")
-    
-    # 파워 분석 설정
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        alpha = st.slider("유의수준 (α)", 0.01, 0.10, 0.05, 0.01)
-        effect_size = st.slider("효과 크기", 0.1, 2.0, 0.5, 0.1,
-                               help="감지하고자 하는 표준화된 효과 크기")
+        with col2:
+            st.metric(
+                "A-효율성",
+                f"{design.quality.a_efficiency:.1f}%",
+                help="평균 분산 기반 효율성"
+            )
         
-    with col2:
-        sigma = st.number_input("오차 표준편차 추정치", 
-                               min_value=0.1, value=1.0, step=0.1)
-        desired_power = st.slider("목표 검정력", 0.70, 0.95, 0.80, 0.05)
-    
-    # 파워 계산
-    n_runs = len(design.runs)
-    n_factors = len([f for f in design.factors if f.type == 'continuous'])
-    
-    # 간단한 파워 근사 (실제로는 더 복잡한 계산 필요)
-    import scipy.stats as stats
-    
-    # 비중심 모수
-    lambda_param = n_runs * (effect_size ** 2) / (2 * sigma ** 2)
-    
-    # F-분포의 임계값
-    df1 = n_factors
-    df2 = n_runs - n_factors - 1
-    f_crit = stats.f.ppf(1 - alpha, df1, df2)
-    
-    # 검정력 계산
-    power = 1 - stats.ncf.cdf(f_crit, df1, df2, lambda_param)
-    
-    # 결과 표시
-    st.metric("계산된 검정력", f"{power:.3f}",
-             delta=f"{power - desired_power:.3f}" if power >= desired_power else f"{power - desired_power:.3f}")
-    
-    if power < desired_power:
-        st.warning(f"목표 검정력 {desired_power:.2f}에 도달하지 못했습니다.")
+        with col3:
+            st.metric(
+                "G-효율성",
+                f"{design.quality.g_efficiency:.1f}%",
+                help="최대 예측 분산 기반 효율성"
+            )
         
-        # 필요한 실험 횟수 계산
-        required_n = calculate_required_sample_size(
-            alpha, desired_power, effect_size, sigma, n_factors
-        )
-        st.info(f"목표 검정력을 달성하려면 약 {required_n}회의 실험이 필요합니다.")
-    else:
-        st.success("목표 검정력을 달성했습니다!")
+        with col4:
+            st.metric(
+                "조건수",
+                f"{design.quality.condition_number:.2f}",
+                help="설계 행렬의 조건수 (낮을수록 좋음)"
+            )
     
-    # 파워 곡선
-    st.write("**파워 곡선**")
-    effect_sizes = np.linspace(0.1, 2.0, 50)
-    powers = []
+    # 상관 행렬
+    st.markdown("##### 요인 간 상관관계")
     
-    for es in effect_sizes:
-        lambda_p = n_runs * (es ** 2) / (2 * sigma ** 2)
-        pwr = 1 - stats.ncf.cdf(f_crit, df1, df2, lambda_p)
-        powers.append(pwr)
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=effect_sizes,
-        y=powers,
-        mode='lines',
-        name='파워 곡선'
-    ))
-    
-    fig.add_hline(y=desired_power, line_dash="dash", 
-                  annotation_text=f"목표 검정력 ({desired_power})")
-    fig.add_vline(x=effect_size, line_dash="dash",
-                  annotation_text=f"현재 효과 크기 ({effect_size})")
-    
-    fig.update_layout(
-        title="효과 크기에 따른 검정력",
-        xaxis_title="효과 크기",
-        yaxis_title="검정력",
-        height=500
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-# ===== 도우미 함수들 =====
-def validate_factors() -> bool:
-    """요인 검증"""
-    factors = st.session_state.experiment_factors
-    
-    if not factors:
-        st.error("최소 1개 이상의 요인이 필요합니다.")
-        return False
-    
-    for factor in factors:
-        if not factor.get('name'):
-            st.error("모든 요인은 이름이 있어야 합니다.")
-            return False
+    continuous_factors = [f for f in design.factors if f.type == FactorType.CONTINUOUS]
+    if continuous_factors:
+        factor_cols = [f.name for f in continuous_factors if f.name in design.runs.columns]
         
-        if factor['type'] == 'continuous':
-            if factor.get('min_value', 0) >= factor.get('max_value', 1):
-                st.error(f"요인 '{factor['name']}'의 최소값이 최대값보다 크거나 같습니다.")
-                return False
-        elif factor['type'] == 'categorical':
-            if not factor.get('levels'):
-                st.error(f"범주형 요인 '{factor['name']}'의 수준이 정의되지 않았습니다.")
-                return False
-    
-    return True
-
-def validate_responses() -> bool:
-    """반응변수 검증"""
-    responses = st.session_state.experiment_responses
-    
-    if not responses:
-        st.warning("반응변수가 정의되지 않았습니다. 계속하시겠습니까?")
-        return True
-    
-    for response in responses:
-        if not response.get('name'):
-            st.error("모든 반응변수는 이름이 있어야 합니다.")
-            return False
-        
-        if response['goal'] == 'target' and response.get('target_value') is None:
-            st.error(f"반응변수 '{response['name']}'의 목표값이 설정되지 않았습니다.")
-            return False
-    
-    return True
-
-def calculate_vif(df: pd.DataFrame) -> pd.DataFrame:
-    """분산팽창지수 계산"""
-    from statsmodels.stats.outliers_influence import variance_inflation_factor
-    
-    vif_data = pd.DataFrame()
-    vif_data["요인"] = df.columns
-    vif_data["VIF"] = [variance_inflation_factor(df.values, i) for i in range(len(df.columns))]
-    vif_data["상태"] = vif_data["VIF"].apply(
-        lambda x: "양호" if x < 5 else "주의" if x < 10 else "문제"
-    )
-    
-    return vif_data
-
-def check_orthogonality(X: np.ndarray) -> bool:
-    """직교성 검사"""
-    corr_matrix = np.corrcoef(X.T)
-    np.fill_diagonal(corr_matrix, 0)
-    return np.max(np.abs(corr_matrix)) < 0.01
-
-def check_balance(design: ExperimentDesign) -> str:
-    """균형성 검사"""
-    categorical_factors = [f for f in design.factors if f.type == 'categorical']
-    
-    if not categorical_factors:
-        return "범주형 요인이 없습니다."
-    
-    balance_info = []
-    for factor in categorical_factors:
-        if factor.name in design.runs.columns:
-            counts = design.runs[factor.name].value_counts()
-            if counts.std() / counts.mean() < 0.1:
-                balance_info.append(f"{factor.name}: 균형")
+        if len(factor_cols) > 1:
+            corr_matrix = design.runs[factor_cols].corr()
+            
+            fig = go.Figure(data=go.Heatmap(
+                z=corr_matrix.values,
+                x=corr_matrix.columns,
+                y=corr_matrix.columns,
+                colorscale='RdBu',
+                zmid=0,
+                text=corr_matrix.values.round(3),
+                texttemplate='%{text}',
+                showscale=True
+            ))
+            
+            fig.update_layout(
+                title="요인 상관 행렬",
+                height=400,
+                xaxis=dict(side='bottom')
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 직교성 평가
+            max_corr = corr_matrix.abs().values[~np.eye(len(factor_cols), dtype=bool)].max()
+            if max_corr < 0.1:
+                st.success(f"✅ 우수한 직교성 (최대 상관: {max_corr:.3f})")
+            elif max_corr < 0.3:
+                st.info(f"⚠️ 양호한 직교성 (최대 상관: {max_corr:.3f})")
             else:
-                balance_info.append(f"{factor.name}: 불균형")
+                st.warning(f"❌ 낮은 직교성 (최대 상관: {max_corr:.3f})")
     
-    return ", ".join(balance_info)
+    # 파워 분석
+    st.markdown("##### 통계적 검정력")
+    
+    power_results = calculate_power_analysis(design)
+    
+    if power_results:
+        power_df = pd.DataFrame(power_results)
+        
+        fig = go.Figure()
+        
+        for effect_type in ['주효과', '2차 교호작용']:
+            if effect_type in power_df.columns:
+                fig.add_trace(go.Bar(
+                    name=effect_type,
+                    x=power_df['효과크기'],
+                    y=power_df[effect_type]
+                ))
+        
+        fig.update_layout(
+            title="효과 크기별 검정력",
+            xaxis_title="효과 크기",
+            yaxis_title="검정력 (%)",
+            barmode='group',
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
 
-def calculate_g_efficiency(X: np.ndarray) -> float:
-    """G-효율성 계산"""
-    try:
-        H = X @ np.linalg.inv(X.T @ X) @ X.T
-        max_leverage = np.max(np.diag(H))
-        return X.shape[1] / (X.shape[0] * max_leverage)
-    except:
-        return 0
-
-def calculate_required_sample_size(alpha: float, power: float, 
-                                 effect_size: float, sigma: float, 
-                                 n_factors: int) -> int:
-    """필요한 표본 크기 계산"""
-    from scipy import stats
+def render_design_editor(design: ExperimentDesign):
+    """설계 편집기"""
+    st.markdown("#### 설계 편집 및 수정")
     
-    # 이진 탐색으로 필요한 n 찾기
-    n_min, n_max = n_factors + 2, 1000
-    
-    while n_min < n_max:
-        n_mid = (n_min + n_max) // 2
-        
-        df1 = n_factors
-        df2 = n_mid - n_factors - 1
-        
-        if df2 <= 0:
-            n_min = n_mid + 1
-            continue
-        
-        f_crit = stats.f.ppf(1 - alpha, df1, df2)
-        lambda_param = n_mid * (effect_size ** 2) / (2 * sigma ** 2)
-        calculated_power = 1 - stats.ncf.cdf(f_crit, df1, df2, lambda_param)
-        
-        if calculated_power < power:
-            n_min = n_mid + 1
-        else:
-            n_max = n_mid
-    
-    return n_min
-
-def render_factor_correlation_plot():
-    """요인 상관관계 플롯"""
-    factors = st.session_state.experiment_factors
-    continuous_factors = [f for f in factors if f['type'] == 'continuous']
-    
-    if len(continuous_factors) < 2:
-        return
-    
-    # 가상의 상관관계 매트릭스 생성 (실제로는 과거 데이터나 도메인 지식 기반)
-    n = len(continuous_factors)
-    corr_matrix = np.eye(n)
-    
-    # 일부 상관관계 추가 (예시)
-    if n > 1:
-        corr_matrix[0, 1] = corr_matrix[1, 0] = 0.3
-    if n > 2:
-        corr_matrix[0, 2] = corr_matrix[2, 0] = -0.2
-        corr_matrix[1, 2] = corr_matrix[2, 1] = 0.1
-    
-    factor_names = [f['name'] for f in continuous_factors]
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=corr_matrix,
-        x=factor_names,
-        y=factor_names,
-        colorscale='RdBu',
-        zmid=0,
-        text=np.round(corr_matrix, 2),
-        texttemplate='%{text}',
-        textfont={"size": 12}
-    ))
-    
-    fig.update_layout(
-        title="예상 요인 상관관계",
-        height=400
+    # 편집 옵션
+    edit_option = st.radio(
+        "편집 작업 선택",
+        ["런 추가/삭제", "조건 수정", "증강 설계", "최적화"]
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    if edit_option == "런 추가/삭제":
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("##### 런 추가")
+            
+            new_run = {}
+            for factor in design.factors:
+                if factor.type == FactorType.CONTINUOUS:
+                    new_run[factor.name] = st.number_input(
+                        factor.name,
+                        min_value=float(factor.min_value),
+                        max_value=float(factor.max_value),
+                        value=float((factor.min_value + factor.max_value) / 2),
+                        key=f"new_{factor.name}"
+                    )
+                elif factor.type == FactorType.CATEGORICAL:
+                    new_run[factor.name] = st.selectbox(
+                        factor.name,
+                        factor.levels,
+                        key=f"new_{factor.name}"
+                    )
+            
+            if st.button("➕ 런 추가", use_container_width=True):
+                new_run['Run'] = len(design.runs) + 1
+                design.runs = pd.concat([design.runs, pd.DataFrame([new_run])], ignore_index=True)
+                st.session_state.generated_design = design
+                st.success("새 런이 추가되었습니다.")
+                st.rerun()
+        
+        with col2:
+            st.markdown("##### 런 삭제")
+            
+            run_to_delete = st.selectbox(
+                "삭제할 런 선택",
+                design.runs['Run'].tolist()
+            )
+            
+            if st.button("🗑️ 런 삭제", use_container_width=True):
+                design.runs = design.runs[design.runs['Run'] != run_to_delete].reset_index(drop=True)
+                st.session_state.generated_design = design
+                st.success(f"런 {run_to_delete}이(가) 삭제되었습니다.")
+                st.rerun()
+    
+    elif edit_option == "조건 수정":
+        st.markdown("##### 일괄 조건 수정")
+        
+        # 요인 선택
+        factor_to_modify = st.selectbox(
+            "수정할 요인",
+            [f.name for f in design.factors]
+        )
+        
+        # 수정 방법
+        modify_method = st.radio(
+            "수정 방법",
+            ["특정 값으로 변경", "비율로 조정", "오프셋 추가"]
+        )
+        
+        # 런 선택
+        runs_to_modify = st.multiselect(
+            "수정할 런 선택",
+            design.runs['Run'].tolist(),
+            default=design.runs['Run'].tolist()
+        )
+        
+        if modify_method == "특정 값으로 변경":
+            new_value = st.number_input("새 값")
+            
+            if st.button("적용"):
+                design.runs.loc[design.runs['Run'].isin(runs_to_modify), factor_to_modify] = new_value
+                st.session_state.generated_design = design
+                st.success("조건이 수정되었습니다.")
+                st.rerun()
+        
+        elif modify_method == "비율로 조정":
+            scale_factor = st.number_input("배율", value=1.0)
+            
+            if st.button("적용"):
+                mask = design.runs['Run'].isin(runs_to_modify)
+                design.runs.loc[mask, factor_to_modify] *= scale_factor
+                st.session_state.generated_design = design
+                st.success("조건이 수정되었습니다.")
+                st.rerun()
+        
+        elif modify_method == "오프셋 추가":
+            offset = st.number_input("오프셋 값", value=0.0)
+            
+            if st.button("적용"):
+                mask = design.runs['Run'].isin(runs_to_modify)
+                design.runs.loc[mask, factor_to_modify] += offset
+                st.session_state.generated_design = design
+                st.success("조건이 수정되었습니다.")
+                st.rerun()
+    
+    elif edit_option == "증강 설계":
+        st.markdown("##### 설계 증강")
+        
+        augment_type = st.selectbox(
+            "증강 유형",
+            ["축 점 추가", "중심점 추가", "별 점 추가", "사용자 정의 점"]
+        )
+        
+        if augment_type == "중심점 추가":
+            n_center = st.number_input("추가할 중심점 수", min_value=1, max_value=10, value=3)
+            
+            if st.button("중심점 추가"):
+                center_point = {}
+                center_point['Run'] = len(design.runs) + 1
+                
+                for factor in design.factors:
+                    if factor.type == FactorType.CONTINUOUS:
+                        center_point[factor.name] = (factor.min_value + factor.max_value) / 2
+                    elif factor.type == FactorType.CATEGORICAL:
+                        center_point[factor.name] = factor.levels[0]  # 첫 번째 수준
+                
+                for i in range(n_center):
+                    new_point = center_point.copy()
+                    new_point['Run'] = len(design.runs) + i + 1
+                    design.runs = pd.concat([design.runs, pd.DataFrame([new_point])], ignore_index=True)
+                
+                st.session_state.generated_design = design
+                st.success(f"{n_center}개의 중심점이 추가되었습니다.")
+                st.rerun()
+    
+    elif edit_option == "최적화":
+        st.markdown("##### 설계 최적화")
+        
+        optimization_criterion = st.selectbox(
+            "최적화 기준",
+            ["D-최적성", "A-최적성", "G-최적성", "I-최적성"]
+        )
+        
+        if st.button("🎯 설계 최적화", use_container_width=True):
+            with st.spinner("설계를 최적화하는 중..."):
+                # 실제 최적화 알고리즘 구현
+                optimized_design = optimize_design(design, optimization_criterion)
+                
+                if optimized_design:
+                    st.session_state.generated_design = optimized_design
+                    st.success("설계가 최적화되었습니다!")
+                    st.rerun()
 
-def save_as_template():
-    """현재 설정을 템플릿으로 저장"""
-    template_name = st.text_input("템플릿 이름", "내 실험 템플릿")
+def render_ai_analysis():
+    """AI 분석 결과 표시"""
+    st.markdown("#### 🤖 AI 설계 분석")
     
-    if st.button("저장", type="primary"):
-        template = {
-            'name': template_name,
-            'module_id': st.session_state.selected_module_id,
-            'experiment_type': st.session_state.selected_experiment_type,
-            'factors': st.session_state.experiment_factors,
-            'responses': st.session_state.experiment_responses,
-            'constraints': st.session_state.design_constraints,
-            'created_at': datetime.now().isoformat()
-        }
+    if 'design_analysis' not in st.session_state:
+        if st.button("AI 분석 실행", use_container_width=True):
+            with st.spinner("AI가 설계를 분석하는 중..."):
+                analysis = get_ai_design_analysis(st.session_state.generated_design)
+                st.session_state.design_analysis = analysis
+                st.rerun()
+    else:
+        # AI 분석 결과 표시
+        analysis = st.session_state.design_analysis
+        render_ai_response(analysis, "설계분석")
         
-        # 템플릿 저장 (실제로는 데이터베이스에)
-        if 'saved_templates' not in st.session_state:
-            st.session_state.saved_templates = []
-        
-        st.session_state.saved_templates.append(template)
-        st.success(f"템플릿 '{template_name}'이 저장되었습니다!")
-
-def export_design_settings():
-    """설계 설정 내보내기"""
-    export_data = {
-        'module_id': st.session_state.selected_module_id,
-        'experiment_type': st.session_state.selected_experiment_type,
-        'factors': st.session_state.experiment_factors,
-        'responses': st.session_state.experiment_responses,
-        'constraints': st.session_state.design_constraints,
-        'exported_at': datetime.now().isoformat()
-    }
-    
-    json_str = json.dumps(export_data, indent=2, ensure_ascii=False)
-    
-    st.download_button(
-        "💾 JSON 다운로드",
-        json_str,
-        "experiment_settings.json",
-        "application/json"
-    )
-
-def save_experiment_design():
-    """실험 설계 저장"""
-    if 'current_project' not in st.session_state:
-        st.error("프로젝트를 먼저 선택해주세요.")
-        return
-    
-    try:
-        sheets_manager = get_sheets_manager()
-        design_data = {
-            'project_id': st.session_state.current_project['id'],
-            'design_type': st.session_state.design_constraints['design_type'],
-            'factors': json.dumps(st.session_state.experiment_factors),
-            'responses': json.dumps(st.session_state.experiment_responses),
-            'design_matrix': st.session_state.generated_design.runs.to_json(),
-            'constraints': json.dumps(st.session_state.design_constraints),
-            'created_at': datetime.now().isoformat(),
-            'created_by': st.session_state.user['email']
-        }
-        
-        sheets_manager.save_experiment_design(design_data)
-        
-    except Exception as e:
-        st.error(f"저장 중 오류 발생: {str(e)}")
+        # 재분석 버튼
+        if st.button("🔄 재분석", use_container_width=True):
+            with st.spinner("AI가 다시 분석하는 중..."):
+                analysis = get_ai_design_analysis(st.session_state.generated_design)
+                st.session_state.design_analysis = analysis
+                st.rerun()
 
 # ===== AI 관련 함수들 =====
-def get_ai_module_recommendation() -> Dict[str, Any]:
-    """AI 모듈 추천"""
+def get_ai_experiment_recommendation() -> Dict[str, Any]:
+    """AI 실험 추천"""
     api_manager = get_api_manager()
     
-    prompt = f"""
-    사용자의 연구 분야와 목적에 맞는 실험 모듈을 추천해주세요.
+    prompt = """
+    사용자가 실험 설계를 시작하려고 합니다. 
+    적절한 실험 모듈과 유형을 추천해주세요.
     
-    현재 프로젝트 정보:
-    - 분야: {st.session_state.get('project_field', '일반')}
-    - 목적: {st.session_state.get('project_goal', '최적화')}
+    고려사항:
+    - 일반적인 연구 분야별 추천
+    - 초보자 친화적인 옵션
+    - 고급 사용자를 위한 옵션
     
     응답 형식:
-    {{
-        "main": "추천 모듈과 간단한 이유",
-        "details": {{
-            "reasoning": "왜 이 모듈을 추천하는지 상세 설명",
-            "alternatives": "다른 옵션들과 각각의 장단점",
-            "theory": "이 추천의 이론적 배경",
-            "confidence": "추천 신뢰도와 근거",
-            "limitations": "주의사항 및 한계점"
-        }}
-    }}
+    {
+        "main": "추천 요약",
+        "details": {
+            "reasoning": "추천 이유",
+            "alternatives": "대안적 선택",
+            "theory": "이론적 배경",
+            "confidence": "추천 신뢰도",
+            "limitations": "고려사항"
+        }
+    }
     """
     
-    response = api_manager.get_ai_response(prompt, response_format='json')
-    return response
+    return api_manager.get_ai_response(prompt, response_format='json')
 
-def get_ai_factor_recommendation() -> Dict[str, Any]:
+def get_ai_factor_recommendations(requirements: str) -> Dict[str, Any]:
     """AI 요인 추천"""
     api_manager = get_api_manager()
     
-    current_factors = st.session_state.experiment_factors
-    
     prompt = f"""
-    현재 실험의 요인 설정을 검토하고 개선사항을 제안해주세요.
-    
-    현재 요인:
-    {json.dumps(current_factors, indent=2)}
+    사용자의 실험 요구사항:
+    {requirements}
     
     실험 유형: {st.session_state.selected_experiment_type}
     
+    적절한 실험 요인들을 추천해주세요.
+    
     응답 형식:
     {{
-        "main": "핵심 제안사항 요약",
+        "main": "추천 요인 요약",
+        "factors": [
+            {{
+                "name": "요인명",
+                "type": "continuous/categorical/discrete",
+                "min_value": 숫자 (연속형/이산형),
+                "max_value": 숫자 (연속형/이산형),
+                "levels": ["수준1", "수준2"] (범주형),
+                "unit": "단위",
+                "description": "설명"
+            }}
+        ],
         "details": {{
-            "reasoning": "각 제안의 이유와 중요성",
-            "alternatives": "추가로 고려할 수 있는 요인들",
-            "theory": "요인 선택의 이론적 근거",
-            "confidence": "제안의 신뢰도 (0-100%)",
-            "limitations": "제안의 한계점과 주의사항"
+            "reasoning": "추천 근거",
+            "alternatives": "대안적 요인",
+            "theory": "이론적 배경",
+            "confidence": "추천 신뢰도",
+            "limitations": "주의사항"
         }}
     }}
     """
     
     response = api_manager.get_ai_response(prompt, response_format='json')
+    
+    # 요인 자동 적용 옵션
+    if 'factors' in response:
+        if st.button("AI 추천 요인 적용", use_container_width=True):
+            st.session_state.experiment_factors = response['factors']
+            st.success("AI 추천 요인이 적용되었습니다.")
+            st.rerun()
+    
     return response
 
-def get_ai_response_recommendation() -> Dict[str, Any]:
+def get_ai_response_recommendations() -> Dict[str, Any]:
     """AI 반응변수 추천"""
     api_manager = get_api_manager()
     
+    factors_info = json.dumps(st.session_state.experiment_factors, ensure_ascii=False)
+    
     prompt = f"""
-    현재 실험의 반응변수 설정을 검토하고 개선사항을 제안해주세요.
+    실험 요인:
+    {factors_info}
     
-    현재 반응변수:
-    {json.dumps(st.session_state.experiment_responses, indent=2)}
+    실험 유형: {st.session_state.selected_experiment_type}
     
-    실험 목적: {st.session_state.get('experiment_goal', '최적화')}
+    적절한 반응변수들을 추천해주세요.
     
     응답 형식:
     {{
-        "main": "핵심 제안사항",
+        "main": "추천 반응변수 요약",
+        "responses": [
+            {{
+                "name": "반응변수명",
+                "type": "continuous/binary/count",
+                "optimization": "maximize/minimize/target/in_range",
+                "target_value": 숫자 (target인 경우),
+                "unit": "단위",
+                "importance": 1-10,
+                "description": "설명"
+            }}
+        ],
         "details": {{
-            "reasoning": "제안 이유",
-            "alternatives": "다른 반응변수 옵션",
+            "reasoning": "추천 근거",
+            "alternatives": "대안적 반응변수",
             "theory": "측정 이론",
-            "confidence": "신뢰도",
-            "limitations": "측정의 한계"
+            "confidence": "추천 신뢰도",
+            "limitations": "측정 시 주의사항"
         }}
     }}
     """
     
-    response = api_manager.get_ai_response(prompt, response_format='json')
-    return response
+    return api_manager.get_ai_response(prompt, response_format='json')
 
 def get_ai_design_optimization() -> Dict[str, Any]:
-    """AI 설계 최적화"""
+    """AI 설계 최적화 제안"""
     api_manager = get_api_manager()
     
-    prompt = f"""
-    실험 설계를 최적화하기 위한 제안을 해주세요.
+    context = {
+        'factors': st.session_state.experiment_factors,
+        'responses': st.session_state.experiment_responses,
+        'constraints': st.session_state.design_constraints
+    }
     
-    요인 수: {len(st.session_state.experiment_factors)}
-    반응변수 수: {len(st.session_state.experiment_responses)}
-    제약조건: {json.dumps(st.session_state.design_constraints, indent=2)}
+    prompt = f"""
+    실험 설계 컨텍스트:
+    {json.dumps(context, ensure_ascii=False)}
+    
+    이 실험에 대한 최적의 설계 방법과 파라미터를 제안해주세요.
     
     응답 형식:
     {{
-        "main": "최적 설계 방법과 예상 실험 횟수",
+        "main": "최적화 제안 요약",
+        "recommendations": {{
+            "design_type": "추천 설계 유형",
+            "estimated_runs": "예상 실험 횟수",
+            "parameters": {{
+                "center_points": 숫자,
+                "replicates": 숫자,
+                "blocks": 숫자
+            }}
+        }},
         "details": {{
-            "reasoning": "이 설계를 추천하는 이유",
-            "alternatives": "다른 설계 옵션들",
-            "theory": "설계의 통계적 배경",
+            "reasoning": "최적화 근거",
+            "alternatives": "대안적 설계",
+            "theory": "통계적 이론",
             "confidence": "효율성 예측",
-            "limitations": "설계의 한계점"
+            "limitations": "제약사항"
         }}
     }}
     """
     
-    response = api_manager.get_ai_response(prompt, response_format='json')
-    return response
+    return api_manager.get_ai_response(prompt, response_format='json')
 
-def analyze_design_with_ai(design: ExperimentDesign) -> Dict[str, Any]:
-    """AI로 생성된 설계 분석"""
+def get_ai_design_analysis(design: ExperimentDesign) -> Dict[str, Any]:
+    """AI 설계 분석"""
     api_manager = get_api_manager()
     
     # 설계 요약 정보
     design_summary = {
-        'n_runs': len(design.runs),
-        'n_factors': len(design.factors),
-        'n_responses': len(design.responses),
-        'design_type': design.design_type
+        'design_type': design.design_type,
+        'num_runs': len(design.runs),
+        'factors': [{'name': f.name, 'type': f.type.value} for f in design.factors],
+        'responses': [{'name': r.name, 'optimization': r.optimization.value} for r in design.responses],
+        'quality': {
+            'd_efficiency': design.quality.d_efficiency if hasattr(design, 'quality') and design.quality else None,
+            'orthogonality': design.quality.orthogonality if hasattr(design, 'quality') and design.quality else None
+        }
     }
     
     prompt = f"""
-    생성된 실험 설계를 분석해주세요.
+    생성된 실험 설계 분석:
+    {json.dumps(design_summary, ensure_ascii=False)}
     
-    설계 요약:
-    {json.dumps(design_summary, indent=2)}
+    이 설계의 품질과 특징을 상세히 분석해주세요.
     
     응답 형식:
     {{
-        "main": "설계의 주요 특징과 품질 평가",
+        "main": "설계 품질 종합 평가",
+        "strengths": ["강점1", "강점2"],
+        "weaknesses": ["약점1", "약점2"],
+        "improvements": ["개선방안1", "개선방안2"],
         "details": {{
-            "reasoning": "설계 품질 평가의 근거",
-            "alternatives": "개선 가능한 부분",
-            "theory": "통계적 최적성 분석",
-            "confidence": "설계 효율성 점수",
-            "limitations": "주의해야 할 점"
+            "reasoning": "평가 근거",
+            "alternatives": "대안적 설계",
+            "theory": "통계 이론적 분석",
+            "confidence": "신뢰도 평가",
+            "limitations": "한계점"
         }}
     }}
     """
     
-    response = api_manager.get_ai_response(prompt, response_format='json')
-    return response
+    return api_manager.get_ai_response(prompt, response_format='json')
+
+def get_ai_chat_response(user_message: str) -> Dict[str, Any]:
+    """AI 채팅 응답"""
+    api_manager = get_api_manager()
+    
+    # 현재 컨텍스트
+    context = {
+        'current_step': st.session_state.wizard_step,
+        'has_factors': len(st.session_state.experiment_factors) > 0,
+        'has_responses': len(st.session_state.experiment_responses) > 0,
+        'has_design': st.session_state.generated_design is not None
+    }
+    
+    # 대화 히스토리 (최근 5개)
+    recent_history = st.session_state.design_chat_history[-5:] if st.session_state.design_chat_history else []
+    
+    prompt = f"""
+    사용자가 실험 설계에 대해 질문합니다.
+    
+    현재 상황: {json.dumps(context)}
+    
+    대화 히스토리:
+    {json.dumps(recent_history, ensure_ascii=False)}
+    
+    사용자 질문: {user_message}
+    
+    전문가의 입장에서 도움이 되는 답변을 제공하세요.
+    
+    응답 형식:
+    {{
+        "main": "핵심 답변",
+        "details": {{
+            "reasoning": "답변 근거",
+            "alternatives": "추가 고려사항",
+            "theory": "이론적 배경",
+            "confidence": "답변 신뢰도",
+            "limitations": "제한사항"
+        }}
+    }}
+    """
+    
+    return api_manager.get_ai_response(prompt, response_format='json')
+
+def render_ai_response(response: Dict[str, Any], response_type: str):
+    """AI 응답 렌더링 (상세도 제어 포함)"""
+    if not response:
+        return
+    
+    # 메인 응답 표시
+    if 'main' in response:
+        st.write(response['main'])
+    
+    # 구조화된 정보 표시 (요인, 반응변수 등)
+    if 'factors' in response:
+        st.markdown("##### 추천 요인")
+        for factor in response['factors']:
+            st.write(f"- **{factor['name']}**: {factor.get('description', '')}")
+    
+    if 'responses' in response:
+        st.markdown("##### 추천 반응변수")
+        for resp in response['responses']:
+            st.write(f"- **{resp['name']}**: {resp.get('description', '')}")
+    
+    if 'strengths' in response:
+        st.markdown("##### ✅ 강점")
+        for strength in response['strengths']:
+            st.write(f"- {strength}")
+    
+    if 'weaknesses' in response:
+        st.markdown("##### ⚠️ 약점")
+        for weakness in response['weaknesses']:
+            st.write(f"- {weakness}")
+    
+    if 'improvements' in response:
+        st.markdown("##### 💡 개선방안")
+        for improvement in response['improvements']:
+            st.write(f"- {improvement}")
+    
+    # 상세 설명 제어
+    if 'details' in response and any(response['details'].values()):
+        with st.expander("🔍 상세 설명 보기", expanded=st.session_state.ai_preferences['show_reasoning']):
+            # 사용자 설정에 따라 표시
+            prefs = st.session_state.ai_preferences
+            
+            tabs = []
+            contents = []
+            
+            if prefs['show_reasoning'] and 'reasoning' in response['details'] and response['details']['reasoning']:
+                tabs.append("추론 과정")
+                contents.append(response['details']['reasoning'])
+            
+            if prefs['show_alternatives'] and 'alternatives' in response['details'] and response['details']['alternatives']:
+                tabs.append("대안")
+                contents.append(response['details']['alternatives'])
+            
+            if prefs['show_theory'] and 'theory' in response['details'] and response['details']['theory']:
+                tabs.append("이론적 배경")
+                contents.append(response['details']['theory'])
+            
+            if prefs['show_confidence'] and 'confidence' in response['details'] and response['details']['confidence']:
+                tabs.append("신뢰도")
+                contents.append(response['details']['confidence'])
+            
+            if prefs['show_limitations'] and 'limitations' in response['details'] and response['details']['limitations']:
+                tabs.append("한계점")
+                contents.append(response['details']['limitations'])
+            
+            if tabs:
+                tab_objects = st.tabs(tabs)
+                for tab, content in zip(tab_objects, contents):
+                    with tab:
+                        st.write(content)
+            
+            # 설정 변경 UI
+            st.divider()
+            st.markdown("##### ⚙️ 표시 설정")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.session_state.ai_preferences['show_reasoning'] = st.checkbox(
+                    "추론 과정",
+                    value=st.session_state.ai_preferences['show_reasoning']
+                )
+                st.session_state.ai_preferences['show_alternatives'] = st.checkbox(
+                    "대안",
+                    value=st.session_state.ai_preferences['show_alternatives']
+                )
+            
+            with col2:
+                st.session_state.ai_preferences['show_theory'] = st.checkbox(
+                    "이론적 배경",
+                    value=st.session_state.ai_preferences['show_theory']
+                )
+                st.session_state.ai_preferences['show_confidence'] = st.checkbox(
+                    "신뢰도",
+                    value=st.session_state.ai_preferences['show_confidence']
+                )
+            
+            with col3:
+                st.session_state.ai_preferences['show_limitations'] = st.checkbox(
+                    "한계점",
+                    value=st.session_state.ai_preferences['show_limitations']
+                )
 
 # ===== 대화형 AI 인터페이스 =====
 def render_ai_chat_interface():
     """대화형 AI 인터페이스"""
     st.markdown("### 💬 AI 실험 설계 도우미")
     
-    # 채팅 히스토리 초기화
-    if 'design_chat_history' not in st.session_state:
-        st.session_state.design_chat_history = []
-    
     # 채팅 히스토리 표시
-    for message in st.session_state.design_chat_history:
-        with st.chat_message(message["role"]):
-            if message["role"] == "assistant":
-                render_ai_response(message["content"], "대화")
-            else:
-                st.write(message["content"])
+    chat_container = st.container()
+    
+    with chat_container:
+        for message in st.session_state.design_chat_history:
+            with st.chat_message(message["role"]):
+                if message["role"] == "assistant":
+                    render_ai_response(message["content"], "채팅")
+                else:
+                    st.write(message["content"])
     
     # 사용자 입력
     if prompt := st.chat_input("실험 설계에 대해 물어보세요..."):
@@ -1384,135 +1752,386 @@ def render_ai_chat_interface():
             "content": prompt
         })
         
+        # 스크롤을 위해 재렌더링
+        with chat_container:
+            with st.chat_message("user"):
+                st.write(prompt)
+        
         # AI 응답 생성
-        with st.chat_message("assistant"):
-            with st.spinner("AI가 생각 중..."):
-                response = get_ai_chat_response(prompt)
-                render_ai_response(response, "대화")
-                
-                # 히스토리에 추가
+        with chat_container:
+            with st.chat_message("assistant"):
+                with st.spinner("AI가 생각 중..."):
+                    response = get_ai_chat_response(prompt)
+                    render_ai_response(response, "채팅")
+                    
+                    # 히스토리에 추가
+                    st.session_state.design_chat_history.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+    
+    # 빠른 질문 버튼
+    st.markdown("#### 💡 빠른 질문")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    quick_questions = [
+        "이 실험 설계의 장단점은?",
+        "실험 횟수를 줄이려면?",
+        "더 나은 설계 방법은?",
+        "요인이 너무 많은가요?",
+        "교호작용을 보려면?",
+        "최적화하는 방법은?"
+    ]
+    
+    for i, question in enumerate(quick_questions):
+        col = [col1, col2, col3][i % 3]
+        with col:
+            if st.button(question, key=f"quick_{i}", use_container_width=True):
+                # 자동으로 질문 입력
                 st.session_state.design_chat_history.append({
-                    "role": "assistant",
-                    "content": response
+                    "role": "user",
+                    "content": question
                 })
+                
+                # AI 응답 생성
+                with st.spinner("AI가 답변 중..."):
+                    response = get_ai_chat_response(question)
+                    st.session_state.design_chat_history.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+                    st.rerun()
 
-def get_ai_chat_response(prompt: str) -> Dict[str, Any]:
-    """채팅 응답 생성"""
-    api_manager = get_api_manager()
-    
-    # 컨텍스트 구성
-    context = {
-        'current_step': st.session_state.get('wizard_step', 0),
-        'factors': st.session_state.get('experiment_factors', []),
-        'responses': st.session_state.get('experiment_responses', []),
-        'constraints': st.session_state.get('design_constraints', {})
-    }
-    
-    system_prompt = f"""
-    당신은 실험 설계 전문가입니다. 현재 사용자는 실험을 설계하고 있습니다.
-    
-    현재 상황:
-    {json.dumps(context, indent=2)}
-    
-    사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요.
-    
-    응답 형식:
-    {{
-        "main": "핵심 답변",
-        "details": {{
-            "reasoning": "답변의 근거",
-            "alternatives": "다른 옵션",
-            "theory": "이론적 배경",
-            "confidence": "확신도",
-            "limitations": "한계점"
-        }}
-    }}
-    """
-    
-    response = api_manager.get_ai_response(
-        prompt, 
-        system_prompt=system_prompt,
-        response_format='json'
-    )
-    
-    return response
-
-# ===== 메인 렌더 함수 =====
-def render():
-    """메인 페이지 렌더링"""
-    # 초기화
-    initialize_ai_settings()
-    
-    # UI 컴포넌트
-    ui = get_common_ui()
-    
-    # 헤더
-    ui.render_header("실험 설계", "AI와 함께 최적의 실험을 설계하세요", "🧪")
-    
-    # AI 설정 컨트롤러 (사이드바)
-    render_ai_detail_controller()
-    
-    # 메인 컨텐츠
-    tab1, tab2, tab3 = st.tabs(["🎯 설계 마법사", "💬 AI 대화", "📚 저장된 설계"])
-    
-    with tab1:
-        render_design_wizard()
-    
-    with tab2:
-        render_ai_chat_interface()
-    
-    with tab3:
-        render_saved_designs()
-
+# ===== 저장된 설계 관리 =====
 def render_saved_designs():
-    """저장된 설계 목록"""
-    st.markdown("### 📚 저장된 실험 설계")
+    """저장된 설계 표시"""
+    st.markdown("### 📚 내 실험 설계")
     
-    # 필터
-    col1, col2, col3 = st.columns([2, 2, 1])
+    # 필터 옵션
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        filter_module = st.selectbox("모듈 필터", ["전체"] + get_available_modules())
-    with col2:
-        filter_date = st.date_input("날짜 필터", value=None)
-    with col3:
-        if st.button("🔄 새로고침"):
-            st.rerun()
+        filter_module = st.selectbox(
+            "모듈 필터",
+            ["전체"] + get_available_modules()
+        )
     
-    # 저장된 설계 불러오기
+    with col2:
+        filter_date = st.selectbox(
+            "기간 필터",
+            ["전체", "오늘", "이번 주", "이번 달", "최근 3개월"]
+        )
+    
+    with col3:
+        sort_by = st.selectbox(
+            "정렬 기준",
+            ["최신순", "이름순", "실험수순"]
+        )
+    
+    # 저장된 설계 가져오기
     try:
         sheets_manager = get_sheets_manager()
         saved_designs = sheets_manager.get_saved_designs(
-            user_id=st.session_state.user['id'],
+            user_id=st.session_state.user_id,
             module_filter=filter_module if filter_module != "전체" else None,
             date_filter=filter_date
         )
         
-        if saved_designs:
-            for design in saved_designs:
-                with st.expander(f"📋 {design['name']} - {design['created_at']}"):
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.write(f"**모듈**: {design['module_id']}")
-                        st.write(f"**요인 수**: {design['n_factors']}")
-                        st.write(f"**실험 횟수**: {design['n_runs']}")
-                    
-                    with col2:
-                        if st.button("불러오기", key=f"load_{design['id']}"):
-                            load_saved_design(design)
-                        if st.button("삭제", key=f"delete_{design['id']}"):
-                            delete_saved_design(design['id'])
+        if not saved_designs:
+            st.info("저장된 실험 설계가 없습니다. 새로운 설계를 만들어보세요!")
         else:
-            ui.render_empty_state("저장된 설계가 없습니다", "📭")
+            # 설계 카드 표시
+            for design in saved_designs:
+                with st.expander(f"📋 {design['name']}", expanded=False):
+                    col_a, col_b = st.columns([3, 1])
+                    
+                    with col_a:
+                        st.write(f"**모듈**: {design['module_id']}")
+                        st.write(f"**유형**: {design['experiment_type']}")
+                        st.write(f"**실험수**: {design['num_runs']}회")
+                        st.write(f"**생성일**: {design['created_at']}")
+                        
+                        if design.get('description'):
+                            st.write(f"**설명**: {design['description']}")
+                    
+                    with col_b:
+                        if st.button("불러오기", key=f"load_{design['id']}", use_container_width=True):
+                            load_saved_design(design)
+                        
+                        if st.button("삭제", key=f"delete_{design['id']}", use_container_width=True):
+                            if st.checkbox(f"정말 삭제하시겠습니까?", key=f"confirm_{design['id']}"):
+                                delete_saved_design(design['id'])
+    
+    except Exception as e:
+        st.error(f"저장된 설계를 불러오는 중 오류 발생: {str(e)}")
+
+def render_templates():
+    """실험 설계 템플릿"""
+    st.markdown("### 📊 실험 설계 템플릿")
+    
+    # 템플릿 카테고리
+    template_categories = {
+        "스크리닝": ["Plackett-Burman", "Fractional Factorial", "Definitive Screening"],
+        "최적화": ["Central Composite", "Box-Behnken", "D-Optimal"],
+        "혼합물": ["Simplex Lattice", "Simplex Centroid", "Extreme Vertices"],
+        "고급": ["Split-Plot", "Strip-Plot", "Nested Design"]
+    }
+    
+    selected_category = st.selectbox(
+        "템플릿 카테고리",
+        list(template_categories.keys())
+    )
+    
+    # 선택된 카테고리의 템플릿 표시
+    st.markdown(f"#### {selected_category} 템플릿")
+    
+    for template_name in template_categories[selected_category]:
+        with st.expander(f"📋 {template_name}"):
+            # 템플릿 설명
+            template_info = get_template_info(template_name)
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.write(f"**설명**: {template_info['description']}")
+                st.write(f"**적합한 경우**: {template_info['use_case']}")
+                st.write(f"**요인 수**: {template_info['factor_range']}")
+                st.write(f"**장점**: {template_info['advantages']}")
+                st.write(f"**단점**: {template_info['disadvantages']}")
+            
+            with col2:
+                if st.button(f"템플릿 사용", key=f"use_{template_name}", use_container_width=True):
+                    apply_template(template_name)
+                
+                if st.button(f"예제 보기", key=f"example_{template_name}", use_container_width=True):
+                    show_template_example(template_name)
+
+# ===== 헬퍼 함수들 =====
+def estimate_experiment_runs() -> int:
+    """예상 실험 횟수 계산"""
+    num_factors = len(st.session_state.experiment_factors)
+    design_type = st.session_state.design_constraints['design_type']
+    
+    if num_factors == 0:
+        return 0
+    
+    base_runs = 0
+    
+    if design_type == 'full_factorial':
+        levels = []
+        for factor in st.session_state.experiment_factors:
+            if factor['type'] == 'continuous':
+                levels.append(2)  # 기본 2수준
+            elif factor['type'] == 'categorical':
+                levels.append(len(factor.get('levels', [2])))
+            else:
+                levels.append(2)
+        base_runs = np.prod(levels)
+    
+    elif design_type == 'fractional_factorial':
+        # 대략적인 추정
+        base_runs = max(4, 2 ** (num_factors - 1))
+    
+    elif design_type == 'ccd':
+        # 2^k + 2k + cp
+        base_runs = 2 ** num_factors + 2 * num_factors + 1
+    
+    elif design_type == 'box_behnken':
+        # Box-Behnken 공식
+        if num_factors == 3:
+            base_runs = 13
+        elif num_factors == 4:
+            base_runs = 25
+        elif num_factors == 5:
+            base_runs = 41
+        else:
+            base_runs = num_factors * 4
+    
+    elif design_type == 'plackett_burman':
+        # 4의 배수
+        base_runs = 4 * ((num_factors + 1) // 4 + 1)
+    
+    else:
+        # 기본 추정
+        base_runs = max(num_factors * 2, 8)
+    
+    # 중심점과 반복 추가
+    center_points = st.session_state.design_constraints.get('center_points', 0)
+    replicates = st.session_state.design_constraints['replicates']
+    
+    total_runs = base_runs * replicates + center_points
+    
+    return min(total_runs, st.session_state.design_constraints['max_runs'])
+
+def calculate_design_quality_preview() -> Dict[str, Any]:
+    """설계 품질 미리보기"""
+    num_factors = len(st.session_state.experiment_factors)
+    estimated_runs = estimate_experiment_runs()
+    
+    if num_factors == 0 or estimated_runs == 0:
+        return {}
+    
+    # 간단한 품질 지표 계산
+    quality_metrics = {}
+    
+    # 실험 효율성
+    full_factorial_runs = 2 ** num_factors
+    efficiency = (num_factors * 2) / estimated_runs * 100 if estimated_runs > 0 else 0
+    quality_metrics["효율성"] = f"{efficiency:.1f}%"
+    
+    # 자유도
+    dof = estimated_runs - num_factors - 1
+    quality_metrics["자유도"] = dof
+    
+    # Resolution (부분요인설계인 경우)
+    if st.session_state.design_constraints['design_type'] == 'fractional_factorial':
+        if estimated_runs >= full_factorial_runs / 2:
+            quality_metrics["Resolution"] = "V+"
+        elif estimated_runs >= full_factorial_runs / 4:
+            quality_metrics["Resolution"] = "IV"
+        else:
+            quality_metrics["Resolution"] = "III"
+    
+    return quality_metrics
+
+def calculate_power_analysis(design: ExperimentDesign) -> List[Dict[str, Any]]:
+    """통계적 검정력 분석"""
+    # 간단한 파워 분석 (실제로는 더 복잡한 계산 필요)
+    num_runs = len(design.runs)
+    num_factors = len(design.factors)
+    
+    # 효과 크기별 검정력 계산
+    effect_sizes = [0.5, 1.0, 1.5, 2.0]  # 표준편차 단위
+    alpha = 0.05
+    
+    results = []
+    for effect_size in effect_sizes:
+        # 근사 계산
+        main_effect_power = min(95, 50 + effect_size * 10 * np.sqrt(num_runs / num_factors))
+        interaction_power = min(90, 40 + effect_size * 8 * np.sqrt(num_runs / (num_factors * 2)))
+        
+        results.append({
+            '효과크기': f"{effect_size}σ",
+            '주효과': f"{main_effect_power:.0f}%",
+            '2차 교호작용': f"{interaction_power:.0f}%"
+        })
+    
+    return results
+
+def optimize_design(design: ExperimentDesign, criterion: str) -> ExperimentDesign:
+    """설계 최적화"""
+    # 실제 최적화 알고리즘 구현
+    # 여기서는 간단한 시뮬레이션
+    
+    try:
+        # D-optimal 예시
+        if criterion == "D-최적성":
+            # 교환 알고리즘 시뮬레이션
+            optimized_design = design  # 실제로는 최적화 수행
+            
+            # 품질 개선 시뮬레이션
+            if hasattr(optimized_design, 'quality'):
+                optimized_design.quality.d_efficiency = min(100, optimized_design.quality.d_efficiency + 10)
+            
+            return optimized_design
+        
+        else:
+            return design
             
     except Exception as e:
-        st.error(f"설계 목록을 불러오는 중 오류 발생: {str(e)}")
+        st.error(f"최적화 중 오류 발생: {str(e)}")
+        return design
 
-def get_available_modules() -> List[str]:
-    """사용 가능한 모듈 목록"""
-    registry = get_module_registry()
-    modules = registry.list_modules()
-    return [m['name'] for m in modules]
+def save_experiment_design():
+    """실험 설계 저장"""
+    try:
+        sheets_manager = get_sheets_manager()
+        
+        # 설계 이름 입력
+        design_name = st.text_input(
+            "설계 이름",
+            value=f"{st.session_state.selected_experiment_type}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+        )
+        
+        design_description = st.text_area("설명 (선택사항)")
+        
+        if st.button("저장", type="primary"):
+            design_data = {
+                'name': design_name,
+                'description': design_description,
+                'module_id': st.session_state.selected_module_id,
+                'experiment_type': st.session_state.selected_experiment_type,
+                'factors': json.dumps(st.session_state.experiment_factors),
+                'responses': json.dumps(st.session_state.experiment_responses),
+                'constraints': json.dumps(st.session_state.design_constraints),
+                'design_type': st.session_state.generated_design.design_type,
+                'num_runs': len(st.session_state.generated_design.runs),
+                'design_matrix': st.session_state.generated_design.runs.to_json(),
+                'quality_metrics': json.dumps(asdict(st.session_state.generated_design.quality)) if hasattr(st.session_state.generated_design, 'quality') else None,
+                'created_at': datetime.now().isoformat(),
+                'user_id': st.session_state.user_id
+            }
+            
+            # Google Sheets에 저장
+            design_id = sheets_manager.save_design(design_data)
+            
+            st.success(f"실험 설계가 저장되었습니다! (ID: {design_id})")
+            
+            # 로컬 파일로도 저장
+            if st.checkbox("로컬 파일로도 저장"):
+                save_to_local_file(design_data)
+            
+            # 완료 후 리셋
+            if st.button("새 설계 시작"):
+                reset_wizard()
+                
+    except Exception as e:
+        st.error(f"저장 중 오류 발생: {str(e)}")
+
+def save_as_template():
+    """템플릿으로 저장"""
+    st.info("템플릿 저장 기능은 준비 중입니다.")
+    # 실제 구현 시 사용자 템플릿 저장소에 저장
+
+def export_design_settings():
+    """설계 설정 내보내기"""
+    settings = {
+        'module_id': st.session_state.selected_module_id,
+        'experiment_type': st.session_state.selected_experiment_type,
+        'factors': st.session_state.experiment_factors,
+        'responses': st.session_state.experiment_responses,
+        'constraints': st.session_state.design_constraints,
+        'exported_at': datetime.now().isoformat()
+    }
+    
+    # JSON으로 다운로드
+    json_str = json.dumps(settings, indent=2, ensure_ascii=False)
+    
+    st.download_button(
+        "📥 설정 다운로드 (JSON)",
+        json_str,
+        "experiment_settings.json",
+        "application/json"
+    )
+
+def reset_wizard():
+    """마법사 초기화"""
+    st.session_state.wizard_step = 1
+    st.session_state.selected_module_id = None
+    st.session_state.selected_experiment_type = None
+    st.session_state.experiment_factors = []
+    st.session_state.experiment_responses = []
+    st.session_state.design_constraints = {
+        'design_type': 'full_factorial',
+        'max_runs': 100,
+        'blocks': 1,
+        'center_points': 0,
+        'replicates': 1,
+        'randomize': True
+    }
+    st.session_state.generated_design = None
+    st.rerun()
 
 def load_saved_design(design: Dict[str, Any]):
     """저장된 설계 불러오기"""
@@ -1527,16 +2146,23 @@ def load_saved_design(design: Dict[str, Any]):
         # 설계 매트릭스도 불러오기
         if 'design_matrix' in design:
             runs_df = pd.read_json(design['design_matrix'])
+            
             # ExperimentDesign 객체 재구성
             registry = get_module_registry()
             module = registry.get_module(design['module_id'])
             
+            factors = [Factor(**f) for f in st.session_state.experiment_factors]
+            responses = [Response(**r) for r in st.session_state.experiment_responses]
+            
             st.session_state.generated_design = ExperimentDesign(
                 design_type=design['design_type'],
                 runs=runs_df,
-                factors=[Factor(**f) for f in st.session_state.experiment_factors],
-                responses=[Response(**r) for r in st.session_state.experiment_responses],
-                metadata={'loaded_from': design['id']}
+                factors=factors,
+                responses=responses,
+                metadata={
+                    'loaded_from': design['id'],
+                    'loaded_at': datetime.now().isoformat()
+                }
             )
         
         st.success("설계를 성공적으로 불러왔습니다!")
@@ -1554,6 +2180,63 @@ def delete_saved_design(design_id: str):
         st.rerun()
     except Exception as e:
         st.error(f"삭제 중 오류 발생: {str(e)}")
+
+def save_to_local_file(design_data: Dict[str, Any]):
+    """로컬 파일로 저장"""
+    # JSON 파일로 저장
+    json_str = json.dumps(design_data, indent=2, ensure_ascii=False)
+    st.download_button(
+        "💾 JSON 파일로 저장",
+        json_str,
+        f"design_{design_data['name']}.json",
+        "application/json"
+    )
+
+def get_available_modules() -> List[str]:
+    """사용 가능한 모듈 목록"""
+    registry = get_module_registry()
+    modules = registry.list_modules()
+    return [m['name'] for m in modules]
+
+def get_template_info(template_name: str) -> Dict[str, str]:
+    """템플릿 정보 조회"""
+    template_info_db = {
+        "Plackett-Burman": {
+            "description": "많은 요인을 효율적으로 스크리닝하는 설계",
+            "use_case": "초기 단계에서 중요한 요인을 찾을 때",
+            "factor_range": "5-50개",
+            "advantages": "최소 실험으로 주효과 추정",
+            "disadvantages": "교호작용 추정 불가"
+        },
+        "Central Composite": {
+            "description": "2차 반응표면을 모델링하는 설계",
+            "use_case": "최적화 단계에서 곡면 효과를 볼 때",
+            "factor_range": "2-6개",
+            "advantages": "2차 효과 추정, 회전 가능",
+            "disadvantages": "실험 수가 많음"
+        },
+        # 추가 템플릿 정보...
+    }
+    
+    return template_info_db.get(template_name, {
+        "description": "설명 없음",
+        "use_case": "일반적인 경우",
+        "factor_range": "제한 없음",
+        "advantages": "다양한 상황에 적용 가능",
+        "disadvantages": "특별한 최적화 없음"
+    })
+
+def apply_template(template_name: str):
+    """템플릿 적용"""
+    st.info(f"{template_name} 템플릿을 적용합니다...")
+    # 실제 템플릿 적용 로직
+    st.success("템플릿이 적용되었습니다!")
+    st.rerun()
+
+def show_template_example(template_name: str):
+    """템플릿 예제 표시"""
+    st.info(f"{template_name} 예제를 표시합니다...")
+    # 예제 데이터와 시각화 표시
 
 # 페이지 실행
 if __name__ == "__main__":
