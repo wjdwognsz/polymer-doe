@@ -43,7 +43,7 @@ DB_DIR = DATA_DIR / "db"
 MODULES_DIR = DATA_DIR / "modules"
 BACKUP_DIR = DATA_DIR / "backups"
 EXPORTS_DIR = DATA_DIR / "exports"
-PROTOCOLS_DIR = DATA_DIR / "protocols"
+PROTOCOLS_DIR = DATA_DIR / "protocols"  # 추가됨
 
 # 환경 변수
 ENV = os.getenv('STREAMLIT_ENV', 'development')
@@ -94,6 +94,7 @@ APP_INFO = {
     'telemetry_enabled': False  # 프라이버시 우선
 }
 
+# API 제공자 정의 (추가됨)
 API_PROVIDERS = {
     # AI 엔진
     'google_gemini': {'name': 'Google Gemini', 'required': True},
@@ -1564,7 +1565,7 @@ def validate_config() -> Tuple[bool, List[str]]:
     # 필수 디렉토리 생성
     required_dirs = [
         DATA_DIR, LOGS_DIR, TEMP_DIR, CACHE_DIR, 
-        DB_DIR, MODULES_DIR, BACKUP_DIR, EXPORTS_DIR, PROTOCOLS_DIR  # PROTOCOLS_DIR 추가
+        DB_DIR, MODULES_DIR, BACKUP_DIR, EXPORTS_DIR, PROTOCOLS_DIR
     ]
     
     for dir_path in required_dirs:
@@ -1748,11 +1749,12 @@ __all__ = [
     # 환경 정보
     'PROJECT_ROOT', 'DATA_DIR', 'CONFIG_DIR', 'LOGS_DIR', 'TEMP_DIR',
     'CACHE_DIR', 'DB_DIR', 'MODULES_DIR', 'BACKUP_DIR', 'EXPORTS_DIR',
+    'PROTOCOLS_DIR',  # 추가됨
     'ENV', 'IS_PRODUCTION', 'IS_STAGING', 'IS_DEVELOPMENT', 'IS_TEST',
     'IS_DESKTOP', 'IS_FROZEN', 'DEBUG', 'SYSTEM_INFO',
     
     # 앱 정보
-    'APP_INFO',
+    'APP_INFO', 'API_PROVIDERS',  # API_PROVIDERS 추가됨
     
     # AI 설정
     'AIProvider', 'AIEngineConfig', 'AI_ENGINES', 'AI_EXPLANATION_CONFIG',
