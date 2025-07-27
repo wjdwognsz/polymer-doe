@@ -1020,7 +1020,38 @@ class PolymerDOEApp:
                                 st.rerun()
                                 
             st.divider()
+
+    def render_api_status_dashboard(self):
+        """API 키 설정 상태 대시보드"""
+        st.markdown("### 📊 API 설정 현황")
+    
+        # 카테고리별 설정 상태
+        categories = {
+            'AI 엔진': ['google_gemini', 'xai_grok', 'groq', 'deepseek', 'sambanova', 'huggingface'],
+            '데이터베이스': ['materials_project', 'zenodo', 'protocols_io', 'figshare', 'github'],
+            'Google 서비스': ['google_sheets_url', 'google_oauth_id', 'google_oauth_secret']
+        }
+    
+        cols = st.columns(len(categories))
+    
+        for idx, (category, keys) in enumerate(categories.items()):
+            with cols[idx]:
+                configured = sum(1 for k in keys if st.session_state.api_keys.get(k))
+                total = len(keys)
             
+                # 진행률 계산
+                progress = configured / total if total > 0 else 0
+            
+                # 메트릭 카드
+                st.metric(
+                    label=category,
+                    value=f"{configured}/{total}",
+                    delta=f"{int(progress * 100)}% 완료"
+                )
+            
+                # 진행 바
+                st.progress(progress)
+    
     def render_settings_page(self):
         """설정 페이지"""
         if not st.session_state.authenticated:
@@ -1406,7 +1437,27 @@ class PolymerDOEApp:
             
             if st.button("고급 설정 저장"):
                 st.success("설정이 저장되었습니다.")
+
+    def _save_api_keys(self, category: str):
+        """API 키를 SecretsManager에 저장"""
+        if hasattr(self, 'secrets_manager') and self.secrets_manager:
+            saved_count = 0
+        
+            for key, value in st.session_state.api_keys.items():
+                if value and value != '*' * 20:  # 실제 값이 입력된 경우
+                    # 키 이름 변환 (예: google_gemini -> GOOGLE_GEMINI_API_KEY)
+                    if key in ['google_sheets_url', 'google_oauth_id', 'google_oauth_secret']:
+                        secret_key = key.upper()
+                    else:
+                        secret_key = f"{key.upper()}_API_KEY"
                 
+                    self.secrets_manager.add_api_key(secret_key, value)
+                    saved_count += 1
+        
+            logger.info(f"{category} 카테고리에서 {saved_count}개의 API 키 저장됨")
+        else:
+            logger.warning("SecretsManager를 사용할 수 없습니다.")
+    
     def render_footer(self):
         """푸터 렌더링"""
         st.divider()
